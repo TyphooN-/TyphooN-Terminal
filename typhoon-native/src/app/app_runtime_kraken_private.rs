@@ -55,17 +55,18 @@ impl TyphooNApp {
             });
         }
         let mut acc_map = std::collections::HashMap::with_capacity(accounts.len());
-        let mut primary_account = None;
+        let mut primary_account: Option<&KrakenAccountTrades> = None;
         for account in &accounts {
             if account.is_primary && primary_account.is_none() {
-                primary_account = Some(account.clone());
+                primary_account = Some(account);
             }
             acc_map.insert(account.account_id.clone(), account.clone());
         }
+        let pid: &str = self.kraken_primary_account_id.as_str();
         if let Some(primary) = acc_map
-            .get(&self.kraken_primary_account_id)
+            .get(pid)
             .cloned()
-            .or(primary_account)
+            .or_else(|| primary_account.cloned())
         {
             self.handle_kraken_trades(primary.trades.clone());
         }
@@ -159,17 +160,18 @@ impl TyphooNApp {
         }
         self.positions_last_update_ts = chrono::Utc::now().timestamp();
         let mut acc_map = std::collections::HashMap::with_capacity(accounts.len());
-        let mut primary_account = None;
+        let mut primary_account: Option<&KrakenAccountPositions> = None;
         for account in &accounts {
             if account.is_primary && primary_account.is_none() {
-                primary_account = Some(account.clone());
+                primary_account = Some(account);
             }
             acc_map.insert(account.account_id.clone(), account.clone());
         }
+        let pid: &str = self.kraken_primary_account_id.as_str();
         if let Some(primary) = acc_map
-            .get(&self.kraken_primary_account_id)
+            .get(pid)
             .cloned()
-            .or(primary_account)
+            .or_else(|| primary_account.cloned())
         {
             self.kr_positions = primary.positions.clone();
             self.kr_positions_by_symbol = self
@@ -268,17 +270,18 @@ impl TyphooNApp {
             });
         }
         let mut acc_map = std::collections::HashMap::with_capacity(accounts.len());
-        let mut primary_account = None;
+        let mut primary_account: Option<&KrakenAccountOrders> = None;
         for account in &accounts {
             if account.is_primary && primary_account.is_none() {
-                primary_account = Some(account.clone());
+                primary_account = Some(account);
             }
             acc_map.insert(account.account_id.clone(), account.clone());
         }
+        let pid: &str = self.kraken_primary_account_id.as_str();
         if let Some(primary) = acc_map
-            .get(&self.kraken_primary_account_id)
+            .get(pid)
             .cloned()
-            .or(primary_account)
+            .or_else(|| primary_account.cloned())
         {
             self.kraken_open_orders = primary.orders;
         }
