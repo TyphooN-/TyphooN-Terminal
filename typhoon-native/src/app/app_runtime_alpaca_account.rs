@@ -47,19 +47,19 @@ impl TyphooNApp {
         }
         self.positions_last_update_ts = chrono::Utc::now().timestamp();
         let mut positions_map = std::collections::HashMap::with_capacity(accounts.len());
-        let mut primary_account = None;
+        let mut primary_account: Option<&AccountPositions> = None;
         for account in &accounts {
             if account.is_primary && primary_account.is_none() {
-                primary_account = Some(account.clone());
+                primary_account = Some(account);
             }
             positions_map.insert(account.account_id.clone(), account.clone());
         }
-        let pid = self
+        let pid: &str = self
             .alpaca_roster_by_id
             .get(&self.alpaca_primary_account_id)
-            .map(|r| r.id.clone())
-            .unwrap_or(self.alpaca_primary_account_id.clone());
-        if let Some(primary) = positions_map.get(&pid).cloned().or(primary_account) {
+            .map(|r| r.id.as_str())
+            .unwrap_or(self.alpaca_primary_account_id.as_str());
+        if let Some(primary) = positions_map.get(pid).cloned().or_else(|| primary_account.cloned()) {
             if let Ok(json) = serde_json::to_string(&primary.positions) {
                 self.put_kv_dedup("broker:positions", &json);
             }
@@ -101,17 +101,18 @@ impl TyphooNApp {
             return;
         }
         let mut fills_map = std::collections::HashMap::with_capacity(accounts.len());
-        let mut primary_account = None;
+        let mut primary_account: Option<&AccountFills> = None;
         for account in &accounts {
             if account.is_primary && primary_account.is_none() {
-                primary_account = Some(account.clone());
+                primary_account = Some(account);
             }
             fills_map.insert(account.account_id.clone(), account.clone());
         }
+        let pid: &str = self.alpaca_primary_account_id.as_str();
         if let Some(primary) = fills_map
-            .get(&self.alpaca_primary_account_id)
+            .get(pid)
             .cloned()
-            .or(primary_account)
+            .or_else(|| primary_account.cloned())
         {
             // prefer primary_id map; fallback for legacy
             self.recent_fills = primary.fills;
@@ -149,17 +150,18 @@ impl TyphooNApp {
         }
         self.orders_last_update_ts = chrono::Utc::now().timestamp();
         let mut orders_map = std::collections::HashMap::with_capacity(accounts.len());
-        let mut primary_account = None;
+        let mut primary_account: Option<&AccountOrders> = None;
         for account in &accounts {
             if account.is_primary && primary_account.is_none() {
-                primary_account = Some(account.clone());
+                primary_account = Some(account);
             }
             orders_map.insert(account.account_id.clone(), account.clone());
         }
+        let pid: &str = self.alpaca_primary_account_id.as_str();
         if let Some(primary) = orders_map
-            .get(&self.alpaca_primary_account_id)
+            .get(pid)
             .cloned()
-            .or(primary_account)
+            .or_else(|| primary_account.cloned())
         {
             // prefer primary_id map; fallback for legacy
             self.live_orders = primary.orders;
