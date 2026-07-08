@@ -100,7 +100,7 @@ pub(super) fn spawn_async_cache_open(
                 // Repair bar_count=0 entries (from old versions)
                 match c.repair_bar_counts() {
                     Ok(n) if n > 0 => {
-                        tracing::info!("Cache-open thread: repaired {} bar_count entries", n)
+                        tracing::debug!("Cache-open thread: repaired {} bar_count entries", n)
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Cache-open thread: repair_bar_counts failed: {e}"),
