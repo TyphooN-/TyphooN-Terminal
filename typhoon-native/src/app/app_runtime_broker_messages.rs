@@ -988,7 +988,8 @@ impl TyphooNApp {
                         marker_count
                     );
                     if changed && marker_count.is_multiple_of(100) {
-                        self.log.push_back(LogEntry::warn(format!(
+                        // demoted from warn: this is a routine milestone during initial no-data sweep, not actionable error
+                        self.log.push_back(LogEntry::info(format!(
                             "Alpaca no-data milestone: {} provider-unavailable pairs tombstoned",
                             marker_count
                         )));
