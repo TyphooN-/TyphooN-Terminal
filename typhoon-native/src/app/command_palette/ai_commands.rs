@@ -4,16 +4,22 @@ impl TyphooNApp {
     pub(super) fn handle_ai_command(&mut self, cmd_upper: &str) -> bool {
         match cmd_upper {
             "AI" | "AI_CHAT" | "ASKAI" | "ASK_AI" | "INVESTIGATE" => self.show_ai_chat = true,
-            "GEMINI" | "GEMINI_CLI" | "GEMINI-CLI" | "ASKGEMINI" | "ASK_GEMINI" => {
-                match std::process::Command::new("which").arg("gemini").output() {
-                    Ok(out) if out.status.success() => {
-                        self.show_gemini_cli = true;
-                        self.log
-                            .push_back(LogEntry::info("Gemini CLI detected — opening chat"));
-                    }
-                    _ => {
-                        self.log.push_back(LogEntry::err("Gemini CLI not found in PATH. Install: npm install -g @anthropic-ai/gemini-cli or pip install gemini-cli"));
-                    }
+            "ANTIGRAVITY" | "ANTIGRAVITY_CLI" | "ANTIGRAVITY-CLI" | "ASKANTIGRAVITY"
+            | "ASK_ANTIGRAVITY" | "GEMINI" | "GEMINI_CLI" | "GEMINI-CLI" | "ASKGEMINI"
+            | "ASK_GEMINI" => {
+                let tool = Self::google_ai_cli_binary();
+                if Self::google_ai_cli_available() {
+                    self.show_gemini_cli = true;
+                    self.log.push_back(LogEntry::info(format!(
+                        "{} CLI detected — opening Google AI chat",
+                        if tool == "antigravity" {
+                            "Antigravity"
+                        } else {
+                            "Gemini"
+                        }
+                    )));
+                } else {
+                    self.log.push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH. Install Antigravity CLI (preferred) or Gemini CLI."));
                 }
             }
             "CLAUDE" | "CLAUDE_CODE" | "CLAUDE-CODE" | "ASKCLAUDE" | "ASK_CLAUDE" => {
@@ -354,6 +360,7 @@ impl TyphooNApp {
                             let session_id = Self::new_uuid();
                             self.claude_code_session_id = Some(session_id.clone());
                             let model = self.claude_model.clone();
+                            let effort = self.claude_effort.clone();
                             let full_prompt = Self::build_claude_prompt(
                                 Some(&packet),
                                 &self.claude_code_history,
@@ -362,7 +369,14 @@ impl TyphooNApp {
                             );
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.claude_code_rx = Some(rx);
-                            Self::spawn_claude_print(model, session_id, true, full_prompt, tx);
+                            Self::spawn_claude_print(
+                                model,
+                                effort,
+                                session_id,
+                                true,
+                                full_prompt,
+                                tx,
+                            );
                             self.log.push_back(LogEntry::info(format!(
                                 "Claude Code investigation dispatched: {} ({} symbols, {} model)",
                                 syms.join(", "),
@@ -377,7 +391,11 @@ impl TyphooNApp {
                     }
                 }
             }
-            cmd if cmd.starts_with("ASKGEMINI ") || cmd.starts_with("ASK_GEMINI ") => {
+            cmd if cmd.starts_with("ASKANTIGRAVITY ")
+                || cmd.starts_with("ASK_ANTIGRAVITY ")
+                || cmd.starts_with("ASKGEMINI ")
+                || cmd.starts_with("ASK_GEMINI ") =>
+            {
                 let args = cmd
                     .splitn(2, char::is_whitespace)
                     .nth(1)
@@ -387,54 +405,57 @@ impl TyphooNApp {
                 if syms.is_empty() {
                     self.show_gemini_cli = true;
                     self.log.push_back(LogEntry::warn(
-                        "Usage: ASKGEMINI SYM1[,SYM2] [optional question]",
+                        "Usage: ASKANTIGRAVITY SYM1[,SYM2] [optional question]",
                     ));
                     return true;
                 }
-                match std::process::Command::new("which").arg("gemini").output() {
-                    Ok(out) if out.status.success() => {
-                        let packet = self.investigate_symbols(&syms, &question);
-                        self.gemini_cli_packet = Some(packet.clone());
-                        self.show_gemini_cli = true;
-                        let first_user_turn = if question.is_empty() {
-                            format!(
-                                "Give me an overall read on {} — combine the research packet above with a live web search for recent news/sentiment.",
-                                syms.join(", ")
-                            )
-                        } else {
-                            question.clone()
-                        };
-                        self.gemini_cli_history.push((
-                            true,
-                            format!(
-                                "[Research packet loaded: {}] {}",
-                                syms.join(", "),
-                                first_user_turn
-                            ),
-                        ));
-                        if self.gemini_cli_rx.is_none() {
-                            let model = self.gemini_model.clone();
-                            let full_prompt = Self::build_claude_prompt(
-                                Some(&packet),
-                                &self.gemini_cli_history,
-                                &first_user_turn,
-                                "",
-                            );
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            self.gemini_cli_rx = Some(rx);
-                            Self::spawn_gemini_prompt(model, full_prompt, tx);
-                            self.log.push_back(LogEntry::info(format!(
-                                "Gemini CLI investigation dispatched: {} ({} symbols, {})",
-                                syms.join(", "),
-                                syms.len(),
-                                self.gemini_model
-                            )));
-                        }
+                let tool = Self::google_ai_cli_binary();
+                if Self::google_ai_cli_available() {
+                    let packet = self.investigate_symbols(&syms, &question);
+                    self.gemini_cli_packet = Some(packet.clone());
+                    self.show_gemini_cli = true;
+                    let first_user_turn = if question.is_empty() {
+                        format!(
+                            "Give me an overall read on {} — combine the research packet above with a live web search for recent news/sentiment.",
+                            syms.join(", ")
+                        )
+                    } else {
+                        question.clone()
+                    };
+                    self.gemini_cli_history.push((
+                        true,
+                        format!(
+                            "[Research packet loaded: {}] {}",
+                            syms.join(", "),
+                            first_user_turn
+                        ),
+                    ));
+                    if self.gemini_cli_rx.is_none() {
+                        let model = self.gemini_model.clone();
+                        let full_prompt = Self::build_claude_prompt(
+                            Some(&packet),
+                            &self.gemini_cli_history,
+                            &first_user_turn,
+                            "",
+                        );
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        self.gemini_cli_rx = Some(rx);
+                        Self::spawn_gemini_prompt(model, full_prompt, tx);
+                        self.log.push_back(LogEntry::info(format!(
+                            "{} CLI investigation dispatched: {} ({} symbols, {})",
+                            if tool == "antigravity" {
+                                "Antigravity"
+                            } else {
+                                "Gemini"
+                            },
+                            syms.join(", "),
+                            syms.len(),
+                            self.gemini_model
+                        )));
                     }
-                    _ => {
-                        self.log
-                            .push_back(LogEntry::err("Gemini CLI not found in PATH."));
-                    }
+                } else {
+                    self.log
+                        .push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH."));
                 }
             }
             cmd if cmd.starts_with("ASKHERMES ") || cmd.starts_with("ASK_HERMES ") => {

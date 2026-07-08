@@ -69,6 +69,7 @@ impl TyphooNApp {
                             0 => (
                                 "ai_model_claude",
                                 &[
+                                    ("claude-fable-5", "fable 5 (latest alias family)"),
                                     ("claude-opus-4-5", "opus 4.5 (max effort)"),
                                     ("claude-sonnet-4-5", "sonnet 4.5 (balanced)"),
                                     ("claude-haiku-4-5", "haiku 4.5 (fast)"),
@@ -77,15 +78,22 @@ impl TyphooNApp {
                             1 => (
                                 "ai_model_openai",
                                 &[
+                                    ("gpt-5.1", "gpt-5.1"),
+                                    ("gpt-5", "gpt-5"),
+                                    ("gpt-5-mini", "gpt-5-mini"),
                                     ("gpt-4o", "gpt-4o"),
                                     ("gpt-4o-mini", "gpt-4o-mini"),
-                                    ("o1-preview", "o1-preview"),
                                 ],
                             ),
                             2 => ("ai_model_gemini", Self::gemini_cli_model_options()),
                             3 => (
                                 "ai_model_grok",
-                                &[("grok-3", "grok-3"), ("grok-3-mini", "grok-3-mini")],
+                                &[
+                                    ("grok-4.1", "grok-4.1"),
+                                    ("grok-4", "grok-4"),
+                                    ("grok-3", "grok-3"),
+                                    ("grok-3-mini", "grok-3-mini"),
+                                ],
                             ),
                             4 => (
                                 "ai_model_mistral",
@@ -103,9 +111,7 @@ impl TyphooNApp {
                                 &[("llama3.2", "llama3.2"), ("qwen2.5:32b", "qwen2.5:32b")],
                             ),
                         };
-                        if self.ai_model.is_empty()
-                            || !options.iter().any(|(v, _)| *v == self.ai_model)
-                        {
+                        if self.ai_model.is_empty() {
                             self.ai_model = options[0].0.to_string();
                         }
                         egui::ComboBox::from_id_salt(cb_id)
@@ -119,6 +125,12 @@ impl TyphooNApp {
                                     );
                                 }
                             });
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ai_model)
+                                .desired_width(160.0)
+                                .hint_text("any model id"),
+                        )
+                        .on_hover_text("Type any provider model id. The picker is only a shortcut list; TyphooN passes this field through unchanged.");
                         if self.ai_chat_packet.is_some() {
                             ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
                         }
@@ -245,6 +257,7 @@ impl TyphooNApp {
                         egui::ComboBox::from_id_salt("claude_model_picker")
                             .selected_text(self.claude_model.as_str())
                             .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.claude_model, "fable".to_string(), "fable (latest)");
                                 ui.selectable_value(&mut self.claude_model, "opus".to_string(), "opus (max effort)");
                                 ui.selectable_value(&mut self.claude_model, "sonnet".to_string(), "sonnet (balanced)");
                                 ui.selectable_value(&mut self.claude_model, "haiku".to_string(), "haiku (fast)");
@@ -398,6 +411,7 @@ impl TyphooNApp {
                                 &self.claude_effort,
                             );
                             let model = self.claude_model.clone();
+                            let effort = self.claude_effort.clone();
                             // Reuse per-window session UUID so Claude CLI resumes the same thread.
                             let session_id = self
                                 .claude_code_session_id
@@ -407,7 +421,7 @@ impl TyphooNApp {
 
                             let (tx, rx) = std::sync::mpsc::channel();
                             self.claude_code_rx = Some(rx);
-                            Self::spawn_claude_print(model, session_id, is_first, full_prompt, tx);
+                            Self::spawn_claude_print(model, effort, session_id, is_first, full_prompt, tx);
                         }
                     });
                 });
@@ -445,7 +459,7 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
-                            egui::RichText::new("Gemini CLI — local binary")
+                            egui::RichText::new("Antigravity / Gemini CLI — local binary")
                                 .small()
                                 .color(AXIS_TEXT),
                         );
@@ -465,10 +479,10 @@ impl TyphooNApp {
                         ui.add(
                             egui::TextEdit::singleline(&mut self.gemini_model)
                                 .desired_width(180.0)
-                                .hint_text("any gemini CLI model id"),
+                                .hint_text("any Google AI CLI model id"),
                         )
                         .on_hover_text(
-                            "Type any model your installed gemini CLI/account can use. TyphooN passes it through to `gemini --model`; unsupported/limited models report the CLI error.",
+                            "Type any model your installed Antigravity/Gemini CLI account can use. TyphooN passes it through to `<tool> --model`; unsupported/limited models report the CLI error.",
                         );
                         ui.label(
                             egui::RichText::new("usage shown after each reply; remaining quota unavailable")
@@ -520,7 +534,7 @@ impl TyphooNApp {
                                     ui.add_space(40.0);
                                     ui.label(
                                         egui::RichText::new(
-                                            "Ask Gemini anything — uses your local gemini CLI",
+                                            "Ask Antigravity/Gemini anything — uses your local Google AI CLI",
                                         )
                                         .color(AXIS_TEXT),
                                     );
@@ -562,7 +576,7 @@ impl TyphooNApp {
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut self.gemini_cli_input)
                                 .desired_width(ui.available_width() - 60.0)
-                                .hint_text("Ask Gemini..."),
+                                .hint_text("Ask Antigravity/Gemini..."),
                         );
                         let send = ui.button("Send").clicked()
                             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
@@ -631,6 +645,11 @@ impl TyphooNApp {
                         egui::ComboBox::from_id_salt("codex_model_picker")
                             .selected_text(self.codex_model.as_str())
                             .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.codex_model,
+                                    "gpt-5.1-codex".to_string(),
+                                    "gpt-5.1-codex",
+                                );
                                 ui.selectable_value(
                                     &mut self.codex_model,
                                     "gpt-5-codex".to_string(),

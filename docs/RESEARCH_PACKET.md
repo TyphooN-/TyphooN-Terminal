@@ -13,7 +13,7 @@ the user issues the command, and dropped into a markdown document the model
 reads verbatim. What you see in the packet is what the model sees.
 
 Unlike earlier versions, the packet now **combines** with live web search
-performed by Claude / Gemini CLIs (or the hosted provider's search tool) —
+performed by Claude / Antigravity/Gemini CLIs (or the hosted provider's search tool) —
 the system prompt explicitly instructs the model to cross-reference the packet
 with real-time news, prices, and sentiment when the question calls for it.
 
@@ -32,11 +32,12 @@ delivered to the model.
 |---|---|---|
 | `ASKAI SYM[,SYM] [question]` | HTTP `POST` via `BrokerCmd::AiChat` | Currently-selected AI provider (AI Assistant window) |
 | `ASKCLAUDE SYM[,SYM] [question]` | `claude --print` subprocess | Anthropic's `claude` CLI (must be on `$PATH`) |
-| `ASKGEMINI SYM[,SYM] [question]` | `gemini --prompt` subprocess | Google's `gemini` CLI (must be on `$PATH`) |
+| `ASKANTIGRAVITY SYM[,SYM] [question]` | `antigravity`/`gemini --prompt` subprocess | Google's Antigravity CLI preferred, Gemini CLI fallback (must be on `$PATH`) |
 
 Argument parsing contract: the first whitespace-separated token is the
 comma-separated symbol list; everything after the first whitespace is the
 question, preserved verbatim. Aliases: `ASK_AI`, `ASK_CLAUDE`, `ASK_GEMINI`,
+`ASK_ANTIGRAVITY`,
 and `INVESTIGATE` (for ASKAI).
 
 Examples:
@@ -5982,7 +5983,7 @@ Response text is extracted from `choices[0].message.content`. The local path
 sends no `Authorization` header; the other five send `Bearer <api_key>`.
 All providers use a **4096**-token response budget (up from 1024).
 
-### Subprocess path (ASKCLAUDE / ASKGEMINI / ASKCODEX)
+### Subprocess path (ASKCLAUDE / ASKANTIGRAVITY / ASKCODEX)
 
 No network hop from the terminal. The packet, conversation transcript, and
 latest user turn are rebuilt into a single prompt string via
@@ -5993,7 +5994,8 @@ follow-ups always see the full context without relying on fragile CLI state.
 
 ```sh
 claude --print \
-       --model <opus|sonnet|haiku> \
+       --model <fable|opus|sonnet|haiku> \
+       --effort <low|medium|high|xhigh|max> \
        --allowed-tools "WebSearch WebFetch Read Grep Glob Bash" \
        --permission-mode acceptEdits \
        --session-id <uuid>  # first call
@@ -6012,27 +6014,31 @@ claude --print \
   introspect TyphooN's source when the user asks.
 - `--permission-mode acceptEdits` — silences the interactive edit
   confirmation that would otherwise block non-TTY invocations.
-- `--model` — wired to the model picker in the chat window (default `opus`
-  for maximum effort).
+- `--model` — wired to the model picker in the chat window (default `fable`,
+  with `opus`/`sonnet`/`haiku` aliases still available).
 
-**Gemini CLI** (`ASKGEMINI` / Gemini CLI chat window):
+**Antigravity/Gemini CLI** (`ASKANTIGRAVITY`, legacy `ASKGEMINI` / Google AI chat window):
 
 ```sh
-gemini --model <gemini-2.5-pro|gemini-2.5-flash|gemini-2.0-flash> \
+antigravity --model <auto|pro|flash|gemini-3.1-pro-preview|gemini-3-pro-preview|gemini-2.5-pro> \
        --prompt "<full prompt string>"
 ```
+
+TyphooN prefers an `antigravity` binary when present and falls back to
+`gemini` for older installs. Model IDs are suggestions only: the UI keeps a
+freeform field and passes arbitrary IDs through to the installed CLI/account.
 
 **Codex CLI** (`ASKCODEX` / Codex CLI chat window):
 
 ```sh
 codex exec \
-      --model <gpt-5-codex|gpt-5|o4-mini> \
+      --model <gpt-5.1-codex|gpt-5-codex|gpt-5|o4-mini> \
       --skip-git-repo-check \
       [-c model_reasoning_effort="<minimal|low|medium|high|xhigh>"] \
       "<full prompt string>"
 ```
 
-The handlers first run `which claude` / `which gemini` / `which codex`;
+The handlers first run `which claude` / `which antigravity` or `which gemini` / `which codex`;
 if the binary is missing, the command logs an error and the packet is
 never built. Each subprocess runs off the egui render path (dedicated OS thread
 or Tokio `spawn_blocking`, depending on the chat surface) so the UI stays
@@ -6067,7 +6073,7 @@ transcript so the model doesn't see duplicated meta-labels.
 
 ### Session continuity
 
-Each chat window (Claude Code, Gemini CLI, Codex CLI, AI Assistant) stores the packet
+Each chat window (Claude Code, Antigravity/Gemini CLI, Codex CLI, AI Assistant) stores the packet
 in its own `*_packet: Option<String>` field. Every Send rebuilds the prompt
 from the stored packet + the transcript + the new message, so the model
 never "forgets" what TyphooN handed it — even if the CLI itself would
@@ -6285,9 +6291,9 @@ If a given source is empty, the corresponding sub-block is silently omitted
   first.`; the `BrokerCmd::AiChat` is never dispatched. The `local` provider
   has no key requirement.
 - **CLI binary missing (subprocess path)** — the log shows
-  `Claude Code CLI not found in PATH.` / `Gemini CLI not found in PATH.` /
+  `Claude Code CLI not found in PATH.` / `Antigravity/Gemini CLI not found in PATH.` /
   `Codex CLI not found in PATH.`.
-- **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKGEMINI / ASKCODEX is
+- **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKANTIGRAVITY / ASKCODEX is
   still running, a new trigger is a no-op. The first reply must land before
   a second CLI call will fire.
 - **Missing `--session-id` UUID** — if for any reason `claude_code_session_id`

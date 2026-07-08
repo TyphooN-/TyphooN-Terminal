@@ -538,7 +538,7 @@ impl eframe::App for TyphooNApp {
 
                     // Enter key: if the user typed arguments (whitespace present after the
                     // command name), pass the raw input through so commands like
-                    // `ASKGEMINI CC,NCLH what's their debt?` keep their arguments. Otherwise
+                    // `ASKANTIGRAVITY CC,NCLH what's their debt?` keep their arguments. Otherwise
                     // use the currently-selected palette entry so fuzzy-match still works.
                     if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
                         let raw = self.command_input.trim().to_string();

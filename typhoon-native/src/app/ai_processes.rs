@@ -5,6 +5,27 @@ impl TyphooNApp {
         typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL
     }
 
+    pub(super) fn google_ai_cli_binary() -> &'static str {
+        if std::process::Command::new("which")
+            .arg("antigravity")
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+        {
+            "antigravity"
+        } else {
+            "gemini"
+        }
+    }
+
+    pub(super) fn google_ai_cli_available() -> bool {
+        std::process::Command::new("which")
+            .arg(Self::google_ai_cli_binary())
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
     pub(super) fn gemini_cli_model_options() -> &'static [(&'static str, &'static str)] {
         &[
             (
@@ -21,6 +42,7 @@ impl TyphooNApp {
             ),
             ("gemini-3-pro-preview", "gemini-3-pro-preview"),
             ("gemini-3-flash-preview", "gemini-3-flash-preview"),
+            ("gemini-3-flash-lite-preview", "gemini-3-flash-lite-preview"),
             ("gemini-2.5-pro", "gemini-2.5-pro"),
             ("gemini-2.5-flash", "gemini-2.5-flash"),
             ("gemini-2.5-flash-lite", "gemini-2.5-flash-lite"),
@@ -28,6 +50,7 @@ impl TyphooNApp {
             ("pro", "pro alias"),
             ("flash", "flash alias"),
             ("flash-lite", "flash-lite alias"),
+            ("auto-gemini-3.1", "auto-gemini-3.1"),
             ("auto-gemini-3", "auto-gemini-3"),
             ("auto-gemini-2.5", "auto-gemini-2.5"),
             ("gemma-4-31b-it", "gemma-4-31b-it"),
@@ -66,7 +89,7 @@ impl TyphooNApp {
         out
     }
 
-    /// Parse the argument portion of an ASKAI/ASKCLAUDE/ASKGEMINI/ASKCODEX/ASKGROK command.
+    /// Parse the argument portion of an ASKAI/ASKCLAUDE/ASKANTIGRAVITY/ASKCODEX/ASKGROK command.
     ///
     /// The contract is simple and predictable: the **first whitespace-separated
     /// token** is the comma-separated symbol list; **everything after the first
@@ -293,6 +316,17 @@ impl TyphooNApp {
         }
     }
 
+    pub(super) fn normalize_claude_cli_effort(effort: &str) -> &'static str {
+        match effort.trim() {
+            "ultrathink" | "max" => "max",
+            "think harder" | "xhigh" => "xhigh",
+            "think hard" | "high" => "high",
+            "think" | "medium" => "medium",
+            "low" => "low",
+            _ => "",
+        }
+    }
+
     pub(super) fn normalize_codex_reasoning_effort(effort: &str) -> &'static str {
         match effort.trim() {
             "minimal" => "minimal",
@@ -378,7 +412,10 @@ impl TyphooNApp {
         ))
     }
 
-    fn gemini_cli_output_response(result: std::io::Result<std::process::Output>) -> String {
+    fn google_ai_cli_output_response(
+        tool: &str,
+        result: std::io::Result<std::process::Output>,
+    ) -> String {
         match result {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -392,12 +429,13 @@ impl TyphooNApp {
                     "(empty response)".to_string()
                 }
             }
-            Err(e) => format!("Failed to run gemini CLI: {e}"),
+            Err(e) => format!("Failed to run {tool} CLI: {e}"),
         }
     }
 
     pub(super) fn spawn_claude_print(
         model: String,
+        effort: String,
         session_id: String,
         is_first: bool,
         prompt: String,
@@ -415,6 +453,10 @@ impl TyphooNApp {
                     .arg("WebSearch WebFetch Read Grep Glob Bash")
                     .arg("--permission-mode")
                     .arg("acceptEdits");
+                let cli_effort = Self::normalize_claude_cli_effort(&effort);
+                if !cli_effort.is_empty() {
+                    cmd.arg("--effort").arg(cli_effort);
+                }
                 if is_first {
                     cmd.arg("--session-id").arg(&session_id);
                 } else {
@@ -443,7 +485,8 @@ impl TyphooNApp {
                 } else {
                     model
                 };
-                let result = std::process::Command::new("gemini")
+                let tool = Self::google_ai_cli_binary();
+                let result = std::process::Command::new(tool)
                     .arg("--model")
                     .arg(model)
                     .arg("--prompt")
@@ -451,10 +494,10 @@ impl TyphooNApp {
                     .arg("--output-format")
                     .arg("json")
                     .output();
-                let _ = tx.send(Self::gemini_cli_output_response(result));
+                let _ = tx.send(Self::google_ai_cli_output_response(tool, result));
             })
         {
-            let _ = tx_on_spawn_err.send(format!("Failed to spawn gemini CLI worker: {e}"));
+            let _ = tx_on_spawn_err.send(format!("Failed to spawn Google AI CLI worker: {e}"));
         }
     }
 

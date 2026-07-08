@@ -1733,7 +1733,7 @@ fn alpaca_account_pl_matches_sum_of_position_panel_pl() {
     assert_eq!(total_basis, 1_000.0);
 }
 
-// ── parse_ask_args (ASKAI/ASKCLAUDE/ASKGEMINI argument parser) ───────────
+// ── parse_ask_args (ASKAI/ASKCLAUDE/ASKANTIGRAVITY argument parser) ──────
 
 // Note: handle_command() has already uppercased the input by the time
 // parse_ask_args is called, so these tests pass uppercase input to match.
@@ -1828,9 +1828,11 @@ fn gemini_cli_model_options_include_cli_valid_set() {
         "gemini-3.1-flash-lite-preview",
         "gemini-3-pro-preview",
         "gemini-3-flash-preview",
+        "gemini-3-flash-lite-preview",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
+        "auto-gemini-3.1",
         "gemma-4-31b-it",
         "gemma-4-26b-a4b-it",
     ] {

@@ -627,7 +627,7 @@ impl TyphooNApp {
                 }
             }
             // Bare window-openers — kept as aliases so existing recent-commands history still works,
-            // but removed from the palette in favour of the ASKAI / ASKCLAUDE / ASKGEMINI variants
+            // but removed from the palette in favour of the ASKAI / ASKCLAUDE / ASKANTIGRAVITY variants
             // which can also pre-load a research packet on the selected symbols.
             "CHAT" | "MATRIX" => {
                 self.show_matrix_chat = true;

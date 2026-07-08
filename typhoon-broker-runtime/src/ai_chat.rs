@@ -49,10 +49,10 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     other => other,
                 };
                 let cache_model = model.clone().unwrap_or_else(|| match provider.as_str() {
-                    "claude" => "claude-opus-4-5".to_string(),
-                    "openai" => "gpt-4o".into(),
+                    "claude" => "claude-fable-5".to_string(),
+                    "openai" => "gpt-5.1".into(),
                     "gemini" => typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL.into(),
-                    "grok" => "grok-3".into(),
+                    "grok" => "grok-4.1".into(),
                     "mistral" => "mistral-large-latest".into(),
                     "perplexity" => "sonar-pro".into(),
                     "local" => "llama3.2".into(),
@@ -78,7 +78,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     // `system` goes in its own top-level field, not as a role.
                     let anth_model = model
                         .clone()
-                        .unwrap_or_else(|| "claude-opus-4-5".to_string());
+                        .unwrap_or_else(|| "claude-fable-5".to_string());
                     let body = serde_json::json!({
                         "model": anth_model,
                         "max_tokens": 4096,
@@ -143,7 +143,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     let (url, default_model, auth_header) = match provider.as_str() {
                         "openai" => (
                             "https://api.openai.com/v1/chat/completions",
-                            "gpt-4o",
+                            "gpt-5.1",
                             format!("Bearer {}", api_key),
                         ),
                         "gemini" => (
@@ -153,7 +153,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         ),
                         "grok" => (
                             "https://api.x.ai/v1/chat/completions",
-                            "grok-3",
+                            "grok-4.1",
                             format!("Bearer {}", api_key),
                         ),
                         "mistral" => (
@@ -185,7 +185,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                         _ => (
                             "https://api.openai.com/v1/chat/completions",
-                            "gpt-4o",
+                            "gpt-5.1",
                             format!("Bearer {}", api_key),
                         ),
                     };

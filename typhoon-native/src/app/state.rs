@@ -463,7 +463,7 @@ pub struct TyphooNApp {
     pub(crate) claude_code_packet: Option<String>,
     /// Per-session UUID (reused across Send clicks so Claude CLI resumes the same thread).
     pub(crate) claude_code_session_id: Option<String>,
-    /// Picked model alias for Claude CLI: "opus" | "sonnet" | "haiku".
+    /// Picked model alias for Claude CLI: "fable" | "opus" | "sonnet" | "haiku".
     pub(crate) claude_model: String,
     /// Extended-thinking trigger prepended to prompts. Stored as the literal
     /// trigger phrase ("ultrathink" | "think harder" | "think hard" | "think" | "")
