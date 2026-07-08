@@ -345,54 +345,58 @@ impl TyphooNApp {
         match broker {
             OrderBroker::Alpaca => {
                 let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
-                let mut primary_entry = None;
-                let mut connected_primary = None;
+                let mut primary_entry: Option<&AccountRosterEntry> = None;
+                let mut connected_primary: Option<&AccountRosterEntry> = None;
                 for account in &accounts {
                     if account.is_primary && primary_entry.is_none() {
-                        primary_entry = Some(account.clone());
+                        primary_entry = Some(account);
                     }
                     if account.is_primary && account.connected && connected_primary.is_none() {
-                        connected_primary = Some(account.clone());
+                        connected_primary = Some(account);
                     }
                     roster_by_id.insert(account.id.clone(), account.clone());
                 }
+                let stored_primary_entry = primary_entry.cloned();
+                let pid: &str = self.alpaca_primary_account_id.as_str();
                 if let Some(primary) = roster_by_id
-                    .get(&self.alpaca_primary_account_id)
+                    .get(pid)
                     .filter(|a| a.connected)
                     .cloned()
-                    .or(connected_primary)
+                    .or_else(|| connected_primary.cloned())
                 {
                     self.alpaca_primary_account_id = primary.id.clone();
                 }
                 self.alpaca_account_roster = accounts;
                 self.alpaca_roster_by_id = roster_by_id;
-                self.alpaca_primary_roster_entry = primary_entry;
+                self.alpaca_primary_roster_entry = stored_primary_entry;
                 self.primary_cycle_dirty = true;
             }
             OrderBroker::Kraken => {
                 let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
-                let mut primary_entry = None;
-                let mut connected_primary = None;
+                let mut primary_entry: Option<&AccountRosterEntry> = None;
+                let mut connected_primary: Option<&AccountRosterEntry> = None;
                 for account in &accounts {
                     if account.is_primary && primary_entry.is_none() {
-                        primary_entry = Some(account.clone());
+                        primary_entry = Some(account);
                     }
                     if account.is_primary && account.connected && connected_primary.is_none() {
-                        connected_primary = Some(account.clone());
+                        connected_primary = Some(account);
                     }
                     roster_by_id.insert(account.id.clone(), account.clone());
                 }
+                let stored_primary_entry = primary_entry.cloned();
+                let pid: &str = self.kraken_primary_account_id.as_str();
                 if let Some(primary) = roster_by_id
-                    .get(&self.kraken_primary_account_id)
+                    .get(pid)
                     .filter(|a| a.connected)
                     .cloned()
-                    .or(connected_primary)
+                    .or_else(|| connected_primary.cloned())
                 {
                     self.kraken_primary_account_id = primary.id.clone();
                 }
                 self.kraken_account_roster = accounts;
                 self.kraken_roster_by_id = roster_by_id;
-                self.kraken_primary_roster_entry = primary_entry;
+                self.kraken_primary_roster_entry = stored_primary_entry;
                 self.primary_cycle_dirty = true;
             }
         }
