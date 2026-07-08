@@ -219,10 +219,11 @@ async fn _fetch_yahoo_chart_bars_internal(
             "Yahoo Chart HTTP {status} for {symbol} {timeframe}"
         ));
     }
-    let body_text = resp
-        .text()
+    let body_bytes = resp
+        .bytes()
         .await
         .map_err(|e| format!("Yahoo Chart read body failed for {symbol} {timeframe}: {e}"))?;
+    let body_text = String::from_utf8_lossy(&body_bytes).to_string();
     let lower = body_text.to_lowercase();
     if lower.contains("too many requests") || lower.contains("rate limit") || lower.contains("throttl") {
         return Err(format!("Yahoo Chart rate limited for {symbol} {timeframe}"));
