@@ -341,8 +341,6 @@ impl TyphooNApp {
             .striped(true)
             .num_columns(2)
             .show(ui, |ui| {
-                    let alpaca_accounts = self.risk_alpaca_accounts();
-                    let kraken_accounts = self.risk_kraken_accounts();
                 self.risk_grid_row(ui, "Equity", format!("${:.2}", acct.equity), None);
                 self.risk_grid_row(
                     ui,
@@ -405,8 +403,6 @@ impl TyphooNApp {
             .striped(true)
             .num_columns(2)
             .show(ui, |ui| {
-                    let alpaca_accounts = self.risk_alpaca_accounts();
-                    let kraken_accounts = self.risk_kraken_accounts();
                 self.risk_grid_row(ui, "Equity", format!("${:.2}", account.equity), None);
                 self.risk_grid_row(ui, "Holdings", format!("${:.2}", holdings), None);
                 self.risk_grid_row(ui, "Cash (USD/stable)", format!("${:.2}", cash), None);
@@ -424,8 +420,6 @@ impl TyphooNApp {
             .striped(true)
             .num_columns(2)
             .show(ui, |ui| {
-                    let alpaca_accounts = self.risk_alpaca_accounts();
-                    let kraken_accounts = self.risk_kraken_accounts();
                 self.risk_grid_row(ui, "Equity", format!("${:.2}", account.equity), None);
                 if account.previous_equity > 0.0 {
                     self.risk_grid_row(

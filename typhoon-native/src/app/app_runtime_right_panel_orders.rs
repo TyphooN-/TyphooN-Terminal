@@ -148,7 +148,7 @@ impl TyphooNApp {
         let alpaca_orders_available = self.alpaca_enabled;
         let heavy = self.heavy_sync_in_progress;
         let kr_orders_available = self.kraken_enabled;
-        let mut alpaca_order_groups: Vec<AccountOrders> = if self.show_alpaca_orders {
+        let mut alpaca_order_groups: Vec<AccountOrders> = if !heavy && self.show_alpaca_orders {
             if !self.alpaca_account_orders.is_empty() {
                 self.alpaca_account_orders.clone()
             } else if !self.live_orders.is_empty() {
@@ -174,7 +174,7 @@ impl TyphooNApp {
                 .hidden_alpaca_order_account_ids
                 .contains(&account.account_id)
         });
-        let mut kraken_order_groups: Vec<KrakenAccountOrders> = if self.show_kr_orders {
+        let mut kraken_order_groups: Vec<KrakenAccountOrders> = if !heavy && self.show_kr_orders {
             if !self.kraken_account_orders.is_empty() {
                 self.kraken_account_orders.clone()
             } else if !self.kraken_open_orders.is_empty() {
@@ -433,7 +433,7 @@ impl TyphooNApp {
                     ui.separator();
                 }
             }
-            if self.show_kr_orders {
+            if !heavy && self.show_kr_orders {
                 let single_kraken_account = kraken_order_groups.len() <= 1;
                 for account in &kraken_order_groups {
                     if account.orders.is_empty() {
