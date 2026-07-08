@@ -810,7 +810,7 @@ branches are restore points, not pending work). So the surface is stable today.
 `spawn_broker_message_processor` is a self-contained async task taking explicit params
 (`BrokerCmd`/`BrokerMsg` channels, an `Arc<RwLock<Option<Arc<SqliteCache>>>>`, a tokio
 `Handle`, an importing flag); it holds **no `TyphooNApp`** (the only 2 refs are a trivial
-static `TyphooNApp::default_gemini_cli_model()` call). The 19 broker-handler files have **0
+static `TyphooNApp::default_antigravity_cli_model()` call). The 19 broker-handler files have **0
 `impl TyphooNApp`** and **0 `self.` field access**.
 
 **The real, structural blocker is the message protocol's entanglement with the native state
@@ -859,7 +859,7 @@ compute → emit `BrokerMsg`), so it should **stay with its siblings**, not spli
 **Correction (an attempted extraction surfaced the real closure).** A first crate-extraction
 attempt was made on the premise — from a grep-based scan — that the whole `app_broker_processor/`
 had only *two* trivial native couplings (`ALPACA_DEFAULT_HISTORICAL_RPM`,
-`TyphooNApp::default_gemini_cli_model()`; both removed in the Target-3-prep commit). **That scan
+`TyphooNApp::default_antigravity_cli_model()`; both removed in the Target-3-prep commit). **That scan
 was incomplete.** Once those two were gone and the tree was moved to a crate, the compiler
 found **~17 more native symbols** the processor calls that the scan's name-patterns missed — a
 real dependency closure, not constants:

@@ -10,7 +10,7 @@
 
 The research-parity arc (ADRs 108–129) built a dense set of per-symbol
 quantitative surfaces that get glued into the research packet shipped
-to AI agents (Claude, Antigravity/Gemini, ChatGPT) by ASKAI / ASKCLAUDE /
+to AI agents (Claude, Antigravity, ChatGPT) by ASKAI / ASKCLAUDE /
 ASKANTIGRAVITY (legacy ASKGEMINI alias). The packet is a one-way artifact: TyphooN sends numbers
 and domain context, the agent replies with a research note. Any web
 search the agent performs — news, filings, transcripts, forum
@@ -51,7 +51,7 @@ Ship two new features as a single bundle:
    block.
 
    **Accuracy update 2026-05-05; refreshed 2026-07-08:** ADR-096 completed the built-in
-   auto-ingest follow-up. Claude Code, Antigravity/Gemini CLI, Codex CLI, and hosted
+   auto-ingest follow-up. Claude Code, Antigravity CLI, Codex CLI, and hosted
    ASKAI replies now queue the existing ingest broker path automatically
    when their final response contains a `===TYPHOON_INGEST===` block.
    `INGEST_RESEARCH` remains the manual path for external web UIs and

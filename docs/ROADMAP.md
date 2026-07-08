@@ -168,9 +168,9 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Notification system: Discord webhook, Pushover, ntfy.sh, Matrix (ADR-053)
 
 ### Phase 17: AI Sessions
-- [x] Persistent AI sessions: Claude Code, Antigravity/Gemini CLI, Codex CLI, generic AI Chat (ADR-082)
+- [x] Persistent AI sessions: Claude Code, Antigravity CLI, Codex CLI, generic AI Chat (ADR-082)
 - [x] Local AI response cache, dedup identical hosted-AI prompts (ADR-083)
-- [x] Slash commands: RESUMECLAUDE / RESUMEGEMINI / RESUMECODEX / RESUMEAI
+- [x] Slash commands: RESUMECLAUDE / RESUMEANTIGRAVITY / RESUMECODEX / RESUMEAI
 - [x] Ask Codex reasoning effort control; Claude effort passthrough; ASKANTIGRAVITY primary command (`agy` → `antigravity` → `gemini`) with ASKGEMINI as a legacy alias; Grok Build auto-model-only CLI support
 
 ### Phase 18: Research and indicator surfaces

@@ -1566,8 +1566,10 @@ impl TyphooNApp {
                     if let Some(b) = w["claude_code"].as_bool() {
                         self.show_claude_code = b;
                     }
-                    if let Some(b) = w["gemini_cli"].as_bool() {
-                        self.show_gemini_cli = b;
+                    if let Some(b) = w["antigravity_cli"].as_bool() {
+                        self.show_antigravity_cli = b;
+                    } else if let Some(b) = w["gemini_cli"].as_bool() {
+                        self.show_antigravity_cli = b;
                     }
                     if let Some(b) = w["codex_cli"].as_bool() {
                         self.show_codex_cli = b;

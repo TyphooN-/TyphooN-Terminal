@@ -1,6 +1,6 @@
 //! AI chat session persistence.
 //!
-//! Stores transcripts of Claude Code / Gemini CLI / Codex CLI / generic AI Chat
+//! Stores transcripts of Claude Code / Antigravity CLI / Codex CLI / generic AI Chat
 //! sessions in the existing zstd-compressed KV cache so the user can resume a
 //! past conversation across restarts.
 //!
@@ -24,9 +24,9 @@
 //!
 //! See for the full resume UX.
 
-/// Default Gemini CLI model id. Shared by the native app's model selector and the
+/// Default Antigravity CLI model id. Shared by the native app's model selector and the
 /// broker AI-chat handler (ADR-125 Target 3 — keeps the broker processor engine/std-only).
-pub const DEFAULT_GEMINI_CLI_MODEL: &str = "gemini-3.5-flash";
+pub const DEFAULT_ANTIGRAVITY_CLI_MODEL: &str = "gemini-3.5-flash";
 
 use crate::core::cache::SqliteCache as Cache;
 use serde::{Deserialize, Serialize};

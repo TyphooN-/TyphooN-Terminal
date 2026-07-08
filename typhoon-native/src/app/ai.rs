@@ -86,7 +86,7 @@ impl TyphooNApp {
                                     ("gpt-4o", "gpt-4o"),
                                 ],
                             ),
-                            2 => ("ai_model_gemini", Self::gemini_cli_model_options()),
+                            2 => ("ai_model_gemini", Self::antigravity_cli_model_options()),
                             3 => (
                                 "ai_model_grok",
                                 &[
@@ -442,23 +442,23 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn render_gemini_cli_window(&mut self, ctx: &egui::Context) {
-        if let Some(ref rx) = self.gemini_cli_rx {
+    pub(super) fn render_antigravity_cli_window(&mut self, ctx: &egui::Context) {
+        if let Some(ref rx) = self.antigravity_cli_rx {
             if let Ok(response) = rx.try_recv() {
-                self.maybe_queue_ingest_from_ai_response("gemini", &response);
-                self.gemini_cli_history.push((false, response));
-                self.gemini_cli_rx = None;
-                let sid = Self::ensure_session_id(&mut self.gemini_cli_session_id);
-                let model = self.gemini_model.clone();
-                let history = self.gemini_cli_history.clone();
-                self.persist_ai_turn("gemini", &sid, None, &history, &model);
+                self.maybe_queue_ingest_from_ai_response("antigravity", &response);
+                self.antigravity_cli_history.push((false, response));
+                self.antigravity_cli_rx = None;
+                let sid = Self::ensure_session_id(&mut self.antigravity_cli_session_id);
+                let model = self.antigravity_model.clone();
+                let history = self.antigravity_cli_history.clone();
+                self.persist_ai_turn("antigravity", &sid, None, &history, &model);
             }
         }
-        if self.show_gemini_cli {
-            let mut save_gemini_transcript: Option<String> = None;
-            let mut matrix_gemini_transcript: Option<String> = None;
-            egui::Window::new("Gemini CLI")
-                .open(&mut self.show_gemini_cli)
+        if self.show_antigravity_cli {
+            let mut save_antigravity_transcript: Option<String> = None;
+            let mut matrix_antigravity_transcript: Option<String> = None;
+            egui::Window::new("Antigravity CLI")
+                .open(&mut self.show_antigravity_cli)
                 .resizable(true)
                 .default_size([620.0, 520.0])
                 .min_width(420.0)
@@ -467,65 +467,65 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
-                            egui::RichText::new("Antigravity / Gemini CLI — local binary")
+                            egui::RichText::new("Antigravity CLI — local binary")
                                 .small()
                                 .color(AXIS_TEXT),
                         );
                         ui.separator();
                         ui.label("Model:");
-                        egui::ComboBox::from_id_salt("gemini_model_picker")
-                            .selected_text(self.gemini_model.as_str())
+                        egui::ComboBox::from_id_salt("antigravity_model_picker")
+                            .selected_text(self.antigravity_model.as_str())
                             .show_ui(ui, |ui| {
-                                for (value, label) in Self::gemini_cli_model_options() {
+                                for (value, label) in Self::antigravity_cli_model_options() {
                                     ui.selectable_value(
-                                        &mut self.gemini_model,
+                                        &mut self.antigravity_model,
                                         value.to_string(),
                                         *label,
                                     );
                                 }
                             });
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.gemini_model)
+                            egui::TextEdit::singleline(&mut self.antigravity_model)
                                 .desired_width(180.0)
-                                .hint_text("any Google AI CLI model id"),
+                                .hint_text("any Antigravity CLI model id"),
                         )
                         .on_hover_text(
-                            "Type any model your installed Antigravity/Gemini CLI account can use. TyphooN passes it through to `<tool> --model`; unsupported/limited models report the CLI error.",
+                            "Type any model your installed Antigravity CLI account can use. TyphooN passes it through to `<tool> --model`; unsupported/limited models report the CLI error.",
                         );
                         ui.label(
                             egui::RichText::new("usage shown after each reply; remaining quota unavailable")
                                 .small()
                                 .color(AXIS_TEXT),
                         );
-                        if self.gemini_cli_packet.is_some() {
+                        if self.antigravity_cli_packet.is_some() {
                             ui.label(egui::RichText::new("[packet loaded]").small().color(UP));
                         }
-                        let has_turns = !self.gemini_cli_history.is_empty();
+                        let has_turns = !self.antigravity_cli_history.is_empty();
                         ui.add_enabled_ui(has_turns, |ui| {
                             if ui
                                 .button("\u{1F4BE} Save")
-                                .on_hover_text("Export this Gemini session to a markdown file")
+                                .on_hover_text("Export this Antigravity session to a markdown file")
                                 .clicked()
                             {
-                                save_gemini_transcript = Some(Self::format_ai_transcript(
-                                    &self.gemini_cli_history,
-                                    "Gemini CLI",
-                                    "Gemini",
-                                    Some(self.gemini_cli_session_id.as_str()),
+                                save_antigravity_transcript = Some(Self::format_ai_transcript(
+                                    &self.antigravity_cli_history,
+                                    "Antigravity CLI",
+                                    "Antigravity",
+                                    Some(self.antigravity_cli_session_id.as_str()),
                                 ));
                             }
                             if ui
                                 .button("\u{1F4E8} Matrix")
                                 .on_hover_text(
-                                    "Post this Gemini session to the Community Chat room",
+                                    "Post this Antigravity session to the Community Chat room",
                                 )
                                 .clicked()
                             {
-                                matrix_gemini_transcript = Some(Self::format_ai_transcript(
-                                    &self.gemini_cli_history,
-                                    "Gemini CLI",
-                                    "Gemini",
-                                    Some(self.gemini_cli_session_id.as_str()),
+                                matrix_antigravity_transcript = Some(Self::format_ai_transcript(
+                                    &self.antigravity_cli_history,
+                                    "Antigravity CLI",
+                                    "Antigravity",
+                                    Some(self.antigravity_cli_session_id.as_str()),
                                 ));
                             }
                         });
@@ -537,18 +537,18 @@ impl TyphooNApp {
                         .max_height(scroll_h)
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
-                            if self.gemini_cli_history.is_empty() {
+                            if self.antigravity_cli_history.is_empty() {
                                 ui.vertical_centered(|ui| {
                                     ui.add_space(40.0);
                                     ui.label(
                                         egui::RichText::new(
-                                            "Ask Antigravity/Gemini anything — uses your local Google AI CLI",
+                                            "Ask Antigravity anything — uses your local Antigravity CLI",
                                         )
                                         .color(AXIS_TEXT),
                                     );
                                 });
                             }
-                            for (is_user, msg) in &self.gemini_cli_history {
+                            for (is_user, msg) in &self.antigravity_cli_history {
                                 let (align, color, prefix) = if *is_user {
                                     (
                                         egui::Align::RIGHT,
@@ -559,7 +559,7 @@ impl TyphooNApp {
                                     (
                                         egui::Align::LEFT,
                                         egui::Color32::from_rgb(100, 200, 220),
-                                        "Gemini",
+                                        "Antigravity",
                                     )
                                 };
                                 ui.with_layout(egui::Layout::top_down(align), |ui| {
@@ -570,7 +570,7 @@ impl TyphooNApp {
                                 });
                                 ui.add_space(4.0);
                             }
-                            if self.gemini_cli_rx.is_some() {
+                            if self.antigravity_cli_rx.is_some() {
                                 ui.horizontal(|ui| {
                                     ui.spinner();
                                     ui.label(
@@ -582,37 +582,37 @@ impl TyphooNApp {
                     ui.separator();
                     ui.horizontal(|ui| {
                         let resp = ui.add(
-                            egui::TextEdit::singleline(&mut self.gemini_cli_input)
+                            egui::TextEdit::singleline(&mut self.antigravity_cli_input)
                                 .desired_width(ui.available_width() - 60.0)
-                                .hint_text("Ask Antigravity/Gemini..."),
+                                .hint_text("Ask Antigravity..."),
                         );
                         let send = ui.button("Send").clicked()
                             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                         if send
-                            && !self.gemini_cli_input.trim().is_empty()
-                            && self.gemini_cli_rx.is_none()
+                            && !self.antigravity_cli_input.trim().is_empty()
+                            && self.antigravity_cli_rx.is_none()
                         {
-                            let msg = self.gemini_cli_input.trim().to_string();
-                            self.gemini_cli_input.clear();
-                            self.gemini_cli_history.push((true, msg.clone()));
+                            let msg = self.antigravity_cli_input.trim().to_string();
+                            self.antigravity_cli_input.clear();
+                            self.antigravity_cli_history.push((true, msg.clone()));
                             let full_prompt = Self::build_claude_prompt(
-                                self.gemini_cli_packet.as_deref(),
-                                &self.gemini_cli_history,
+                                self.antigravity_cli_packet.as_deref(),
+                                &self.antigravity_cli_history,
                                 &msg,
                                 "",
                             );
-                            let model = self.gemini_model.clone();
+                            let model = self.antigravity_model.clone();
                             let (tx, rx) = std::sync::mpsc::channel();
-                            self.gemini_cli_rx = Some(rx);
-                            Self::spawn_gemini_prompt(model, full_prompt, tx);
+                            self.antigravity_cli_rx = Some(rx);
+                            Self::spawn_antigravity_prompt(model, full_prompt, tx);
                         }
                     });
                 });
-            if let Some(t) = save_gemini_transcript {
-                self.save_ai_session_to_file("gemini_cli", &t);
+            if let Some(t) = save_antigravity_transcript {
+                self.save_ai_session_to_file("antigravity_cli", &t);
             }
-            if let Some(t) = matrix_gemini_transcript {
-                self.send_ai_session_to_matrix("gemini_cli", &t);
+            if let Some(t) = matrix_antigravity_transcript {
+                self.send_ai_session_to_matrix("antigravity_cli", &t);
             }
         }
     }
@@ -1411,10 +1411,10 @@ impl TyphooNApp {
                                                             };
                                                             self.show_claude_code = true;
                                                         }
-                                                        "gemini" => {
-                                                            self.gemini_cli_history = rec.turns.clone();
-                                                            self.gemini_cli_session_id = rec.session_id.clone();
-                                                            self.show_gemini_cli = true;
+                                                        "antigravity" | "gemini" => {
+                                                            self.antigravity_cli_history = rec.turns.clone();
+                                                            self.antigravity_cli_session_id = rec.session_id.clone();
+                                                            self.show_antigravity_cli = true;
                                                         }
                                                         "codex" => {
                                                             self.codex_cli_history = rec.turns.clone();

@@ -894,7 +894,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "ASKANTIGRAVITY",
-        desc: "Ask Antigravity/Gemini CLI with full TyphooN data packet — ASKANTIGRAVITY SYM[,SYM] [question] (uses current Google AI CLI model; arbitrary IDs allowed)",
+        desc: "Ask Antigravity CLI with full TyphooN data packet — ASKANTIGRAVITY SYM[,SYM] [question] (uses current Antigravity CLI model; arbitrary IDs allowed)",
     },
     Command {
         name: "ASKGEMINI",

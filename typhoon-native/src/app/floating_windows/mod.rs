@@ -152,8 +152,8 @@ impl TyphooNApp {
         // ── Claude Code CLI chat ──
         self.render_claude_code_window(ctx);
 
-        // ── Gemini CLI chat ──
-        self.render_gemini_cli_window(ctx);
+        // ── Antigravity CLI chat ──
+        self.render_antigravity_cli_window(ctx);
 
         // ── Codex CLI chat ──
         self.render_codex_cli_window(ctx);

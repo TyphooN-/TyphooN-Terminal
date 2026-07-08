@@ -168,7 +168,7 @@ impl TyphooNApp {
                 "optimizer": self.show_optimizer,
                 "ai_chat": self.show_ai_chat,
                 "claude_code": self.show_claude_code,
-                "gemini_cli": self.show_gemini_cli,
+                "antigravity_cli": self.show_antigravity_cli,
                 "codex_cli": self.show_codex_cli,
                 "hermes_cli": self.show_hermes_cli,
                 "grok_cli": self.show_grok_cli,

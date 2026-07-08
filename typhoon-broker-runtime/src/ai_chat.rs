@@ -51,7 +51,9 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 let cache_model = model.clone().unwrap_or_else(|| match provider.as_str() {
                     "claude" => "claude-fable-5".to_string(),
                     "openai" => "gpt-5.5".into(),
-                    "gemini" => typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL.into(),
+                    "gemini" => {
+                        typhoon_engine::core::ai_sessions::DEFAULT_ANTIGRAVITY_CLI_MODEL.into()
+                    }
                     "grok" => "grok-4.3".into(),
                     "mistral" => "mistral-medium-3-5-26-04".into(),
                     "perplexity" => "sonar".into(),
@@ -148,7 +150,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         ),
                         "gemini" => (
                             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                            typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL,
+                            typhoon_engine::core::ai_sessions::DEFAULT_ANTIGRAVITY_CLI_MODEL,
                             format!("Bearer {}", api_key),
                         ),
                         "grok" => (

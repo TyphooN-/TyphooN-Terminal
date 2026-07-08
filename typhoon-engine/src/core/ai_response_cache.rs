@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiResponseCacheEntry {
     pub prompt_hash: String,     // hex sha256 over the normalised prompt tuple
-    pub provider: String, // "claude_http" | "openai" | "gemini" | "grok" | "mistral" | "perplexity" | "local" | "claude_cli" | "gemini_cli" | "codex_cli"
+    pub provider: String, // "claude_http" | "openai" | "gemini" | "grok" | "mistral" | "perplexity" | "local" | "claude_cli" | "antigravity_cli" | "codex_cli"
     pub model: String,    // provider-specific model id at call time
     pub prompt_preview: String, // last-user-message trimmed to ~400 chars for the stats window
     pub response: String, // the assistant reply in full

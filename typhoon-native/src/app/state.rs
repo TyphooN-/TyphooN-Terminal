@@ -469,13 +469,13 @@ pub struct TyphooNApp {
     /// trigger phrase ("ultrathink" | "think harder" | "think hard" | "think" | "")
     /// so we can just inject it verbatim in `build_claude_prompt`.
     pub(crate) claude_effort: String,
-    /// Gemini CLI chat window.
-    pub(crate) show_gemini_cli: bool,
-    pub(crate) gemini_cli_input: String,
-    pub(crate) gemini_cli_history: Vec<(bool, String)>,
-    pub(crate) gemini_cli_rx: Option<std::sync::mpsc::Receiver<String>>,
-    pub(crate) gemini_cli_packet: Option<String>,
-    pub(crate) gemini_model: String,
+    /// Antigravity CLI chat window.
+    pub(crate) show_antigravity_cli: bool,
+    pub(crate) antigravity_cli_input: String,
+    pub(crate) antigravity_cli_history: Vec<(bool, String)>,
+    pub(crate) antigravity_cli_rx: Option<std::sync::mpsc::Receiver<String>>,
+    pub(crate) antigravity_cli_packet: Option<String>,
+    pub(crate) antigravity_model: String,
     /// Codex CLI chat window (local `codex` binary — OpenAI Codex).
     pub(crate) show_codex_cli: bool,
     pub(crate) codex_cli_input: String,
@@ -517,7 +517,7 @@ pub struct TyphooNApp {
     /// existing `claude_code_session_id` (a UUID) as both the --resume id and
     /// the kv-cache session id.
     pub(crate) ai_chat_session_id: String,
-    pub(crate) gemini_cli_session_id: String,
+    pub(crate) antigravity_cli_session_id: String,
     pub(crate) codex_cli_session_id: String,
     /// AI Sessions history browser.
     pub(crate) show_ai_sessions: bool,

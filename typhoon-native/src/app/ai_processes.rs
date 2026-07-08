@@ -1,25 +1,25 @@
 use super::*;
 
 impl TyphooNApp {
-    const GOOGLE_AI_CLI_CANDIDATES: &'static [&'static str] = &["agy", "antigravity", "gemini"];
+    const ANTIGRAVITY_CLI_CANDIDATES: &'static [&'static str] = &["agy", "antigravity", "gemini"];
 
-    pub(super) fn default_gemini_cli_model() -> &'static str {
-        typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL
+    pub(super) fn default_antigravity_cli_model() -> &'static str {
+        typhoon_engine::core::ai_sessions::DEFAULT_ANTIGRAVITY_CLI_MODEL
     }
 
-    pub(super) fn select_google_ai_cli_binary<F>(mut available: F) -> &'static str
+    pub(super) fn select_antigravity_cli_binary<F>(mut available: F) -> &'static str
     where
         F: FnMut(&str) -> bool,
     {
-        Self::GOOGLE_AI_CLI_CANDIDATES
+        Self::ANTIGRAVITY_CLI_CANDIDATES
             .iter()
             .copied()
             .find(|candidate| available(candidate))
             .unwrap_or("gemini")
     }
 
-    pub(super) fn google_ai_cli_binary() -> &'static str {
-        Self::select_google_ai_cli_binary(|candidate| {
+    pub(super) fn antigravity_cli_binary() -> &'static str {
+        Self::select_antigravity_cli_binary(|candidate| {
             std::process::Command::new("which")
                 .arg(candidate)
                 .output()
@@ -28,22 +28,22 @@ impl TyphooNApp {
         })
     }
 
-    pub(super) fn google_ai_cli_available() -> bool {
+    pub(super) fn antigravity_cli_available() -> bool {
         std::process::Command::new("which")
-            .arg(Self::google_ai_cli_binary())
+            .arg(Self::antigravity_cli_binary())
             .output()
             .map(|out| out.status.success())
             .unwrap_or(false)
     }
 
-    pub(super) fn google_ai_cli_display_name(binary: &str) -> &'static str {
+    pub(super) fn antigravity_cli_display_name(binary: &str) -> &'static str {
         match binary {
             "agy" | "antigravity" => "Antigravity",
             _ => "Gemini",
         }
     }
 
-    pub(super) fn gemini_cli_model_options() -> &'static [(&'static str, &'static str)] {
+    pub(super) fn antigravity_cli_model_options() -> &'static [(&'static str, &'static str)] {
         &[
             ("gemini-3.5-flash", "gemini-3.5-flash (latest stable)"),
             (
@@ -64,7 +64,7 @@ impl TyphooNApp {
             ("gemini-2.5-pro", "gemini-2.5-pro"),
             ("gemini-2.5-flash", "gemini-2.5-flash"),
             ("gemini-2.5-flash-lite", "gemini-2.5-flash-lite"),
-            ("auto", "auto (Gemini CLI decides)"),
+            ("auto", "auto (Antigravity CLI decides)"),
             ("pro", "pro alias"),
             ("flash", "flash alias"),
             ("flash-lite", "flash-lite alias"),
@@ -404,7 +404,7 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn gemini_cli_json_response(stdout: &str) -> Option<String> {
+    pub(super) fn antigravity_cli_json_response(stdout: &str) -> Option<String> {
         let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
         if let Some(message) = value
             .get("error")
@@ -426,11 +426,11 @@ impl TyphooNApp {
         let thoughts = tokens.get("thoughts").and_then(|v| v.as_i64()).unwrap_or(0);
         let cached = tokens.get("cached").and_then(|v| v.as_i64()).unwrap_or(0);
         Some(format!(
-            "{response}\n\n[Gemini CLI usage: model={model}, total_tokens={total}, prompt={prompt}, output={candidates}, thoughts={thoughts}, cached={cached}. Remaining quota is not exposed by Gemini CLI.]"
+            "{response}\n\n[Antigravity CLI usage: model={model}, total_tokens={total}, prompt={prompt}, output={candidates}, thoughts={thoughts}, cached={cached}. Remaining quota is not exposed by Antigravity CLI.]"
         ))
     }
 
-    fn google_ai_cli_output_response(
+    fn antigravity_cli_output_response(
         tool: &str,
         result: std::io::Result<std::process::Output>,
     ) -> String {
@@ -439,7 +439,7 @@ impl TyphooNApp {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 if !stdout.trim().is_empty() {
-                    Self::gemini_cli_json_response(&stdout)
+                    Self::antigravity_cli_json_response(&stdout)
                         .unwrap_or_else(|| stdout.trim().to_string())
                 } else if !stderr.trim().is_empty() {
                     format!("Error: {}", stderr.trim())
@@ -488,7 +488,7 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn spawn_gemini_prompt(
+    pub(super) fn spawn_antigravity_prompt(
         model: String,
         prompt: String,
         tx: std::sync::mpsc::Sender<String>,
@@ -499,11 +499,11 @@ impl TyphooNApp {
             .spawn(move || {
                 let model = model.trim();
                 let model = if model.is_empty() {
-                    Self::default_gemini_cli_model()
+                    Self::default_antigravity_cli_model()
                 } else {
                     model
                 };
-                let tool = Self::google_ai_cli_binary();
+                let tool = Self::antigravity_cli_binary();
                 let result = std::process::Command::new(tool)
                     .arg("--model")
                     .arg(model)
@@ -512,10 +512,10 @@ impl TyphooNApp {
                     .arg("--output-format")
                     .arg("json")
                     .output();
-                let _ = tx.send(Self::google_ai_cli_output_response(tool, result));
+                let _ = tx.send(Self::antigravity_cli_output_response(tool, result));
             })
         {
-            let _ = tx_on_spawn_err.send(format!("Failed to spawn Google AI CLI worker: {e}"));
+            let _ = tx_on_spawn_err.send(format!("Failed to spawn Antigravity CLI worker: {e}"));
         }
     }
 

@@ -9,7 +9,7 @@ Accepted — 2026-04-17.
 Four AI chat surfaces exist in the terminal:
 
 1. **Claude Code** (`claude --print --session-id <uuid>` / `--resume <uuid>`)
-2. **Google AI CLI** (`agy --prompt ...` / `antigravity --prompt ...` preferred, `gemini --prompt ...` fallback — no native resume)
+2. **Antigravity CLI** (`agy --prompt ...` / `antigravity --prompt ...` preferred, `gemini --prompt ...` fallback — no native resume)
 3. **Codex CLI** (`codex exec ...` — no native resume)
 4. **Generic AI Chat** (HTTP to Claude/OpenAI/Gemini/Grok/Mistral/Perplexity/Local)
 
@@ -18,7 +18,7 @@ Before this change, **every conversation was ephemeral**: the transcript lived i
 the CLI's own `--session-id` was also in-memory only, so even though Claude's
 backend retained server-side context, we lost the key that would let us re-enter
 that thread. This ran counter to the user's ask: *"can we save all AI sessions
-somewhere, so we can attempt to resume them with RESUMEGEMINI, RESUMECLAUDE,
+somewhere, so we can attempt to resume them with RESUMEANTIGRAVITY, RESUMECLAUDE,
 RESUMECODEX, RESUMEAI?"*
 
 ## Decision
@@ -68,13 +68,13 @@ resume key and our kv key.
   *and* the `claude_code_session_id`, open the Claude Code window. The next
   `Send` already uses `--resume <id>` via the existing logic at
   `typhoon-native/src/app/ai.rs:426`.
-- `/RESUMEGEMINI` — restore transcript into `gemini_cli_history`; no native
+- `/RESUMEANTIGRAVITY` — restore transcript into `antigravity_cli_history`; no native
   resume, so the replayed transcript is injected via the existing
   `build_claude_prompt` call that already includes full history on every turn.
-  The active command surface is now Antigravity/Gemini: `ASKANTIGRAVITY` is the
+  The active command surface is now Antigravity: `ASKANTIGRAVITY` is the
   primary palette command, `ASKGEMINI` remains a legacy alias, and the process
   launcher checks `agy`, then `antigravity`, before falling back to `gemini`.
-- `/RESUMECODEX` — same strategy as Antigravity/Gemini.
+- `/RESUMECODEX` — same strategy as Antigravity.
 - `/RESUMEAI` — restore into `ai_chat_history`; `AiChat` broker command already
   threads `history: Vec<(bool, String)>` into the API request.
 - `/AISESSIONS` / `/AI_SESSIONS` — open the history browser window.

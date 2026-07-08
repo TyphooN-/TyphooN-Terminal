@@ -32,7 +32,7 @@ the chart / palette / command-dispatch core in the parent file.
 
 ```
 typhoon-native/src/app.rs                  — TyphooNApp, chart, palette, dispatch
-typhoon-native/src/app/ai.rs               — AI Chat, Claude Code, Antigravity/Gemini CLI,
+typhoon-native/src/app/ai.rs               — AI Chat, Claude Code, Antigravity CLI,
                                      Codex CLI, AI Sessions, AI Response
                                      Cache (six related windows)
 typhoon-native/src/app/alpaca_sync.rs      — broker sync capacities, TF filters,
@@ -72,7 +72,7 @@ new file, add `use` lines for the types they reference.
 The two-step split was deliberate:
 
 - **8aa81937 (2026-04-23 07:36)** — first peel: Storage, Sync Status,
-  Settings, AI windows. The six AI windows (AI Chat, Claude Code, Antigravity/Gemini
+  Settings, AI windows. The six AI windows (AI Chat, Claude Code, Antigravity
   CLI, Codex CLI, AI Sessions, AI Response Cache) are tightly related and
   are now bundled in `ai.rs` rather than one module each, because they
   share the same provider plumbing from ADR-082.

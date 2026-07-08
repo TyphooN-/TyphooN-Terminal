@@ -44,7 +44,7 @@ impl TyphooNApp {
         self.show_compound_calc = false;
         self.show_ai_chat = false;
         self.show_claude_code = false;
-        self.show_gemini_cli = false;
+        self.show_antigravity_cli = false;
         self.show_codex_cli = false;
         self.show_hermes_cli = false;
         self.show_grok_cli = false;

@@ -16,7 +16,7 @@ through the native app.
 
 The earlier ADR-080 alternative called this "scrape subprocess stdout".
 The current implementation no longer needs streaming stdout parsing:
-Claude, Antigravity/Gemini, and Codex CLI calls all use final-response channels, and
+Claude, Antigravity, and Codex CLI calls all use final-response channels, and
 hosted ASKAI replies already return through `BrokerMsg::JsonResult`.
 
 ## Decision
@@ -37,7 +37,7 @@ Implemented as one shared app helper:
 Hook points:
 
 - Claude Code CLI response drain in `typhoon-native/src/app/ai.rs`
-- Antigravity/Gemini CLI response drain in `typhoon-native/src/app/ai.rs`
+- Antigravity CLI response drain in `typhoon-native/src/app/ai.rs`
 - Codex CLI response drain in `typhoon-native/src/app/ai.rs`
 - Hosted AI Chat `BrokerMsg::JsonResult("AiChat", ...)` receive arm in
   `typhoon-native/src/app.rs`

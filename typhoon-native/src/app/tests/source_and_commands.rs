@@ -1805,13 +1805,13 @@ fn packet_export_stem_sanitizes_path_unsafe_chars() {
 }
 
 #[test]
-fn gemini_cli_default_prefers_latest_stable_flash() {
-    assert_eq!(TyphooNApp::default_gemini_cli_model(), "gemini-3.5-flash");
+fn antigravity_cli_default_prefers_latest_stable_flash() {
+    assert_eq!(TyphooNApp::default_antigravity_cli_model(), "gemini-3.5-flash");
 }
 
 #[test]
-fn gemini_cli_model_options_include_cli_valid_set() {
-    let models: Vec<&str> = TyphooNApp::gemini_cli_model_options()
+fn antigravity_cli_model_options_include_cli_valid_set() {
+    let models: Vec<&str> = TyphooNApp::antigravity_cli_model_options()
         .iter()
         .map(|(model, _label)| *model)
         .collect();
@@ -1836,31 +1836,31 @@ fn gemini_cli_model_options_include_cli_valid_set() {
     ] {
         assert!(
             models.contains(&expected),
-            "missing Gemini CLI model {expected}"
+            "missing Antigravity CLI model {expected}"
         );
     }
 }
 
 #[test]
-fn google_ai_cli_binary_prefers_agy_then_antigravity_then_gemini() {
+fn antigravity_cli_binary_prefers_agy_then_antigravity_then_gemini() {
     assert_eq!(
-        TyphooNApp::select_google_ai_cli_binary(|name| name == "agy"),
+        TyphooNApp::select_antigravity_cli_binary(|name| name == "agy"),
         "agy"
     );
     assert_eq!(
-        TyphooNApp::select_google_ai_cli_binary(|name| name == "antigravity"),
+        TyphooNApp::select_antigravity_cli_binary(|name| name == "antigravity"),
         "antigravity"
     );
     assert_eq!(
-        TyphooNApp::select_google_ai_cli_binary(|name| name == "gemini"),
+        TyphooNApp::select_antigravity_cli_binary(|name| name == "gemini"),
         "gemini"
     );
-    assert_eq!(TyphooNApp::select_google_ai_cli_binary(|_| false), "gemini");
-    assert_eq!(TyphooNApp::google_ai_cli_display_name("agy"), "Antigravity");
+    assert_eq!(TyphooNApp::select_antigravity_cli_binary(|_| false), "gemini");
+    assert_eq!(TyphooNApp::antigravity_cli_display_name("agy"), "Antigravity");
 }
 
 #[test]
-fn gemini_cli_json_response_appends_usage_stats() {
+fn antigravity_cli_json_response_appends_usage_stats() {
     let stdout = r#"{
           "response": "OK",
           "stats": {
@@ -1877,7 +1877,7 @@ fn gemini_cli_json_response_appends_usage_stats() {
             }
           }
         }"#;
-    let parsed = TyphooNApp::gemini_cli_json_response(stdout).unwrap();
+    let parsed = TyphooNApp::antigravity_cli_json_response(stdout).unwrap();
     assert!(parsed.starts_with("OK"));
     assert!(parsed.contains("model=gemini-2.5-flash"));
     assert!(parsed.contains("total_tokens=125"));
@@ -1885,10 +1885,10 @@ fn gemini_cli_json_response_appends_usage_stats() {
 }
 
 #[test]
-fn gemini_cli_json_response_preserves_error_message() {
+fn antigravity_cli_json_response_preserves_error_message() {
     let stdout = r#"{"error":{"message":"Requested entity was not found."}}"#;
     assert_eq!(
-        TyphooNApp::gemini_cli_json_response(stdout).unwrap(),
+        TyphooNApp::antigravity_cli_json_response(stdout).unwrap(),
         "Error: Requested entity was not found."
     );
 }

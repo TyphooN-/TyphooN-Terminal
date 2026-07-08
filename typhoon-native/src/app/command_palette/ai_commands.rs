@@ -7,15 +7,15 @@ impl TyphooNApp {
             "ANTIGRAVITY" | "ANTIGRAVITY_CLI" | "ANTIGRAVITY-CLI" | "ASKANTIGRAVITY"
             | "ASK_ANTIGRAVITY" | "GEMINI" | "GEMINI_CLI" | "GEMINI-CLI" | "ASKGEMINI"
             | "ASK_GEMINI" => {
-                let tool = Self::google_ai_cli_binary();
-                if Self::google_ai_cli_available() {
-                    self.show_gemini_cli = true;
+                let tool = Self::antigravity_cli_binary();
+                if Self::antigravity_cli_available() {
+                    self.show_antigravity_cli = true;
                     self.log.push_back(LogEntry::info(format!(
-                        "{} CLI detected — opening Google AI chat",
-                        Self::google_ai_cli_display_name(tool)
+                        "{} CLI detected — opening Antigravity chat",
+                        Self::antigravity_cli_display_name(tool)
                     )));
                 } else {
-                    self.log.push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH. Install Antigravity CLI (`agy` preferred, `antigravity` accepted) or Gemini CLI."));
+                    self.log.push_back(LogEntry::err("Antigravity CLI not found in PATH. Install Antigravity CLI (`agy` preferred, `antigravity` accepted) or provide the legacy `gemini` binary."));
                 }
             }
             "CLAUDE" | "CLAUDE_CODE" | "CLAUDE-CODE" | "ASKCLAUDE" | "ASK_CLAUDE" => {
@@ -103,23 +103,34 @@ impl TyphooNApp {
                         .push_back(LogEntry::warn("Cache not ready — wait a moment and retry"));
                 }
             }
-            "RESUMEGEMINI" | "RESUME_GEMINI" => {
+            "RESUMEANTIGRAVITY" | "RESUME_ANTIGRAVITY" | "RESUMEGEMINI" | "RESUME_GEMINI" => {
                 if let Some(ref cache) = self.cache {
-                    match typhoon_engine::core::ai_sessions::latest_for_provider(cache, "gemini") {
+                    let latest = typhoon_engine::core::ai_sessions::latest_for_provider(
+                        cache,
+                        "antigravity",
+                    )
+                    .and_then(|rec| {
+                        if rec.is_some() {
+                            Ok(rec)
+                        } else {
+                            typhoon_engine::core::ai_sessions::latest_for_provider(cache, "gemini")
+                        }
+                    });
+                    match latest {
                         Ok(Some(rec)) => {
-                            self.gemini_cli_history = rec.turns.clone();
-                            self.gemini_cli_session_id = rec.session_id.clone();
-                            self.show_gemini_cli = true;
+                            self.antigravity_cli_history = rec.turns.clone();
+                            self.antigravity_cli_session_id = rec.session_id.clone();
+                            self.show_antigravity_cli = true;
                             self.log.push_back(LogEntry::info(format!(
-                                "Resumed Gemini session {} ({} turns — no native --resume, transcript replayed as context)",
+                                "Resumed Antigravity session {} ({} turns — no native --resume, transcript replayed as context)",
                                 rec.session_id, rec.turns.len())));
                         }
                         Ok(None) => self
                             .log
-                            .push_back(LogEntry::warn("No saved Gemini session to resume")),
+                            .push_back(LogEntry::warn("No saved Antigravity session to resume")),
                         Err(e) => self
                             .log
-                            .push_back(LogEntry::err(format!("RESUMEGEMINI: {e}"))),
+                            .push_back(LogEntry::err(format!("RESUMEANTIGRAVITY: {e}"))),
                     }
                 } else {
                     self.log
@@ -399,17 +410,17 @@ impl TyphooNApp {
                     .trim();
                 let (syms, question) = Self::parse_ask_args(args);
                 if syms.is_empty() {
-                    self.show_gemini_cli = true;
+                    self.show_antigravity_cli = true;
                     self.log.push_back(LogEntry::warn(
                         "Usage: ASKANTIGRAVITY SYM1[,SYM2] [optional question]",
                     ));
                     return true;
                 }
-                let tool = Self::google_ai_cli_binary();
-                if Self::google_ai_cli_available() {
+                let tool = Self::antigravity_cli_binary();
+                if Self::antigravity_cli_available() {
                     let packet = self.investigate_symbols(&syms, &question);
-                    self.gemini_cli_packet = Some(packet.clone());
-                    self.show_gemini_cli = true;
+                    self.antigravity_cli_packet = Some(packet.clone());
+                    self.show_antigravity_cli = true;
                     let first_user_turn = if question.is_empty() {
                         format!(
                             "Give me an overall read on {} — combine the research packet above with a live web search for recent news/sentiment.",
@@ -418,7 +429,7 @@ impl TyphooNApp {
                     } else {
                         question.clone()
                     };
-                    self.gemini_cli_history.push((
+                    self.antigravity_cli_history.push((
                         true,
                         format!(
                             "[Research packet loaded: {}] {}",
@@ -426,28 +437,28 @@ impl TyphooNApp {
                             first_user_turn
                         ),
                     ));
-                    if self.gemini_cli_rx.is_none() {
-                        let model = self.gemini_model.clone();
+                    if self.antigravity_cli_rx.is_none() {
+                        let model = self.antigravity_model.clone();
                         let full_prompt = Self::build_claude_prompt(
                             Some(&packet),
-                            &self.gemini_cli_history,
+                            &self.antigravity_cli_history,
                             &first_user_turn,
                             "",
                         );
                         let (tx, rx) = std::sync::mpsc::channel();
-                        self.gemini_cli_rx = Some(rx);
-                        Self::spawn_gemini_prompt(model, full_prompt, tx);
+                        self.antigravity_cli_rx = Some(rx);
+                        Self::spawn_antigravity_prompt(model, full_prompt, tx);
                         self.log.push_back(LogEntry::info(format!(
                             "{} CLI investigation dispatched: {} ({} symbols, {})",
-                            Self::google_ai_cli_display_name(tool),
+                            Self::antigravity_cli_display_name(tool),
                             syms.join(", "),
                             syms.len(),
-                            self.gemini_model
+                            self.antigravity_model
                         )));
                     }
                 } else {
                     self.log
-                        .push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH (`agy`, `antigravity`, or `gemini`)."));
+                        .push_back(LogEntry::err("Antigravity CLI not found in PATH (`agy`, `antigravity`, or legacy `gemini`)."));
                 }
             }
             cmd if cmd.starts_with("ASKHERMES ") || cmd.starts_with("ASK_HERMES ") => {

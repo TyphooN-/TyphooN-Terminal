@@ -13,7 +13,7 @@ the user issues the command, and dropped into a markdown document the model
 reads verbatim. What you see in the packet is what the model sees.
 
 Unlike earlier versions, the packet now **combines** with live web search
-performed by Claude / Antigravity/Gemini CLIs (or the hosted provider's search tool) —
+performed by Claude / Antigravity CLIs (or the hosted provider's search tool) —
 the system prompt explicitly instructs the model to cross-reference the packet
 with real-time news, prices, and sentiment when the question calls for it.
 
@@ -32,7 +32,7 @@ delivered to the model.
 |---|---|---|
 | `ASKAI SYM[,SYM] [question]` | HTTP `POST` via `BrokerCmd::AiChat` | Currently-selected AI provider (AI Assistant window) |
 | `ASKCLAUDE SYM[,SYM] [question]` | `claude --print` subprocess | Anthropic's `claude` CLI (must be on `$PATH`) |
-| `ASKANTIGRAVITY SYM[,SYM] [question]` | `agy`/`antigravity`/`gemini --prompt` subprocess | Google's Antigravity CLI preferred (`agy` binary first), Gemini CLI fallback (must be on `$PATH`) |
+| `ASKANTIGRAVITY SYM[,SYM] [question]` | `agy`/`antigravity`/`gemini --prompt` subprocess | Google's Antigravity CLI preferred (`agy` binary first), Gemini fallback (must be on `$PATH`) |
 
 Argument parsing contract: the first whitespace-separated token is the
 comma-separated symbol list; everything after the first whitespace is the
@@ -6019,7 +6019,7 @@ claude --print \
 - `--model` — wired to the model picker in the chat window (default `fable`,
   with `opus`/`sonnet`/`haiku` aliases still available).
 
-**Antigravity/Gemini CLI** (`ASKANTIGRAVITY`, legacy `ASKGEMINI` / Google AI chat window):
+**Antigravity CLI** (`ASKANTIGRAVITY`, legacy `ASKGEMINI` / Antigravity chat window):
 
 ```sh
 agy --model <auto|pro|flash|gemini-3.5-flash|gemini-3.1-pro-preview|gemini-3-pro-preview|gemini-2.5-pro> \
@@ -6085,7 +6085,7 @@ transcript so the model doesn't see duplicated meta-labels.
 
 ### Session continuity
 
-Each chat window (Claude Code, Antigravity/Gemini CLI, Codex CLI, AI Assistant) stores the packet
+Each chat window (Claude Code, Antigravity CLI, Codex CLI, AI Assistant) stores the packet
 in its own `*_packet: Option<String>` field. Every Send rebuilds the prompt
 from the stored packet + the transcript + the new message, so the model
 never "forgets" what TyphooN handed it — even if the CLI itself would
@@ -6303,7 +6303,7 @@ If a given source is empty, the corresponding sub-block is silently omitted
   first.`; the `BrokerCmd::AiChat` is never dispatched. The `local` provider
   has no key requirement.
 - **CLI binary missing (subprocess path)** — the log shows
-  `Claude Code CLI not found in PATH.` / `Antigravity/Gemini CLI not found in PATH.` /
+  `Claude Code CLI not found in PATH.` / `Antigravity CLI not found in PATH.` /
   `Codex CLI not found in PATH.` / `Grok Build CLI not found in PATH.`.
 - **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKANTIGRAVITY / ASKCODEX / ASKGROK is
   still running, a new trigger is a no-op. The first reply must land before
