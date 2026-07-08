@@ -167,9 +167,7 @@ impl TyphooNApp {
         } else {
             self.kraken_ws_ohlc_snapshot_sweep_consecutive_failures = 0;
             self.kraken_ws_ohlc_snapshot_sweep_backoff_until = None;
-            self.log.push_back(LogEntry::info(format!(
-                "Kraken WS OHLC snapshot sweep {tf}: completed {pair_count} pairs"
-            )));
+            tracing::debug!("Kraken WS OHLC snapshot sweep {tf}: completed {pair_count} pairs");
         }
     }
 }
