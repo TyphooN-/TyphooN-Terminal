@@ -17,7 +17,7 @@ impl TyphooNApp {
                 .filter(|s| !have_syms.contains(s.as_str()))
                 .cloned()
                 .collect();
-            if !missing.is_empty() && !self.watchlist_cache_tried {
+            if !self.heavy_sync_in_progress && !missing.is_empty() && !self.watchlist_cache_tried {
                 self.watchlist_cache_tried = true;
                 if let Some(ref cache) = self.cache {
                     let primary_tf = self
