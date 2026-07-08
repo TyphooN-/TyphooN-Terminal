@@ -3570,6 +3570,12 @@ pub struct TyphooNApp {
     /// Crosshair position in screen coordinates (updated each frame).
     pub(crate) crosshair: Option<egui::Pos2>,
 
+    /// Off-thread repaint wake pump liveness. Some Wayland/wgpu compositors can
+    /// park the event loop until pointer/input events even though the previous
+    /// frame requested another repaint; the wake pump calls `request_repaint()`
+    /// from outside the UI thread so startup sync/timer work is not input-gated.
+    pub(crate) ui_repaint_wake_alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+
     /// Counter to avoid calling ctx.request_repaint in a tight loop.
     pub(crate) frame_count: u64,
 

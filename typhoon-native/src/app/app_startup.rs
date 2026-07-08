@@ -11,6 +11,31 @@ pub(super) fn install_image_loaders(cc: &eframe::CreationContext<'_>) {
     egui_extras::install_image_loaders(&cc.egui_ctx);
 }
 
+pub(super) fn spawn_ui_repaint_wake_pump(
+    ctx: &egui::Context,
+) -> Arc<std::sync::atomic::AtomicBool> {
+    let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let alive_thread = alive.clone();
+    let ctx = ctx.clone();
+    let wake_ms = std::env::var("TYPHOON_UI_WAKE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(16);
+    if wake_ms == 0 {
+        return alive;
+    }
+    let _ = std::thread::Builder::new()
+        .name("typhoon-ui-repaint-wake".to_string())
+        .spawn(move || {
+            let interval = std::time::Duration::from_millis(wake_ms.max(1));
+            while alive_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(interval);
+                ctx.request_repaint();
+            }
+        });
+    alive
+}
+
 pub(super) fn init_kraken_iapi_limiter() {
     // Initialize the process-wide iapi limiter with persistence pointing at
     // the config dir. This must happen before any KrakenBroker iapi call;

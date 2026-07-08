@@ -30,6 +30,8 @@ fn report_slow_pre_broker_ticks(ticks: &[(&'static str, f32)]) {
 }
 impl eframe::App for TyphooNApp {
     fn on_exit(&mut self) {
+        self.ui_repaint_wake_alive
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.save_session();
         // Explicit WAL checkpoint on exit — keeps WAL file small for next startup.
         if let Some(ref cache) = self.cache {

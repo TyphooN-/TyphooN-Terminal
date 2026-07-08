@@ -144,6 +144,7 @@ impl TyphooNApp {
 
         app_startup::install_image_loaders(cc);
         app_startup::init_kraken_iapi_limiter();
+        let ui_repaint_wake_alive = app_startup::spawn_ui_repaint_wake_pump(&cc.egui_ctx);
 
         let (shared_cache, cache_rx) = app_startup::spawn_async_cache_open(&rt_handle);
 
@@ -2790,6 +2791,7 @@ impl TyphooNApp {
             toasts: Vec::new(),
             palette_context: PaletteContext::Global,
             crosshair: None,
+            ui_repaint_wake_alive,
             frame_count: 0,
             dragging_tab: None,
             tab_bar_last_active: 0,
