@@ -146,6 +146,7 @@ impl TyphooNApp {
     pub(super) fn render_right_panel_orders_section(&mut self, ui: &mut egui::Ui) {
         // ── Orders Section ────────────────────────────────────
         let alpaca_orders_available = self.alpaca_enabled;
+        let heavy = self.heavy_sync_in_progress;
         let kr_orders_available = self.kraken_enabled;
         let mut alpaca_order_groups: Vec<AccountOrders> = if self.show_alpaca_orders {
             if !self.alpaca_account_orders.is_empty() {

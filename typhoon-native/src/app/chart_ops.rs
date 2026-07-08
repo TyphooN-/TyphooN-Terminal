@@ -531,6 +531,9 @@ impl TyphooNApp {
         ctx: &egui::Context,
         now_instant: std::time::Instant,
     ) {
+        if self.heavy_sync_in_progress && self.deferred_chart_loads.len() > 8 {
+            return;
+        }
         // Keep every open chart tab warm, not just the active tab or currently
         // visible MTF cells. Users should be able to switch tabs without that
         // click being the first time bars/indicators are loaded.

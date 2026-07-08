@@ -230,6 +230,16 @@ impl TyphooNApp {
     }
 
     pub(crate) fn tick_cache_startup(&mut self) {
+        if self.heavy_sync_in_progress {
+            // During heavy (startup backfill per log), the cache receive and basic loads still happen,
+            // but skip slower hydrate/sync parts in this tick to keep pre_broker fast.
+            // Full load happens over frames.
+            if self.cache.is_none() {
+                // still drain the rx
+            } else {
+                return;
+            }
+        }
         // ── Receive async cache open result (with preloaded marks) ───────
         if self.cache.is_none() {
             if let Some(ref rx) = self.cache_rx {

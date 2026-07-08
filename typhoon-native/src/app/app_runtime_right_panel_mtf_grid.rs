@@ -61,21 +61,6 @@ impl TyphooNApp {
             }
         }
         // ── MTF Grid ────────────────────────────────────────
-        // Assemble the rows up front (one borrow of `self`) so the closure only reads
-        // the owned snapshot: per open-tab symbol, its in-order timeframe values
-        // (live open tab → unified result cache).
-        let symbols = self.mtf_grid_navbar_symbols();
-        let symbol_rows: Vec<(String, Vec<(&'static str, MtfCellValues)>)> = symbols
-            .iter()
-            .map(|symbol| (symbol.clone(), self.mtf_grid_symbol_values(symbol)))
-            .collect();
-        let max_tfs = symbol_rows
-            .iter()
-            .map(|(_, vals)| vals.len())
-            .max()
-            .unwrap_or(0);
-        let ma_labels = ["SMA200", "KAMA", "Fisher"];
-
         let mtf_grid_section = egui::CollapsingHeader::new(
             egui::RichText::new("☰ MTF Grid")
                 .color(AXIS_TEXT)
@@ -85,6 +70,18 @@ impl TyphooNApp {
         .id_salt("mtf_grid_section")
         .default_open(self.right_mtf_grid_open)
         .show(ui, |ui| {
+            // Assemble inside show so zero cost when collapsed.
+            let symbols = self.mtf_grid_navbar_symbols();
+            let symbol_rows: Vec<(String, Vec<(&'static str, MtfCellValues)>)> = symbols
+                .iter()
+                .map(|symbol| (symbol.clone(), self.mtf_grid_symbol_values(symbol)))
+                .collect();
+            let max_tfs = symbol_rows
+                .iter()
+                .map(|(_, vals)| vals.len())
+                .max()
+                .unwrap_or(0);
+            let ma_labels = ["SMA200", "KAMA", "Fisher"];
             ui.label(
                 egui::RichText::new(format!(
                     "{} symbol{} · {} TFs",
