@@ -34,7 +34,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 225 palette commands (+ research-surface commands/aliases)
+- [x] Console (`~`) with registered palette commands (~168 core + ~59 drawings + research-surface commands/aliases)
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
@@ -61,7 +61,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Risk calculator (risk.rs: lot sizing, R:R)
 - [x] Margin monitor (margin.rs: margin level, max safe lots, protect urgency)
 - [x] Backtest engine (5 strategies: SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev)
-- [x] Optimizer (SMA Cross grid search, top N results)
+- [x] Optimizer (Strategy parameter optimizer — general grid search)
 - [x] Walk-forward optimizer (70/30 in-sample/out-of-sample, 5 strategies)
 - [x] Seasonals (monthly return patterns from bar data)
 - [x] Volume Profile (POC, Value Area High/Low)
@@ -100,7 +100,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Chart right margin (5 bars, MT5 chart shift style)
 - [x] Unusual Volume Scanner
 - [x] Multi-signal Anomaly Scanner (VaR + EV + ATR + SEC with tradability indicators)
-- [x] MTF Grid tab visibility checkboxes
+- [x] MTF Grid Visibility
 - [x] Storage Manager pagination
 - [x] Cross-source data hierarchy (current: Kraken + Alpaca trusted tier with Yahoo corroborator — ADR-111/113)
 
@@ -120,7 +120,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Supply/demand zones (auto-detected from impulse candles, GPU + CPU paths)
 - [x] Harmonic patterns (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives)
 - [x] Position visibility toggles per broker (Alpaca/Kraken)
-- [x] POSITION_CHARTS command (open W1 tabs for all open positions)
+- [x] POSITION_CHARTS command (historical note; not present in current COMMANDS registry or palette — use positions panel + MTF/watchlist for equivalent workflows)
 - [x] Backfill candle coloring (magenta for non-primary data sources)
 - [x] Session save on window close (on_exit)
 
@@ -152,7 +152,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 ### Phase 14: LAN Sync v2 *(removed 2026-06 — see Deprecated & Removed)*
 - [x] TLS-encrypted (wss://) WebSocket sync, ephemeral self-signed certs
 - [x] PBKDF2 passphrase auth, constant-time HMAC-SHA256
-- [x] 15 remote commands (SEC_SCRAPE, FETCH_BARS, INGEST_RESEARCH, etc.)
+- [x] 15 remote commands (e.g. SEC_SCRAPE, FETCH_BARS, INGEST_RESEARCH — historical; current palette equivalents include INGEST_RESEARCH / BARDATA / AICACHE etc.)
 - [x] Bandwidth-tuned sync, full data + KV cache
 
 ### Phase 15: Web LAN Client *(removed 2026-06 — see Deprecated & Removed)*
@@ -171,7 +171,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Persistent AI sessions: Claude Code, Antigravity CLI, Codex CLI, generic AI Chat (ADR-082)
 - [x] Local AI response cache, dedup identical hosted-AI prompts (ADR-083)
 - [x] Slash commands: RESUMECLAUDE / RESUMEANTIGRAVITY / RESUMECODEX / RESUMEAI
-- [x] Ask Codex reasoning effort control; Claude effort passthrough; ASKANTIGRAVITY primary command (`agy` → `antigravity` → `gemini`) with ASKGEMINI as a legacy alias; Grok Build auto-model-only CLI support
+- [x] Ask Codex reasoning effort control; Claude effort passthrough; ASKANTIGRAVITY primary command (`agy` → `antigravity` → `gemini`) with ASKGEMINI as a legacy alias; Grok Build auto-model-only CLI support; ASKHERMES support; ASKAI/ASKGROK/ASKCODEX etc.
 
 ### Phase 18: Research and indicator surfaces
 - [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across semantic feature families

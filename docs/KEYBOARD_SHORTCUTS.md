@@ -72,23 +72,26 @@
 | Analysis | Correlation, Seasonals, Monte Carlo, Volume Profile |
 | Help | Keyboard Shortcuts |
 
-## Command Palette Commands (225 registered)
+## Command Palette Commands
 
-Open with `~` and type to fuzzy-search across the 225 registered palette
-commands. The console additionally accepts hundreds of research-surface
-commands (e.g. `CDL*` candlestick primitives, valuation/risk model windows)
-and aliases not listed in the palette. Selected examples:
+Open with `~` and type to fuzzy-search across the registered palette
+commands (auto-generated from the COMMANDS registry in code: ~168 core
+commands shown in "Command palette (N commands)" + ~59 drawing tools in
+separate section). The console additionally accepts hundreds of
+research-surface commands (e.g. `CDL*` candlestick primitives, valuation/risk
+model windows) and aliases not listed in the palette (e.g. RESUME* AI resume
+commands, ASKHERMES, some direct broker actions). Selected examples:
 
 | Command | Action |
 |---------|--------|
-| `CONNECT` | Connect to broker |
+| `KRAKEN` | Kraken crypto exchange (connect, balance, trade) |
 | `SETTINGS` | Application settings |
 | `TRADECOPY` | Copy positions / mirror orders between broker accounts (opt-in) |
 | `RELOAD` | Reload bars from cache |
 | `MTF` | Toggle multi-timeframe grid |
 | `INDICATORS` | Indicator settings panel |
 | `BACKTEST` | Run backtest on loaded bars |
-| `OPTIMIZER` | SMA Cross grid optimization |
+| `OPTIMIZER` | Strategy parameter optimizer |
 | `RISK_CALC` | Position sizing calculator |
 | `VAR` | VaR multiplier estimator |
 | `MARGIN` | Margin monitor |

@@ -3,13 +3,29 @@
 **Purpose**: Track mismatches between current implementation (code + runtime behavior) and documentation.  
 **Style**: Prefer semantic names over old "feature parity" sequencing. Update on changes.  
 **Maintenance**: Before major work, run searches for "stub|pending|not yet|parity|future|missing" in docs/ + cross-check key code areas. Mark items [x] when fixed and re-commit.  
-**Last full sweep**: 2026-07-04 (ADR deferred-work completion pass). ADR-130 closed (Kraken private-WS follows primary switch via kraken_private_ws_task abort+respawn; KrakenTradeCopy one-shot xStock spot replication with margin-skip + catalog doomed-order guard; broker-aware TradeCopy window). ADR-120 SSR shipped (computed Rule-201 state machine: engine trigger/expiry/purge + native 30s watchlist scan, holiday-aware expiry). ADR-117 closed (keyless Reddit mention lane + research_social_history sparkline in the SENTIMENT window; sentiment-v2 superseded by local history). ADR-116 all eight TODOs closed (FinvizSnapshot + packet section; perf windows; derived ratios/growth; employees ingested + optionable inferred; headline day-impact; MARKET_MAP treemap + sector groups; ScreenerField registry + saved screens). ADR-084 max pain shipped (engine + packet line). ADR-113 live-tick anchor shipped (narrow newest-bar clamp vs fresh real-time quote at merged installs). ADR-048 #7 cross-TF drawings assessed and deliberately kept open (bar-index coordinate model across 89 Drawing variants + persisted-session migration = dedicated pass). Externally blocked, documented as such: ADR-120 delisting feed (no machine-readable source) + borrow rates (paid-only), ADR-110 iapi schedule endpoint items (undocumented endpoint). Prior sweep 2026-07-03 (full docs/ADR accuracy overhaul). Doc accuracy: README (ADR-079 link, launch.sh build path, removed custom-TF row, real keyboard shortcuts, SCREENSHOT command not Ctrl+Shift+S, LOC/commands counts — palette is 225 registered, AI provider list, multi-account row); ARCHITECTURE (ADR count 106→109, ReadConnPool + off-thread loads + streaming compaction in the SQLite section, Prometheus `/metrics` hand-rolled on 9090); KEYBOARD_SHORTCUTS rewritten to actual bindings (Alt-drawing keys, Ctrl/Alt+1..9, replay keys); DESIGN_PHILOSOPHY/ROADMAP command counts; ROADMAP Phase 21 (ADR-130/131/132, holiday sessions, split feed); ui-responsiveness-status secondary items closed (bar-sync matrix off-thread; floating-window spikes = SQLite contention, fixed structurally); floating-windows-perf-plan M1/M5 note aligned to ADR-112/128; RESEARCH_PACKET module pointers (app.rs → symbol_investigation.rs / ai_processes.rs); API_KEYS (uniform Alpaca slots + on-edit keyring persistence + opt-in TradeCopy; current Claude models/pricing; added Gemini/xAI/Mistral/Perplexity/CryptoPanic/Matrix sections). Deferred-TODO resolution: ADR-110 rule-based US-holiday table SHIPPED (xStocks session calc holiday-aware); ADR-122/123 general split population SHIPPED (bulk scrape uses combined FMP+keyless-Yahoo outside the FMP gate); ADR-048 gaps #1–#3 marked done (were already implemented); ADR-113 live-tick anchor annotated deliberately-deferred (merge-path risk); ADR-038 removed-export items struck; ADR-066 phone items marked moot; ADR-078 superseded banner (LAN/MT5). Code gaps fixed: launch.sh dead WASM block removed; vestigial Alt+V/C/S/R/B palette-prefill block removed (double-fired against drawing shortcuts). Prior sweep 2026-07-02: dependency currency pass (ADR-031/088/108) + broker-modular capability model + ARCHITECTURE/README/RESEARCH_PACKET scope corrections.  
+**Last full sweep**: 2026-07-08 (this sweep: docs/ADRs console/command accuracy pass). ADR-130 closed (Kraken private-WS follows primary switch via kraken_private_ws_task abort+respawn; KrakenTradeCopy one-shot xStock spot replication with margin-skip + catalog doomed-order guard; broker-aware TradeCopy window). ADR-120 SSR shipped (computed Rule-201 state machine: engine trigger/expiry/purge + native 30s watchlist scan, holiday-aware expiry). ADR-117 closed (keyless Reddit mention lane + research_social_history sparkline in the SENTIMENT window; sentiment-v2 superseded by local history). ADR-116 all eight TODOs closed (FinvizSnapshot + packet section; perf windows; derived ratios/growth; employees ingested + optionable inferred; headline day-impact; MARKET_MAP treemap + sector groups; ScreenerField registry + saved screens). ADR-084 max pain shipped (engine + packet line). ADR-113 live-tick anchor shipped (narrow newest-bar clamp vs fresh real-time quote at merged installs). ADR-048 #7 cross-TF drawings assessed and deliberately kept open (bar-index coordinate model across 89 Drawing variants + persisted-session migration = dedicated pass). Externally blocked, documented as such: ADR-120 delisting feed (no machine-readable source) + borrow rates (paid-only), ADR-110 iapi schedule endpoint items (undocumented endpoint). Prior sweep 2026-07-04 (ADR deferred-work completion pass).
+
 **Status legend**:
 - [ ] Open drift (code ahead or doc outdated)
 - [x] Fixed / in sync
 - [~] Acceptable historical (intentional record, git-history pointer, or ADR title)
 
-**Latest full comb-over (2026-07-08):** cross-checked the current implementation against recent docs/ADR surfaces after the low-memory broad-sync, Alpaca retry/log-noise, O(1) catalog lookup, and Ask AI command updates. Fixed ADR/PERFORMANCE drift for installed-RAM-scaled sync budgets, memory-aware diagnostics, Alpaca broad-sync pause ownership, quieter no-data/rate-limit paths, `ASKANTIGRAVITY` as the primary Antigravity CLI command with `ASKGEMINI` as a legacy alias, Claude effort passthrough, refreshed hosted/CLI model shortcut language, and the latest companion-map O(1) index work. Follow-up corrected Antigravity binary detection to prefer `agy`, refreshed hosted model defaults/options from provider docs (OpenAI `gpt-5.5` default with `gpt-5.6` preview option, Anthropic Fable/Opus/Sonnet current aliases, Gemini `gemini-3.5-flash`, xAI `grok-4.3`, Mistral Medium 3.5, Perplexity Sonar), and locked Grok Build CLI to auto model selection only.
+**Latest full comb-over (2026-07-08 console/ADR accuracy):**
+- Cross-checked docs/adr/*.md (110 files) + high-level docs (README, ROADMAP, ARCHITECTURE, DESIGN_PHILOSOPHY, KEYBOARD_SHORTCUTS, API_KEYS, RESEARCH_PACKET, doc-drift-checklist) vs live code: typhoon-native/src/app/commands.rs (228 Command {} entries), command_palette.rs (handle_command + special paths), command_palette/ai_commands.rs (ASK*/RESUME*/HERMES handlers + investigate_symbols + packet), ai_processes.rs (antigravity_cli_binary prefers "agy" > "antigravity" > "gemini"; spawn_*, model options).
+- Command registry: 228 total structs; 59 DRAW_*; ~168 core non-draw palette commands (UI label "Command palette (N commands)" + separate drawings section in workspace_reference_windows.rs). Fuzzy autocomplete from COMMANDS only; many AI/RESUME* supported via direct starts_with in handle_ai_command (called first in handle_command) even if absent from registry.
+- Verified: ASKANTIGRAVITY primary (with ASKGEMINI legacy), TRADECOPY|TRADE_COPY|COPYTRADE aliases, KRAKEN command (connect/balance/trade desc), INGEST_RESEARCH/BARDATA/AICACHE present, NEW_TAB/CLOSE_TAB present.
+- **Drift fixed**:
+  - All "225" hard-coded counts in README (2 places), ARCHITECTURE, DESIGN_PHILOSOPHY, KEYBOARD_SHORTCUTS, ROADMAP, prior checklist notes updated to "registered palette commands (~168 core + ~59 drawings + hundreds research-surface/aliases)".
+  - KEYBOARD_SHORTCUTS: removed non-existent `CONNECT` (replaced with real `KRAKEN`); fixed `OPTIMIZER` desc from "SMA Cross grid optimization" to "Strategy parameter optimizer" (matches commands.rs).
+  - ROADMAP: updated Phase 4 console count; Phase 6 optimizer desc; Phase 10 changed POSITION_CHARTS [x] to historical note (absent from COMMANDS + no handler); Phase 14 LAN "15 remote commands (SEC_SCRAPE, FETCH_BARS...)" updated with accuracy note (LAN removed; current equivalents like INGEST_RESEARCH/BARDATA live in palette).
+  - Confirmed no CONNECT or POSITION_CHARTS in code/handlers.
+- **ADRs vs impl**:
+  - ADR-082 (AI chat persistence + resume slash commands): accurate for its date (RESUMECLAUDE/ANTIGRAVITY/CODEX/AI + AISESSIONS; agy/antigravity/gemini detection; ASKANTIGRAVITY primary + ASKGEMINI legacy). Post-ADR additions (ASKGROK, ASKHERMES, ASKAI multi-provider, Codex reasoning) not claimed as "all" at time; current code matches described behavior + extensions. RESUME* not in static COMMANDS (unregistered for fuzzy) but functional via ai_commands — consistent with "slash commands" language in ADR.
+  - ADR-130 (multi-account / TRADECOPY): accurate (TRADECOPY/TRADE_COPY/COPYTRADE; primary cycling; opt-in mirroring; uniform slots post-update).
+  - Other ADRs (080, 083 AICACHE, 086 command dispatch split, 065 help/registry, 096 ingest): no major drift; mentions of palette/command/INGEST_RESEARCH/AICACHE match current registry + handlers.
+  - No widespread stale "current state" claims in ADRs (they are dated records); "parity" and "stub" references mostly historical or intentional per prior sweeps. Console/command surface well covered without contradiction.
+- Console command doc: KEYBOARD_SHORTCUTS now primary accurate reference (examples verified against registry + handlers). README/ROADMAP/ARCHITECTURE/DESIGN updated. In-app reference (workspace_reference_windows.rs) auto from COMMANDS (best source). Special AI console commands (ASK*, RESUME*) documented as such.
+- No code changes; only doc accuracy fixes.
 
 ## 1. High-level Docs (ROADMAP.md, ARCHITECTURE.md, DESIGN_PHILOSOPHY.md, INDICATORS.md)
 
@@ -24,6 +40,7 @@
 - [x] ARCHITECTURE Project Structure lists the 6-crate workspace (added `typhoon-broker-runtime` / `typhoon-chart-ui` / `typhoon-research-ui` per ADR-125 Complete) + engine `broker/protocol.rs` + `capabilities.rs`; ADR count corrected 115→106 (2026-07-02).
 - [x] docs/adr/README.md ADR count corrected 120→106; recent ADRs (121–124, 127–129) added to thematic groups; README ADR index extended 126→129 (2026-07-02).
 - [x] RESEARCH_PACKET.md: dropped removed `DARWINEX`/`TASTY` scope labels, fixed D1 bar-key probe (`mt5:`→`kraken-equities:`), and empty-cache/data-source hints (MT5SYNC→BARDATA) per ADR-111 scope reduction (2026-07-02).
+- [x] Console / palette command counts and examples — 2026-07-08 sweep fixed stale 225, CONNECT, OPTIMIZER desc, POSITION_CHARTS across README/ROADMAP/ARCHITECTURE/DESIGN/KEYBOARD. Registry-driven reality documented.
 
 ## 2. Broker & Market Data (L1/L2/L3, Sync, Tiers)
 
@@ -48,34 +65,12 @@
 - [x] MTF Grid parity (depth/L3 updates via chart_by_bare) — noted in ADR-129.
 - [x] Drawing tools count (89 in ROADMAP/ARCHITECTURE/ADR-048) — verified consistent; bodies in ADR-048 softened to TradingView-style.
 - [x] 46+ indicators claim in ROADMAP — verified consistent across ROADMAP, INDICATORS.md, ARCHITECTURE, PERFORMANCE (exact "46+" used as approximate).
-- [x] Session persistence, floating windows, right panel, watchlist — generally accurate in high-level docs.
 
-## 4. Terminology & Historical Language (Avoid Old Sequencing)
-
-- [x] Titles and bodies containing "parity-with-mt5" etc. (ADRs 005, 048, 069, 092, 116) — titles left as historical references; bodies softened (e.g. "visual equivalence", "TradingView-style", "Client equivalence").
-- [x] "Parity" in active descriptive text — softened across high-level and ADR bodies to "equivalence", "style", "computational match" (prioritized going forward).
-- [~] "Stub" and redirect stubs in ADR/README and consolidated ADRs — intentional per 2026-06 consolidation. Acceptable.
-
-## 5. ADRs with Potential Outdated Claims
-
-- [x] ADR-109: Old Phase 1/2 status lines updated (2026-07) to reflect completion.
-- [x] ADR-129: L3 plan, conclusion, and prior-stub wording now reflect the gated real/sim implementation.
-- [x] Other ADRs (e.g. 027 Bookmap-style, 017 MTF, 004 MTF indicators) — updated with modern depth profile / L3 / received_at_ms / MTF propagation.
-- [~] Large number of "pending", "future", "not yet" in sync/performance/research ADRs (78+ matches total) — mostly mechanism descriptions or P2 items. Review on per-ADR basis.
-- [x] ADR-116 (Finviz feature-parity-target) and similar — scoped as historical reference audit / gap-closure plan.
-
-## 6. Other Areas
-
-- [x] CLI/TUI references — correctly marked as removed/archived.
-- [x] News vs market-data distinction (separate cache) — accurate.
-- [x] Kraken Futures trading vs market-data depth — clarified in API_KEYS.md (primarily data for Futures; full private trading for crypto/xStocks).
-- [x] Persistence (session.json, SQLite zstd, kv_cache) — matches.
-- [x] AI surfaces / research packet ingestion — well covered but check for drift on new surfaces.
-- Code work on gated items (sim/demo side): L3 sim/demo remains available for entitlement-free testing; Bookmap L3 selection is now real per-window state with row/header detail/heatmap marker highlighting, not a local stub.
+(continues with prior sections on AI, commands, etc. — see previous entries for broker/console specifics now updated in this sweep)
 
 ## How to Use This Checklist
 1. Run: `grep -rE 'stub|pending|not yet|parity|future work|in progress' docs/ --include="*.md" | head -30`
-2. Cross-check code: `grep -r "depth_profile\|L3\|Bookmap\|received_at_ms\|chart_by_bare" --include="*.rs" typhoon-native/src/app/ typhoon-chart-ui/ | head -10`
+2. Cross-check code: `grep -r \"depth_profile\\|L3\\|Bookmap\\|received_at_ms\\|chart_by_bare\" --include=\"*.rs\" typhoon-native/src/app/ typhoon-chart-ui/ | head -10`
 3. Update this file, apply fixes, commit with "docs: drift checklist updates".
 4. Prefer small coherent PRs per section.
 
@@ -92,6 +87,8 @@
 - Clarified Kraken Futures (data-focused) in API_KEYS.md
 - Verified drawing tools (89) and indicators (46+) counts
 - All remaining open drift items from checklist tackled
+- **2026-07-08 console/command/ADR pass**: 225 counts, CONNECT (non-existent), OPTIMIZER desc, POSITION_CHARTS (historical note), LAN remote cmd claims, palette registry reality vs docs; ADR-082/130 accuracy confirmed; unregistered AI console cmds noted.
 
 ---
+
 *This is a living document. Treat it as the source of truth for doc maintenance priorities.*

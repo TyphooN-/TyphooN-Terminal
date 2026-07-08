@@ -16,7 +16,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with 225 palette commands      ││
+│  │ - Console (~) with registered palette commands (~168 core + ~59 drawings) ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
 │  │ - Risk / VaR / margin + research analytics  ││
@@ -159,7 +159,7 @@ TyphooN-Terminal/
 ## Performance Characteristics
 
 | Metric | Native GPU |
-|--------|-----------|
+|--------|------------|
 | Startup to interactive | < 2s |
 | 10K bar chart render | < 5ms |
 | Indicator computation (46+ indicators) | < 15ms |

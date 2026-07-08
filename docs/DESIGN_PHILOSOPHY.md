@@ -27,7 +27,7 @@ All ported from MQL5 with computational equivalence to the originals.
 
 ### 5. Quake Console Interface
 
-The `~` key opens a Quake-style dropdown command palette with fuzzy search across 225 registered commands (the console additionally accepts hundreds of research-surface commands and aliases). Every panel, feature, and chart type is accessible via typed command.
+The `~` key opens a Quake-style dropdown command palette with fuzzy search across registered commands (auto-generated from the COMMANDS registry in code: ~168 core commands shown in "Command palette (N commands)" + ~59 drawing tools in separate section). The console additionally accepts hundreds of research-surface commands and aliases not listed in the palette (e.g. RESUME* AI resume commands, ASKHERMES, some direct broker actions). Every panel, feature, and chart type is accessible via typed command.
 
 ### 6. Immediate Mode Rendering
 

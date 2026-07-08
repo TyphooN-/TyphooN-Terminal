@@ -13,7 +13,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Startup Time** | < 2 seconds |
 | **Lines of Code** | ~165K GUI (native + chart-ui + research-ui) + ~140K engine/broker-runtime + ~11K transpiler (pure Rust) |
 | **Indicators** | 46+ chart indicators plus ~375 TA-Lib/Godel research surfaces |
-| **Commands** | 225 palette commands (~) plus hundreds of research-surface commands and aliases |
+| **Commands** | ~170 core palette commands + ~59 drawing commands (auto from COMMANDS registry) plus hundreds of research-surface commands and aliases |
 | **Drawing Tools** | 89 drawing and annotation types |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
@@ -107,7 +107,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Multi-Signal Anomaly Scanner** | 4-dimensional scan: VaR + EV + ATR + SEC with tradability indicators (~ →ANOMALY) |
 | **MTF Grid Visibility** | Per-tab checkboxes to show/hide individual timeframes in multi-timeframe grid |
 | **Storage Pagination** | Paginated storage manager for large cache databases |
-| **Command Console** | Quake-console palette with fuzzy search over 225 commands (plus research-surface commands/aliases) |
+| **Command Console** | Quake-console palette with fuzzy search over registered commands (plus research-surface commands/aliases) |
 
 ---
 
