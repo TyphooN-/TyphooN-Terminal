@@ -70,41 +70,49 @@ impl TyphooNApp {
                                 "ai_model_claude",
                                 &[
                                     ("claude-fable-5", "fable 5 (latest alias family)"),
-                                    ("claude-opus-4-5", "opus 4.5 (max effort)"),
-                                    ("claude-sonnet-4-5", "sonnet 4.5 (balanced)"),
+                                    ("claude-opus-4-8", "opus 4.8 (complex agents/coding)"),
+                                    ("claude-sonnet-5", "sonnet 5 (balanced)"),
                                     ("claude-haiku-4-5", "haiku 4.5 (fast)"),
                                 ],
                             ),
                             1 => (
                                 "ai_model_openai",
                                 &[
-                                    ("gpt-5.1", "gpt-5.1"),
-                                    ("gpt-5", "gpt-5"),
-                                    ("gpt-5-mini", "gpt-5-mini"),
+                                    ("gpt-5.6", "gpt-5.6 (trusted preview)"),
+                                    ("gpt-5.5", "gpt-5.5 (flagship)"),
+                                    ("gpt-5.4", "gpt-5.4"),
+                                    ("gpt-5.4-mini", "gpt-5.4-mini"),
+                                    ("gpt-5.4-nano", "gpt-5.4-nano"),
                                     ("gpt-4o", "gpt-4o"),
-                                    ("gpt-4o-mini", "gpt-4o-mini"),
                                 ],
                             ),
                             2 => ("ai_model_gemini", Self::gemini_cli_model_options()),
                             3 => (
                                 "ai_model_grok",
                                 &[
-                                    ("grok-4.1", "grok-4.1"),
-                                    ("grok-4", "grok-4"),
-                                    ("grok-3", "grok-3"),
-                                    ("grok-3-mini", "grok-3-mini"),
+                                    ("grok-4.3", "grok-4.3"),
+                                    ("grok-build-0.1", "grok-build-0.1 (code)"),
+                                    ("grok-latest", "grok-latest"),
+                                    ("grok-4.20", "grok-4.20"),
                                 ],
                             ),
                             4 => (
                                 "ai_model_mistral",
                                 &[
-                                    ("mistral-large-latest", "mistral-large"),
-                                    ("mistral-small-latest", "mistral-small"),
+                                    ("mistral-medium-3-5-26-04", "mistral medium 3.5"),
+                                    ("mistral-small-4-0-26-03", "mistral small 4"),
+                                    ("devstral-2512", "devstral 2"),
+                                    ("magistral-medium-2509", "magistral medium"),
                                 ],
                             ),
                             5 => (
                                 "ai_model_perplexity",
-                                &[("sonar-pro", "sonar-pro"), ("sonar", "sonar")],
+                                &[
+                                    ("sonar", "sonar"),
+                                    ("sonar-pro", "sonar-pro"),
+                                    ("sonar-reasoning-pro", "sonar-reasoning-pro"),
+                                    ("sonar-deep-research", "sonar-deep-research"),
+                                ],
                             ),
                             _ => (
                                 "ai_model_local",
@@ -1058,11 +1066,8 @@ impl TyphooNApp {
                 self.grok_cli_history.push((false, response));
                 self.grok_cli_rx = None;
                 let sid = Self::ensure_session_id(&mut self.grok_cli_session_id);
-                let model = if self.grok_model.trim().is_empty() {
-                    "auto".to_string()
-                } else {
-                    self.grok_model.clone()
-                };
+                self.grok_model = "auto".to_string();
+                let model = "auto".to_string();
                 let history = self.grok_cli_history.clone();
                 self.persist_ai_turn("grok", &sid, None, &history, &model);
             }
@@ -1087,13 +1092,12 @@ impl TyphooNApp {
                         );
                         ui.separator();
                         let prev_model = self.grok_model.clone();
+                        if self.grok_model != "auto" {
+                            self.grok_model = "auto".to_string();
+                        }
                         ui.label("Model:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.grok_model)
-                                .desired_width(140.0)
-                                .hint_text("auto"),
-                        )
-                        .on_hover_text("Empty/auto lets Grok Build pick the model; otherwise TyphooN passes --model through to `grok`.");
+                        ui.label(egui::RichText::new("auto").small().color(AXIS_TEXT))
+                            .on_hover_text("Grok Build currently exposes only auto model selection; TyphooN never passes --model to `grok`.");
                         let prev_effort = self.grok_effort.clone();
                         ui.label("Effort:");
                         egui::ComboBox::from_id_salt("grok_effort_picker")
@@ -1239,7 +1243,7 @@ impl TyphooNApp {
                                          • Effort: {}\n\
                                          • Research packet loaded: {has_pkt}\n\
                                          • Messages this session: {count}",
-                                        if self.grok_model.trim().is_empty() || self.grok_model.trim() == "auto" { "(auto)" } else { self.grok_model.as_str() },
+                                        "(auto)",
                                         Self::grok_effort_label(&self.grok_effort),
                                     ),
                                 ));
@@ -1252,6 +1256,7 @@ impl TyphooNApp {
                                 &msg,
                                 "",
                             );
+                            self.grok_model = "auto".to_string();
                             let model = self.grok_model.clone();
                             let effort = self.grok_effort.clone();
                             let (tx, rx) = std::sync::mpsc::channel();
@@ -1422,9 +1427,7 @@ impl TyphooNApp {
                                                         "grok" => {
                                                             self.grok_cli_history = rec.turns.clone();
                                                             self.grok_cli_session_id = rec.session_id.clone();
-                                                            if !rec.model.trim().is_empty() {
-                                                                self.grok_model = rec.model.clone();
-                                                            }
+                                                            self.grok_model = "auto".to_string();
                                                             self.show_grok_cli = true;
                                                         }
                                                         "ai_chat" => {

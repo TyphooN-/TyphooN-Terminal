@@ -12,14 +12,10 @@ impl TyphooNApp {
                     self.show_gemini_cli = true;
                     self.log.push_back(LogEntry::info(format!(
                         "{} CLI detected — opening Google AI chat",
-                        if tool == "antigravity" {
-                            "Antigravity"
-                        } else {
-                            "Gemini"
-                        }
+                        Self::google_ai_cli_display_name(tool)
                     )));
                 } else {
-                    self.log.push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH. Install Antigravity CLI (preferred) or Gemini CLI."));
+                    self.log.push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH. Install Antigravity CLI (`agy` preferred, `antigravity` accepted) or Gemini CLI."));
                 }
             }
             "CLAUDE" | "CLAUDE_CODE" | "CLAUDE-CODE" | "ASKCLAUDE" | "ASK_CLAUDE" => {
@@ -443,11 +439,7 @@ impl TyphooNApp {
                         Self::spawn_gemini_prompt(model, full_prompt, tx);
                         self.log.push_back(LogEntry::info(format!(
                             "{} CLI investigation dispatched: {} ({} symbols, {})",
-                            if tool == "antigravity" {
-                                "Antigravity"
-                            } else {
-                                "Gemini"
-                            },
+                            Self::google_ai_cli_display_name(tool),
                             syms.join(", "),
                             syms.len(),
                             self.gemini_model
@@ -455,7 +447,7 @@ impl TyphooNApp {
                     }
                 } else {
                     self.log
-                        .push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH."));
+                        .push_back(LogEntry::err("Antigravity/Gemini CLI not found in PATH (`agy`, `antigravity`, or `gemini`)."));
                 }
             }
             cmd if cmd.starts_with("ASKHERMES ") || cmd.starts_with("ASK_HERMES ") => {
@@ -559,6 +551,7 @@ impl TyphooNApp {
                             ),
                         ));
                         if self.grok_cli_rx.is_none() {
+                            self.grok_model = "auto".to_string();
                             let model = self.grok_model.clone();
                             let effort = self.grok_effort.clone();
                             let full_prompt = Self::build_claude_prompt(
@@ -574,7 +567,7 @@ impl TyphooNApp {
                                 "Grok Build investigation dispatched: {} ({} symbols, model {}, effort {})",
                                 syms.join(", "),
                                 syms.len(),
-                                if self.grok_model.trim().is_empty() { "auto" } else { self.grok_model.as_str() },
+                                "auto",
                                 Self::grok_effort_label(&self.grok_effort)
                             )));
                         }

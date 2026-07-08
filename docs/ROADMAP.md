@@ -171,7 +171,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Persistent AI sessions: Claude Code, Antigravity/Gemini CLI, Codex CLI, generic AI Chat (ADR-082)
 - [x] Local AI response cache, dedup identical hosted-AI prompts (ADR-083)
 - [x] Slash commands: RESUMECLAUDE / RESUMEGEMINI / RESUMECODEX / RESUMEAI
-- [x] Ask Codex reasoning effort control; Claude effort passthrough; ASKANTIGRAVITY primary command with ASKGEMINI as a legacy alias
+- [x] Ask Codex reasoning effort control; Claude effort passthrough; ASKANTIGRAVITY primary command (`agy` → `antigravity` → `gemini`) with ASKGEMINI as a legacy alias; Grok Build auto-model-only CLI support
 
 ### Phase 18: Research and indicator surfaces
 - [x] ~375 TA-Lib primitives (indicators + candlestick patterns) across semantic feature families

@@ -50,13 +50,13 @@ When the question touches recent news, sentiment, or prices, combine the researc
                 };
                 let cache_model = model.clone().unwrap_or_else(|| match provider.as_str() {
                     "claude" => "claude-fable-5".to_string(),
-                    "openai" => "gpt-5.1".into(),
+                    "openai" => "gpt-5.5".into(),
                     "gemini" => typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL.into(),
-                    "grok" => "grok-4.1".into(),
-                    "mistral" => "mistral-large-latest".into(),
-                    "perplexity" => "sonar-pro".into(),
+                    "grok" => "grok-4.3".into(),
+                    "mistral" => "mistral-medium-3-5-26-04".into(),
+                    "perplexity" => "sonar".into(),
                     "local" => "llama3.2".into(),
-                    _ => "unknown".into(),
+                    _ => "default".into(),
                 });
                 let prompt_hash = arc_cache::hash_ai_prompt(
                     cache_provider_tag,
@@ -143,7 +143,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                     let (url, default_model, auth_header) = match provider.as_str() {
                         "openai" => (
                             "https://api.openai.com/v1/chat/completions",
-                            "gpt-5.1",
+                            "gpt-5.5",
                             format!("Bearer {}", api_key),
                         ),
                         "gemini" => (
@@ -153,17 +153,17 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         ),
                         "grok" => (
                             "https://api.x.ai/v1/chat/completions",
-                            "grok-4.1",
+                            "grok-4.3",
                             format!("Bearer {}", api_key),
                         ),
                         "mistral" => (
                             "https://api.mistral.ai/v1/chat/completions",
-                            "mistral-large-latest",
+                            "mistral-medium-3-5-26-04",
                             format!("Bearer {}", api_key),
                         ),
                         "perplexity" => (
                             "https://api.perplexity.ai/chat/completions",
-                            "sonar-pro",
+                            "sonar",
                             format!("Bearer {}", api_key),
                         ),
                         "local" => {
@@ -185,7 +185,7 @@ When the question touches recent news, sentiment, or prices, combine the researc
                         }
                         _ => (
                             "https://api.openai.com/v1/chat/completions",
-                            "gpt-5.1",
+                            "gpt-5.5",
                             format!("Bearer {}", api_key),
                         ),
                     };

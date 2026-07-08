@@ -9,7 +9,7 @@
 - [x] Fixed / in sync
 - [~] Acceptable historical (intentional record, git-history pointer, or ADR title)
 
-**Latest full comb-over (2026-07-08):** cross-checked the current implementation against recent docs/ADR surfaces after the low-memory broad-sync, Alpaca retry/log-noise, O(1) catalog lookup, and Ask AI command updates. Fixed ADR/PERFORMANCE drift for installed-RAM-scaled sync budgets, memory-aware diagnostics, Alpaca broad-sync pause ownership, quieter no-data/rate-limit paths, `ASKANTIGRAVITY` as the primary Google AI CLI command with `ASKGEMINI` as a legacy alias, Claude effort passthrough, refreshed hosted/CLI model shortcut language, and the latest companion-map O(1) index work.
+**Latest full comb-over (2026-07-08):** cross-checked the current implementation against recent docs/ADR surfaces after the low-memory broad-sync, Alpaca retry/log-noise, O(1) catalog lookup, and Ask AI command updates. Fixed ADR/PERFORMANCE drift for installed-RAM-scaled sync budgets, memory-aware diagnostics, Alpaca broad-sync pause ownership, quieter no-data/rate-limit paths, `ASKANTIGRAVITY` as the primary Google AI CLI command with `ASKGEMINI` as a legacy alias, Claude effort passthrough, refreshed hosted/CLI model shortcut language, and the latest companion-map O(1) index work. Follow-up corrected Antigravity binary detection to prefer `agy`, refreshed hosted model defaults/options from provider docs (OpenAI `gpt-5.5` default with `gpt-5.6` preview option, Anthropic Fable/Opus/Sonnet current aliases, Gemini `gemini-3.5-flash`, xAI `grok-4.3`, Mistral Medium 3.5, Perplexity Sonar), and locked Grok Build CLI to auto model selection only.
 
 ## 1. High-level Docs (ROADMAP.md, ARCHITECTURE.md, DESIGN_PHILOSOPHY.md, INDICATORS.md)
 

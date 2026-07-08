@@ -32,7 +32,7 @@ delivered to the model.
 |---|---|---|
 | `ASKAI SYM[,SYM] [question]` | HTTP `POST` via `BrokerCmd::AiChat` | Currently-selected AI provider (AI Assistant window) |
 | `ASKCLAUDE SYM[,SYM] [question]` | `claude --print` subprocess | Anthropic's `claude` CLI (must be on `$PATH`) |
-| `ASKANTIGRAVITY SYM[,SYM] [question]` | `antigravity`/`gemini --prompt` subprocess | Google's Antigravity CLI preferred, Gemini CLI fallback (must be on `$PATH`) |
+| `ASKANTIGRAVITY SYM[,SYM] [question]` | `agy`/`antigravity`/`gemini --prompt` subprocess | Google's Antigravity CLI preferred (`agy` binary first), Gemini CLI fallback (must be on `$PATH`) |
 
 Argument parsing contract: the first whitespace-separated token is the
 comma-separated symbol list; everything after the first whitespace is the
@@ -5971,11 +5971,11 @@ message.
 
 | Provider | URL | Default Model |
 |---|---|---|
-| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-5.1` |
-| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-2.5-pro` |
-| xAI / Grok | `https://api.x.ai/v1/chat/completions` | `grok-4.1` |
-| Mistral | `https://api.mistral.ai/v1/chat/completions` | `mistral-large-latest` |
-| Perplexity | `https://api.perplexity.ai/chat/completions` | `sonar-pro` |
+| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-5.5` |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-3.5-flash` |
+| xAI / Grok | `https://api.x.ai/v1/chat/completions` | `grok-4.3` |
+| Mistral | `https://api.mistral.ai/v1/chat/completions` | `mistral-medium-3-5-26-04` |
+| Perplexity | `https://api.perplexity.ai/chat/completions` | `sonar` |
 | Local (Ollama) | `http://localhost:11434/v1/chat/completions` | `llama3.2` |
 | Local (LM Studio) | `http://localhost:1234/v1/chat/completions` | `llama3.2` |
 
@@ -6022,13 +6022,23 @@ claude --print \
 **Antigravity/Gemini CLI** (`ASKANTIGRAVITY`, legacy `ASKGEMINI` / Google AI chat window):
 
 ```sh
-antigravity --model <auto|pro|flash|gemini-3.1-pro-preview|gemini-3-pro-preview|gemini-2.5-pro> \
+agy --model <auto|pro|flash|gemini-3.5-flash|gemini-3.1-pro-preview|gemini-3-pro-preview|gemini-2.5-pro> \
        --prompt "<full prompt string>"
 ```
 
-TyphooN prefers an `antigravity` binary when present and falls back to
-`gemini` for older installs. Model IDs are suggestions only: the UI keeps a
-freeform field and passes arbitrary IDs through to the installed CLI/account.
+TyphooN checks `agy`, then `antigravity`, then `gemini`. Model IDs are
+suggestions only: the UI keeps a freeform field and passes arbitrary IDs
+through to the installed CLI/account.
+
+**Grok Build CLI** (`ASKGROK` / Grok Build chat window):
+
+```sh
+grok --no-alt-screen --output-format plain --effort <low|medium|high|xhigh|max> \
+     --single "<full prompt string>"
+```
+
+Grok Build currently exposes only automatic model selection in the local CLI;
+TyphooN therefore never passes `--model` to `grok`.
 
 **Codex CLI** (`ASKCODEX` / Codex CLI chat window):
 
@@ -6040,7 +6050,7 @@ codex exec \
       "<full prompt string>"
 ```
 
-The handlers first run `which claude` / `which antigravity` or `which gemini` / `which codex`;
+The handlers first run `which claude` / `which agy` then `which antigravity` then `which gemini` / `which codex` / `which grok`;
 if the binary is missing, the command logs an error and the packet is
 never built. Each subprocess runs off the egui render path (dedicated OS thread
 or Tokio `spawn_blocking`, depending on the chat surface) so the UI stays
@@ -6294,8 +6304,8 @@ If a given source is empty, the corresponding sub-block is silently omitted
   has no key requirement.
 - **CLI binary missing (subprocess path)** — the log shows
   `Claude Code CLI not found in PATH.` / `Antigravity/Gemini CLI not found in PATH.` /
-  `Codex CLI not found in PATH.`.
-- **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKANTIGRAVITY / ASKCODEX is
+  `Codex CLI not found in PATH.` / `Grok Build CLI not found in PATH.`.
+- **Concurrent CLI invocations** — while a previous ASKCLAUDE / ASKANTIGRAVITY / ASKCODEX / ASKGROK is
   still running, a new trigger is a no-op. The first reply must land before
   a second CLI call will fire.
 - **Missing `--session-id` UUID** — if for any reason `claude_code_session_id`

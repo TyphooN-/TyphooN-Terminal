@@ -26,7 +26,7 @@
 
 /// Default Gemini CLI model id. Shared by the native app's model selector and the
 /// broker AI-chat handler (ADR-125 Target 3 — keeps the broker processor engine/std-only).
-pub const DEFAULT_GEMINI_CLI_MODEL: &str = "gemini-3.1-pro-preview";
+pub const DEFAULT_GEMINI_CLI_MODEL: &str = "gemini-3.5-flash";
 
 use crate::core::cache::SqliteCache as Cache;
 use serde::{Deserialize, Serialize};

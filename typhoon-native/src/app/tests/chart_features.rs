@@ -786,7 +786,7 @@ fn test_build_grok_exec_args_uses_auto_model_when_blank_or_auto() {
 }
 
 #[test]
-fn test_build_grok_exec_args_includes_model_and_effort() {
+fn test_build_grok_exec_args_omits_model_even_when_legacy_value_is_saved() {
     let args = TyphooNApp::build_grok_exec_args("grok-code-fast-1", "max", "hello");
     assert_eq!(
         args,
@@ -796,8 +796,6 @@ fn test_build_grok_exec_args_includes_model_and_effort() {
             "plain".to_string(),
             "--effort".to_string(),
             "max".to_string(),
-            "--model".to_string(),
-            "grok-code-fast-1".to_string(),
             "--single".to_string(),
             "hello".to_string(),
         ]

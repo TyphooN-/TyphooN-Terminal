@@ -1,21 +1,31 @@
 use super::*;
 
 impl TyphooNApp {
+    const GOOGLE_AI_CLI_CANDIDATES: &'static [&'static str] = &["agy", "antigravity", "gemini"];
+
     pub(super) fn default_gemini_cli_model() -> &'static str {
         typhoon_engine::core::ai_sessions::DEFAULT_GEMINI_CLI_MODEL
     }
 
+    pub(super) fn select_google_ai_cli_binary<F>(mut available: F) -> &'static str
+    where
+        F: FnMut(&str) -> bool,
+    {
+        Self::GOOGLE_AI_CLI_CANDIDATES
+            .iter()
+            .copied()
+            .find(|candidate| available(candidate))
+            .unwrap_or("gemini")
+    }
+
     pub(super) fn google_ai_cli_binary() -> &'static str {
-        if std::process::Command::new("which")
-            .arg("antigravity")
-            .output()
-            .map(|out| out.status.success())
-            .unwrap_or(false)
-        {
-            "antigravity"
-        } else {
-            "gemini"
-        }
+        Self::select_google_ai_cli_binary(|candidate| {
+            std::process::Command::new("which")
+                .arg(candidate)
+                .output()
+                .map(|out| out.status.success())
+                .unwrap_or(false)
+        })
     }
 
     pub(super) fn google_ai_cli_available() -> bool {
@@ -26,11 +36,19 @@ impl TyphooNApp {
             .unwrap_or(false)
     }
 
+    pub(super) fn google_ai_cli_display_name(binary: &str) -> &'static str {
+        match binary {
+            "agy" | "antigravity" => "Antigravity",
+            _ => "Gemini",
+        }
+    }
+
     pub(super) fn gemini_cli_model_options() -> &'static [(&'static str, &'static str)] {
         &[
+            ("gemini-3.5-flash", "gemini-3.5-flash (latest stable)"),
             (
                 "gemini-3.1-pro-preview",
-                "gemini-3.1-pro-preview (default preview pro)",
+                "gemini-3.1-pro-preview (preview pro)",
             ),
             (
                 "gemini-3.1-pro-preview-customtools",
@@ -481,7 +499,7 @@ impl TyphooNApp {
             .spawn(move || {
                 let model = model.trim();
                 let model = if model.is_empty() {
-                    "gemini-3.1-pro-preview"
+                    Self::default_gemini_cli_model()
                 } else {
                     model
                 };
@@ -550,11 +568,7 @@ impl TyphooNApp {
             "--effort".to_string(),
             Self::normalize_grok_effort(effort).to_string(),
         ];
-        let model = model.trim();
-        if !model.is_empty() && model != "auto" {
-            args.push("--model".to_string());
-            args.push(model.to_string());
-        }
+        let _ = model;
         args.push("--single".to_string());
         args.push(prompt.to_string());
         args

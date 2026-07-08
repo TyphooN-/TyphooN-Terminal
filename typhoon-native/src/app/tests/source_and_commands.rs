@@ -1805,11 +1805,8 @@ fn packet_export_stem_sanitizes_path_unsafe_chars() {
 }
 
 #[test]
-fn gemini_cli_default_prefers_3_1_pro_preview() {
-    assert_eq!(
-        TyphooNApp::default_gemini_cli_model(),
-        "gemini-3.1-pro-preview"
-    );
+fn gemini_cli_default_prefers_latest_stable_flash() {
+    assert_eq!(TyphooNApp::default_gemini_cli_model(), "gemini-3.5-flash");
 }
 
 #[test]
@@ -1823,6 +1820,7 @@ fn gemini_cli_model_options_include_cli_valid_set() {
         "pro",
         "flash",
         "flash-lite",
+        "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
         "gemini-3.1-pro-preview-customtools",
         "gemini-3.1-flash-lite-preview",
@@ -1841,6 +1839,24 @@ fn gemini_cli_model_options_include_cli_valid_set() {
             "missing Gemini CLI model {expected}"
         );
     }
+}
+
+#[test]
+fn google_ai_cli_binary_prefers_agy_then_antigravity_then_gemini() {
+    assert_eq!(
+        TyphooNApp::select_google_ai_cli_binary(|name| name == "agy"),
+        "agy"
+    );
+    assert_eq!(
+        TyphooNApp::select_google_ai_cli_binary(|name| name == "antigravity"),
+        "antigravity"
+    );
+    assert_eq!(
+        TyphooNApp::select_google_ai_cli_binary(|name| name == "gemini"),
+        "gemini"
+    );
+    assert_eq!(TyphooNApp::select_google_ai_cli_binary(|_| false), "gemini");
+    assert_eq!(TyphooNApp::google_ai_cli_display_name("agy"), "Antigravity");
 }
 
 #[test]

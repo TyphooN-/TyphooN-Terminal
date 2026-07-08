@@ -9,7 +9,7 @@ Accepted — 2026-04-17.
 Four AI chat surfaces exist in the terminal:
 
 1. **Claude Code** (`claude --print --session-id <uuid>` / `--resume <uuid>`)
-2. **Google AI CLI** (`antigravity --prompt ...` preferred, `gemini --prompt ...` fallback — no native resume)
+2. **Google AI CLI** (`agy --prompt ...` / `antigravity --prompt ...` preferred, `gemini --prompt ...` fallback — no native resume)
 3. **Codex CLI** (`codex exec ...` — no native resume)
 4. **Generic AI Chat** (HTTP to Claude/OpenAI/Gemini/Grok/Mistral/Perplexity/Local)
 
@@ -73,7 +73,7 @@ resume key and our kv key.
   `build_claude_prompt` call that already includes full history on every turn.
   The active command surface is now Antigravity/Gemini: `ASKANTIGRAVITY` is the
   primary palette command, `ASKGEMINI` remains a legacy alias, and the process
-  launcher prefers an `antigravity` binary before falling back to `gemini`.
+  launcher checks `agy`, then `antigravity`, before falling back to `gemini`.
 - `/RESUMECODEX` — same strategy as Antigravity/Gemini.
 - `/RESUMEAI` — restore into `ai_chat_history`; `AiChat` broker command already
   threads `history: Vec<(bool, String)>` into the API request.
