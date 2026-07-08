@@ -178,3 +178,29 @@ old `utf-8` crate from the resolved tree. The remaining update blockers are
 not RustSec findings: `wgpu` 30 is held by the `egui-wgpu` 0.35 pairing rule,
 and `generic-array` 0.14.7 is an upstream old-RustCrypto transitive hold under
 Secret Service / WebSocket dependencies.
+
+## Follow-up audit (2026-07-08)
+
+Security-first upstream crate comb-over per ADR-031. `cargo audit` exits clean
+with only the documented quick-xml advisory acceptances in `.cargo/audit.toml`;
+no new RustSec advisories were introduced by the lockfile refresh.
+
+Updates applied:
+
+- Direct: `wasm-encoder` 0.252 → 0.253 in `typhoon-transpiler`.
+- Lockfile-compatible: `bytes` 1.12.0 → 1.12.1, `memchr` 2.8.2 → 2.8.3,
+  `num-iter` 0.1.45 → 0.1.46, `wasmparser` 0.252 → 0.253. The `num-iter`
+  update removes its `autocfg` edge; several Windows-target dependency edges
+  moved off `windows-sys 0.59` to 0.61.
+
+Post-refresh `cargo update --workspace --dry-run --verbose` reports only the
+same intentional non-upgrades: `generic-array` 0.14.7 and `wgpu` 29.0.4.
+`cargo upgrade --workspace --root-deps-only` similarly reports only the direct
+`wgpu` 30 headline, which remains blocked by the eframe/egui-wgpu 0.35 pairing
+rule. Forced dry-run probes confirm the blockers: `generic-array 0.14.9` is
+rejected by upstream `crypto-common =0.1.7`'s exact `=0.14.7` pin, and `wgpu`
+30 conflicts with TyphooN's intentional `wgpu = "^29"` direct selector for the
+egui-wgpu 0.35 stack.
+
+Validation: `cargo check --workspace`, `cargo audit`, duplicate tree inspection,
+manifest drift scan, and `git diff --check` all pass.

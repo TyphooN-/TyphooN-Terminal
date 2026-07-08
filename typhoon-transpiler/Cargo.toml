@@ -8,7 +8,7 @@ license = "BUSL-1.1"
 [dependencies]
 pest = "2.8"
 pest_derive = "2.8"
-wasm-encoder = "0.252"
+wasm-encoder = "0.253"
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -292,3 +292,37 @@ dual-major dependency trees just to chase a crates.io headline release.
 Validation for this pass: `cargo check --workspace`, `cargo audit`, manifest
 drift scan, duplicate tree inspection, and `git diff --check` all pass. Full
 workspace tests were run after the manifest and lockfile changes.
+
+## Follow-up alignment (2026-07-08)
+
+Security-first upstream refresh with the same policy: latest compatible lockfile,
+no avoidable direct-version drift, no feature-surface widening, and no dual-major
+GPU tree just to chase crates.io latest.
+
+- Direct requirement bump: `wasm-encoder` 0.252 → 0.253 in
+  `typhoon-transpiler`. The public codegen API used by
+  `typhoon-transpiler/src/codegen.rs` (`Module`, `TypeSection`, `Function`,
+  `Instruction`, etc.) still compiles cleanly.
+- Targeted compatible lockfile updates after `cargo update --workspace` left
+  them behind: `bytes` 1.12.0 → 1.12.1, `memchr` 2.8.2 → 2.8.3,
+  `num-iter` 0.1.45 → 0.1.46, plus the `wasmparser` 0.252 → 0.253 companion
+  update. The `num-iter` refresh also drops its `autocfg` dependency edge;
+  several Windows-target package edges moved from `windows-sys 0.59` to 0.61.
+- Manifest drift scan found no duplicate direct version requirements across the
+  workspace. Repeated direct dependencies are either first-party workspace
+  crates or shared third-party dependencies routed through `[workspace.dependencies]`
+  (`serde`, `tokio`, `reqwest`, `chrono`, `egui`, `futures-util`, etc.).
+- `cargo update --workspace --dry-run --verbose` now reports only the two known
+  intentional non-upgrades: `generic-array` 0.14.7 and `wgpu` 29.0.4.
+- `wgpu` 30 remains blocked by the eframe/egui-wgpu 0.35 pairing rule. A forced
+  `cargo update -p wgpu --precise 30.0.0 --dry-run` fails against TyphooN's
+  direct `wgpu = "^29"` requirement; changing it alone would create the exact
+  dual-major/type-split GPU tree this ADR forbids.
+- `generic-array` 0.14.7 remains pinned by upstream `crypto-common =0.1.7`
+  (`=0.14.7`) through the old RustCrypto lines under `tungstenite` and
+  `dbus-secret-service`. A forced `cargo update -p generic-array --precise
+  0.14.9 --dry-run` fails at that exact upstream pin, so this is not fixable
+  from TyphooN direct manifests without replacing upstream crates.
+
+Validation for this pass: `cargo check --workspace`, `cargo audit`, manifest
+drift scan, duplicate tree inspection, and `git diff --check` all pass.
