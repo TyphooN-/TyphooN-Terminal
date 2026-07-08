@@ -10,8 +10,8 @@
 
 The research-parity arc (ADRs 108–129) built a dense set of per-symbol
 quantitative surfaces that get glued into the research packet shipped
-to AI agents (Claude, Gemini, ChatGPT) by ASKAI / ASKCLAUDE /
-ASKGEMINI. The packet is a one-way artifact: TyphooN sends numbers
+to AI agents (Claude, Antigravity/Gemini, ChatGPT) by ASKAI / ASKCLAUDE /
+ASKANTIGRAVITY (legacy ASKGEMINI alias). The packet is a one-way artifact: TyphooN sends numbers
 and domain context, the agent replies with a research note. Any web
 search the agent performs — news, filings, transcripts, forum
 discussion — lives only in the agent's reply and is lost to the
@@ -50,8 +50,8 @@ Ship two new features as a single bundle:
    to the research packet that instructs the agent to emit the ingest
    block.
 
-   **Accuracy update 2026-05-05:** ADR-096 completed the built-in
-   auto-ingest follow-up. Claude Code, Gemini CLI, Codex CLI, and hosted
+   **Accuracy update 2026-05-05; refreshed 2026-07-08:** ADR-096 completed the built-in
+   auto-ingest follow-up. Claude Code, Antigravity/Gemini CLI, Codex CLI, and hosted
    ASKAI replies now queue the existing ingest broker path automatically
    when their final response contains a `===TYPHOON_INGEST===` block.
    `INGEST_RESEARCH` remains the manual path for external web UIs and
@@ -221,7 +221,7 @@ populates the whole terminal farm.
 ## Alternatives considered
 
 1. **Scrape the LLM subprocess stdout for fenced ingest blocks in
-   ASKCLAUDE / ASKGEMINI / ASKCODEX** — Originally rejected for this ADR, but
+   ASKCLAUDE / ASKANTIGRAVITY (legacy ASKGEMINI) / ASKCODEX** — Originally rejected for this ADR, but
    completed in ADR-096 through final-reply receive hooks rather than
    streaming stdout parsing. The paste path still exists for external
    HTTP/web-UI agents that cannot be wrapped by the terminal.
@@ -363,7 +363,7 @@ populates the whole terminal farm.
 
 ## Historical Follow-up Context
 
-1. **Auto-parse ingest blocks in ASKCLAUDE/ASKGEMINI subprocess
+1. **Auto-parse ingest blocks in ASKCLAUDE/ASKANTIGRAVITY subprocess
    output** — The CLI subprocess readers already capture the agent
    reply into a buffer; a single call to `parse_ingest_block` on
    that buffer could feed `append_ingested_articles` automatically.

@@ -9,6 +9,8 @@
 - [x] Fixed / in sync
 - [~] Acceptable historical (intentional record, git-history pointer, or ADR title)
 
+**Latest full comb-over (2026-07-08):** cross-checked the current implementation against recent docs/ADR surfaces after the low-memory broad-sync, Alpaca retry/log-noise, O(1) catalog lookup, and Ask AI command updates. Fixed ADR/PERFORMANCE drift for installed-RAM-scaled sync budgets, memory-aware diagnostics, Alpaca broad-sync pause ownership, quieter no-data/rate-limit paths, `ASKANTIGRAVITY` as the primary Google AI CLI command with `ASKGEMINI` as a legacy alias, Claude effort passthrough, refreshed hosted/CLI model shortcut language, and the latest companion-map O(1) index work.
+
 ## 1. High-level Docs (ROADMAP.md, ARCHITECTURE.md, DESIGN_PHILOSOPHY.md, INDICATORS.md)
 
 - [x] Broker scope (Kraken Spot / Equities/xStocks / Futures + Alpaca + Yahoo corroborator) — matches code + tiers in ARCHITECTURE/PERFORMANCE.

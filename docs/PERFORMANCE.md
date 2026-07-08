@@ -72,9 +72,13 @@ Kraken has three separate public bar lanes with different performance contracts:
 
 Direct Kraken requests spawn per-timeframe tasks where applicable, while the broad schedulers keep queue windows bounded with normalized pending/unresolvable/backfill-complete keys. SQLite/zstd cache merge and write work is offloaded with `spawn_blocking`, so network tasks stay responsive and active charts can reload on `BarsFetched` before the terminal `FetchSettled` releases scheduler slots.
 
+Broad sync is memory-aware without changing universe semantics. The runtime reads installed RAM from `/proc/meminfo` and scales broad queue windows, batch sizes, Alpaca full-tilt capacity, and Yahoo/Kraken HTTP semaphore permits on smaller machines (35% at <=24 GB, 50% at <=40 GB, 75% at <=64 GB, with foreground-safe floors). Process RSS and system available/total memory are included in UI-stall diagnostics. Memory pressure pauses background expansion before it starves the foreground, but it does not collapse Kraken Spot/Securities/xStocks from full-catalog coverage to active-only.
+
 ### Broker Full-History Sync
 
 Alpaca and Kraken Futures no longer use arbitrary local target depths such as 10k, 50k, 7.5k, or 3.5k bars. If the provider supports full historical traversal, first sync and incomplete-cache backfill continue until provider exhaustion and then persist a backfill-complete marker with the actual stored count. Kraken Spot remains recent-window-only by API design; deeper equity history is supplied by the Yahoo corroborator where available (ADR-113).
+
+Alpaca rate-limit and no-data outcomes are owned by scheduler state instead of noisy user-facing logs: provider no-data becomes a tombstone, 429/rate-limit responses enqueue retries and pause broad/background Alpaca scheduling until the backoff expires, and successful writes clear the consecutive-rate-limit state. Sync Status shows the active Alpaca pause when present.
 
 ### Cache Format
 

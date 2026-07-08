@@ -4,7 +4,7 @@
 
 **Date:** 2026-05-22
 **Status:** Accepted
-**Last updated:** 2026-07-07 (iterative O(1) sweeps)
+**Last updated:** 2026-07-08 (iterative O(1) sweeps + low-memory broad-sync backpressure)
 **Related:** ADR-032 (background data + render decoupling),
 `typhoon-native/src/app/technical_analysis.rs`,
 `typhoon-native/src/app/app_runtime.rs`,
@@ -232,4 +232,16 @@ All changes were accompanied by:
 - `git diff --check`, clean worktree hygiene.
 - Preservation of ordering, fallback (e.g. empty catalog), and serde behavior.
 
-These build directly on the per-frame invariants in this ADR (hoisting, pre-normalized sets, indices over searches, one-pass where possible). No semantics or output changed. The program remains open; next focus areas include further bounded backpressure for full-universe sync and MTF grid data freshness.
+These build directly on the per-frame invariants in this ADR (hoisting, pre-normalized sets, indices over searches, one-pass where possible). No semantics or output changed.
+
+### Update (2026-07-08): low-memory broad-sync budgets and quieter retry/no-data paths
+
+The full-universe sync path now includes proactive memory-scale controls instead of waiting for RSS pressure after large response/body/write buffers are already in flight:
+
+- `BrokerRuntimeResources::new` scales Yahoo, Kraken Spot/public, and Kraken Securities/xStocks HTTP semaphore permits from installed RAM (`/proc/meminfo`): <=24 GB gets 35% of the workstation-tuned base, <=40 GB gets 50%, <=64 GB gets 75%, with explicit floors so foreground work still moves.
+- Native broad-sync queue windows, batch sizes, and Alpaca full-tilt capacity use the same installed-RAM percentage through `memory_scaled_sync_budget`. This applies before `current_market_data_memory_pressure` trips, reducing OOM risk on 16–64 GB systems while preserving full catalog semantics.
+- Frame-stall diagnostics now log process RSS plus system `mem_available_mb` / `mem_total_mb`, so stalls and backpressure decisions can be tied to real machine headroom.
+- Alpaca 429/rate-limit handling now emits `AlpacaRateLimitObserved` after single and batch fetches, pauses broad/background Alpaca scheduling through `alpaca_sync_pause_until_ts`, and keeps focus/foreground paths from being starved. Successful Alpaca writes reset consecutive-429 state.
+- Expected provider no-data and rate-limit failures no longer spam user-facing error/order-result logs; no-data becomes tombstone bookkeeping and rate limits become retry/backoff state. The UI exposes the active Alpaca pause in Sync Status.
+
+The performance contract is unchanged: do not shrink the Kraken Spot/Securities/xStocks universe to active-only for memory relief. Use bounded queueing, memory-scaled concurrency, retry ownership, and clear diagnostics instead.

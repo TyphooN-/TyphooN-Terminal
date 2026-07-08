@@ -127,6 +127,17 @@ Alpaca market-data WebSocket (quotes + trades) now auto-detects feed ("sip" vs "
 
 This keeps WS sub limits respected without user intervention and provides symmetric robustness for Alpaca/Kraken brokers.
 
+## Update 2026-07-08: broad-sync pause ownership and low-memory scaling
+
+The bar-sync side now treats provider rate limits and machine headroom as first-class scheduler inputs:
+
+- Single-symbol and batch Alpaca fetches emit `BrokerMsg::AlpacaRateLimitObserved { historical_rpm }` after observing headers, so native capacity can follow the actual historical-data RPM rather than only the configured hint.
+- Broad/background Alpaca scheduling checks `alpaca_sync_pause_until_ts` before queueing fallback, retry, or background work. Focus/foreground paths keep their reserve, but the full background universe stops feeding new work until the time-bounded pause expires.
+- Successful Alpaca bar writes clear no-data tombstones for that symbol/timeframe and reset consecutive 429 state; rate-limited failures become retry/backoff state instead of repeated visible errors.
+- Installed-RAM scaling trims Alpaca full-tilt fetch permits, queue windows, and batch sizes before RSS pressure spikes. Floors preserve progress; the policy reduces in-flight memory on 16–64 GB machines without reducing the covered universe.
+
+This extends the original tier autotuning decision: Alpaca capacity is bounded by account tier, live observed headers, retry state, and local machine headroom.
+
 ## Consequences
 
 - **Sync throughput scales with the user's tier** without manual

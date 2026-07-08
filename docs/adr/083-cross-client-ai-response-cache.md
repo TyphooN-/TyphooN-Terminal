@@ -201,7 +201,7 @@ tokenizer dependency.
   on the estimate.
 - Accuracy update 2026-05-05: the implemented cache-aside path is the
   hosted `BrokerCmd::AiChat` path. CLI transcripts are persisted by
-  ADR-082, but `claude --print`, `gemini --prompt`, and `codex exec`
+  ADR-082, but `claude --print`, Antigravity/Gemini `--prompt`, and `codex exec`
   replies are not currently served from `ai_response_cache`.
 
 ### Paid-API gap

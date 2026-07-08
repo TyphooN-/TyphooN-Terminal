@@ -44,6 +44,7 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
 - Coverage-first priority is shared with Alpaca: never-cached symbol/timeframe pairs are scheduled before stale refresh or provider-history backfill, ordered from `1Month` down to `1Min` within the scanned sector/window.
 - `BarsFetched` is an intermediate UI/cache freshness signal for Kraken Spot and Kraken Futures. Pending scheduler slots are released only by `KrakenFetchSettled` / `KrakenFuturesFetchSettled`, so zero-bar, failure, unresolvable, and backfill-complete paths cannot leak or prematurely recycle pending keys.
 - Kraken Spot emits provider-window completion when its bounded public OHLC response returns less than the requested recent window. Kraken Futures emits full-history completion after a successful provider-maximum range traversal; its marker stores the actual cached count rather than an old fixed local target.
+- Installed-RAM scaling now reduces broad queue/batch pressure and HTTP semaphore permits on smaller machines before RSS pressure spikes: Kraken Spot/public uses the configured public-permit base with a foreground-safe floor, Kraken Securities/xStocks uses its iapi permit base with a lower floor, and Yahoo fallback is scaled similarly. This keeps full-catalog semantics while avoiding workstation-sized pending windows on 16–64 GB systems.
 
 ## Consequences
 
@@ -72,6 +73,8 @@ Kraken public bar sync now follows a fully async, queue-friendly model:
   - terminal `FetchSettled` messages and backfill-complete classification
 - `typhoon-broker-runtime/src/bar_fetch_commands.rs`
   - command routing and handle/cache/permit threading for the engine fetch workers
+- `typhoon-broker-runtime/src/resources.rs`
+  - installed-memory-scaled Yahoo/Kraken HTTP semaphores and Kraken public client pool sizing
 - `typhoon-native/src/app/market_data_sync.rs`
   - `queue_kraken_fetch()`, `queue_kraken_futures_fetch()`
   - bounded sector scheduling with normalized pending/unresolvable/backfill keys

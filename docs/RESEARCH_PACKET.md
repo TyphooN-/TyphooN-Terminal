@@ -5958,7 +5958,7 @@ anthropic-version: 2023-06-01
 content-type: application/json
 
 {
-  "model": "claude-opus-4-5",
+  "model": "claude-fable-5",
   "max_tokens": 4096,
   "system": "<preamble + RESEARCH PACKET block>",
   "messages": [...history..., {"role": "user", "content": "<latest turn>"}]
@@ -5971,9 +5971,9 @@ message.
 
 | Provider | URL | Default Model |
 |---|---|---|
-| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-4o` |
+| OpenAI | `https://api.openai.com/v1/chat/completions` | `gpt-5.1` |
 | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` | `gemini-2.5-pro` |
-| xAI / Grok | `https://api.x.ai/v1/chat/completions` | `grok-3` |
+| xAI / Grok | `https://api.x.ai/v1/chat/completions` | `grok-4.1` |
 | Mistral | `https://api.mistral.ai/v1/chat/completions` | `mistral-large-latest` |
 | Perplexity | `https://api.perplexity.ai/chat/completions` | `sonar-pro` |
 | Local (Ollama) | `http://localhost:11434/v1/chat/completions` | `llama3.2` |
@@ -5981,7 +5981,9 @@ message.
 
 Response text is extracted from `choices[0].message.content`. The local path
 sends no `Authorization` header; the other five send `Bearer <api_key>`.
-All providers use a **4096**-token response budget (up from 1024).
+The picker values are shortcuts only; the freeform model field is passed
+through unchanged to the selected hosted provider. All providers use a
+**4096**-token response budget (up from 1024).
 
 ### Subprocess path (ASKCLAUDE / ASKANTIGRAVITY / ASKCODEX)
 
