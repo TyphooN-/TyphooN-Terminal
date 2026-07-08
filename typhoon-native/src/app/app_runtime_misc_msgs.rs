@@ -11,8 +11,10 @@ impl TyphooNApp {
                 self.unusual_volume_results = results;
             }
             BrokerMsg::MarketClock(msg) => {
-                self.market_clock_status = msg.clone();
-                self.log.push_back(LogEntry::info(msg));
+                if self.market_clock_status.as_str() != msg.as_str() {
+                    self.log.push_back(LogEntry::info(msg.clone()));
+                }
+                self.market_clock_status = msg;
             }
             _ => {}
         }

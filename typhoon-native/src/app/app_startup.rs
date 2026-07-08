@@ -1,4 +1,6 @@
 use super::*;
+use crate::app::trade_ops::obsolete_nonspot_low_timeframe;
+use super::state::PreloadedCacheMarks;
 use crate::app::app_runtime_support::{
     should_auto_start_background_scope_scrape, should_auto_start_kraken_fundamentals_scrape,
 };
@@ -72,14 +74,14 @@ pub(super) fn spawn_async_cache_open(
     rt_handle: &tokio::runtime::Handle,
 ) -> (
     Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
-    std::sync::mpsc::Receiver<Arc<SqliteCache>>,
+    std::sync::mpsc::Receiver<(Arc<SqliteCache>, PreloadedCacheMarks)>,
 ) {
     // On a 3.9 GB database, SqliteCache::open() + PRAGMA setup can take 10+ seconds.
     // We defer it: window appears immediately, cache arrives via channel on first frame.
     // The shared_cache is an Arc<RwLock> so the background thread can pick it up later.
     let shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>> =
         Arc::new(std::sync::RwLock::new(None));
-    let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<Arc<SqliteCache>>(1);
+    let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<(Arc<SqliteCache>, PreloadedCacheMarks)>(1);
     let shared = shared_cache.clone();
     rt_handle.spawn_blocking(move || {
         let parent = cache_dir();
@@ -130,14 +132,61 @@ pub(super) fn spawn_async_cache_open(
                         ),
                     }
                 }
+                // Load heavy mark data HERE in the blocking thread (get_kv + deserialize
+                // + filter + HashMap collect) using &c. Then wrap.
+                let mut preloaded = PreloadedCacheMarks::default();
+
+                // Alpaca no-data
+                if let Ok(Some(json)) = c.get_kv("alpaca:no_data_pairs") {
+                    if let Some(entries) = deserialize_alpaca_no_data_pairs(&json) {
+                        preloaded.alpaca_no_data_pairs = entries
+                            .into_iter()
+                            .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+                            .map(|entry| (alpaca_fetch_key(&entry.symbol, &entry.timeframe), entry))
+                            .collect();
+                    }
+                }
+
+                // Alpaca backfill complete
+                if let Ok(Some(json)) = c.get_kv("alpaca:backfill_complete_pairs") {
+                    if let Ok(entries) = serde_json::from_str::<Vec<AlpacaBackfillCompletePair>>(&json) {
+                        preloaded.alpaca_backfill_complete_pairs = entries
+                            .into_iter()
+                            .filter(|entry| !obsolete_nonspot_low_timeframe("alpaca", &entry.timeframe))
+                            .map(|entry| (alpaca_fetch_key(&entry.symbol, &entry.timeframe), entry))
+                            .collect();
+                    }
+                }
+
+                // Kraken backfill
+                if let Ok(Some(json)) = c.get_kv("kraken:backfill_complete_pairs") {
+                    if let Ok(entries) = serde_json::from_str::<Vec<AlpacaBackfillCompletePair>>(&json) {
+                        preloaded.kraken_backfill_complete_pairs = entries
+                            .into_iter()
+                            .map(|entry| (alpaca_fetch_key(&entry.symbol, &entry.timeframe), entry))
+                            .collect();
+                    }
+                }
+
+                // Kraken futures backfill
+                if let Ok(Some(json)) = c.get_kv("kraken-futures:backfill_complete_pairs") {
+                    if let Ok(entries) = serde_json::from_str::<Vec<AlpacaBackfillCompletePair>>(&json) {
+                        preloaded.kraken_futures_backfill_complete_pairs = entries
+                            .into_iter()
+                            .map(|entry| (alpaca_fetch_key(&entry.symbol, &entry.timeframe), entry))
+                            .collect();
+                    }
+                }
+
                 let arc = Arc::new(c);
+
                 // Publish to both: RwLock for background thread, channel for UI
                 if let Ok(mut guard) = shared.write() {
                     *guard = Some(arc.clone());
                     tracing::info!("Cache-open thread: published to RwLock");
                 }
-                let _ = cache_tx.send(arc);
-                tracing::info!("Cache-open thread: sent to UI channel");
+                let _ = cache_tx.send((arc, preloaded));
+                tracing::info!("Cache-open thread: sent to UI channel (with preloaded marks)");
             }
             Err(e) => {
                 tracing::error!("Cache-open thread: FAILED: {e}");
@@ -181,28 +230,40 @@ impl TyphooNApp {
     }
 
     pub(crate) fn tick_cache_startup(&mut self) {
-        // ── Receive async cache open result ──────────────────────────────
+        // ── Receive async cache open result (with preloaded marks) ───────
         if self.cache.is_none() {
             if let Some(ref rx) = self.cache_rx {
-                if let Ok(c) = rx.try_recv() {
+                if let Ok((c, preloaded)) = rx.try_recv() {
                     self.log.push_back(LogEntry::info("Cache opened"));
                     self.cache = Some(c);
                     self.cache_rx = None; // done, drop receiver
+
+                    // Assign preloaded (deser + HashMap build already done in blocking thread)
+                    self.alpaca_no_data_pairs = preloaded.alpaca_no_data_pairs;
+                    self.alpaca_backfill_complete_pairs = preloaded.alpaca_backfill_complete_pairs;
+                    self.kraken_backfill_complete_pairs = preloaded.kraken_backfill_complete_pairs;
+                    self.kraken_futures_backfill_complete_pairs = preloaded.kraken_futures_backfill_complete_pairs;
+
+                    self.alpaca_no_data_loaded = true;
+                    self.alpaca_backfill_complete_loaded = true;
+                    self.kraken_backfill_complete_loaded = true;
+                    self.kraken_futures_backfill_complete_loaded = true;
+                    self.alpaca_no_data_dirty_since = None;
+                    self.alpaca_backfill_complete_dirty_since = None;
+                    self.kraken_backfill_complete_dirty_since = None;
+                    self.kraken_futures_backfill_complete_dirty_since = None;
                 }
             }
         }
-        // Load charts once cache arrives
+        // Load charts + lighter state once cache arrives. Heavy mark loads moved to open thread.
         if !self.cache_loaded && self.cache.is_some() {
             self.cache_loaded = true;
             self.maybe_purge_orphaned_yahoo_intraday();
             self.hydrate_loaded_charts();
             self.sync_preferences_load();
             self.alpaca_retry_load();
-            self.alpaca_no_data_load();
             self.unresolvable_load();
-            self.alpaca_backfill_complete_load();
-            self.kraken_backfill_complete_load();
-            self.kraken_futures_backfill_complete_load();
+            // Mark loads skipped here (pre-populated above)
             if !self.alpaca_no_data_pairs.is_empty() {
                 self.log.push_back(LogEntry::info(format!(
                     "Loaded {} Alpaca no-data mark(s) from cache",

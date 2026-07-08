@@ -193,6 +193,7 @@ impl TyphooNApp {
                 }
                 BrokerMsg::AllAssets(assets) => {
                     self.handle_alpaca_all_assets(assets);
+                    market_data_refill_requested = true;  // heavy schedules batched at drain end
                 }
                 BrokerMsg::RecentFills(fills) => {
                     self.handle_alpaca_recent_fills(fills);
@@ -1026,8 +1027,13 @@ impl TyphooNApp {
                 }
             }
             let msg_elapsed = msg_started.elapsed();
-            if msg_elapsed > std::time::Duration::from_millis(25) {
+            if msg_elapsed > std::time::Duration::from_millis(200) {
                 tracing::warn!(
+                    "BrokerMsg::{msg_kind} handling took {:.2}ms on UI thread",
+                    msg_elapsed.as_secs_f64() * 1000.0
+                );
+            } else if msg_elapsed > std::time::Duration::from_millis(50) {
+                tracing::debug!(
                     "BrokerMsg::{msg_kind} handling took {:.2}ms on UI thread",
                     msg_elapsed.as_secs_f64() * 1000.0
                 );

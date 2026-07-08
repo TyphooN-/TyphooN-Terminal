@@ -60,7 +60,7 @@ pub(super) struct SyncCacheState {
 /// marker. Pairs still participate in Missing/Stale sync; only repeat
 /// Backfill scheduling is suppressed.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(super) struct AlpacaBackfillCompletePair {
+pub(crate) struct AlpacaBackfillCompletePair {
     pub symbol: String,
     pub timeframe: String,
     #[serde(default)]

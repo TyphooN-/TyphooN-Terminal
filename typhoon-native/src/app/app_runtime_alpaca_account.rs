@@ -87,7 +87,9 @@ impl TyphooNApp {
         }
         self.all_broker_assets = assets;
         self.all_broker_assets_fetched = true;
-        self.refill_market_data_sync_slots();
+        // Defer refill — the drain arm will set market_data_refill_requested
+        // so heavy schedule_* work (rotations, kraken universes, alpaca pairs)
+        // runs once at end of batch, outside individual msg timing.
     }
 
     pub(super) fn handle_alpaca_recent_fills(&mut self, fills: Vec<RecentFillRow>) {

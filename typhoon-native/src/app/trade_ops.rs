@@ -29,7 +29,7 @@ fn kraken_equity_quote_meta_candidates(symbol: &str) -> Vec<String> {
     candidates
 }
 
-fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
+pub(super) fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
     matches!(
         normalize_sync_timeframe_key(timeframe),
         Some("1Min" | "5Min")

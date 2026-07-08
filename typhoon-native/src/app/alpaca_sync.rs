@@ -33,7 +33,7 @@ pub(super) struct AlpacaSyncCapacity {
 /// Persisted as JSON under KV key `alpaca:no_data_pairs` so automated sync
 /// stops re-requesting pairs the broker never serves.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(super) struct AlpacaNoDataPair {
+pub(crate) struct AlpacaNoDataPair {
     pub symbol: String,
     pub timeframe: String,
     #[serde(default)]
@@ -130,7 +130,7 @@ fn alpaca_incremental_fetch_limit_at(
     gap_bars.saturating_add(headroom).clamp(32, 1000)
 }
 
-pub(super) fn deserialize_alpaca_no_data_pairs(json: &str) -> Option<Vec<AlpacaNoDataPair>> {
+pub(crate) fn deserialize_alpaca_no_data_pairs(json: &str) -> Option<Vec<AlpacaNoDataPair>> {
     if let Ok(entries) = serde_json::from_str::<Vec<AlpacaNoDataPair>>(json) {
         return Some(entries);
     }

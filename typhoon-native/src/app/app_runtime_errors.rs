@@ -32,7 +32,7 @@ impl TyphooNApp {
                 60
             };
             self.kraken_equity_universe_retry_after_ts = now + backoff;
-        } else if e.contains("Yahoo Chart HTTP 429") {
+        } else if e.contains("Yahoo Chart HTTP 429") || e.contains("Yahoo Chart rate limited") {
             // Escalating, self-decaying backoff. The lane fires several concurrent
             // requests, so one rate-limit event arrives as a burst of 429s — only
             // escalate once per pause window (when not already paused) so the burst

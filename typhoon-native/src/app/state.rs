@@ -62,15 +62,29 @@ pub(crate) enum SanityConfirmAction {
     RebuildMerged,
 }
 
+
+/// Pre-populated mark data loaded in the cache-open blocking thread and sent
+/// with the cache so the UI thread only does cheap assignment (avoids 500-800ms
+/// stalls from deserializing 60k+ mark entries + HashMap build on the first
+/// frame after cache_rx delivers).
+#[derive(Default, Clone)]
+pub(crate) struct PreloadedCacheMarks {
+    pub alpaca_no_data_pairs: std::collections::HashMap<String, AlpacaNoDataPair>,
+    pub alpaca_backfill_complete_pairs: std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+    pub kraken_backfill_complete_pairs: std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+    pub kraken_futures_backfill_complete_pairs: std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+}
+
 pub struct TyphooNApp {
     /// Shared cache handle — opened once at startup.
     pub(crate) cache: Option<Arc<SqliteCache>>,
     /// Receiver for async cache open (delivered on first frame).
-    pub(crate) cache_rx: Option<std::sync::mpsc::Receiver<Arc<SqliteCache>>>,
+    pub(crate) cache_rx: Option<std::sync::mpsc::Receiver<(Arc<SqliteCache>, PreloadedCacheMarks)>>,
     /// Whether initial chart load has been done after cache arrived.
     pub(crate) cache_loaded: bool,
     /// Cache open error (shown in log if set).
     pub(crate) cache_err: Option<String>,
+
 
     /// Symbol input text in the toolbar.
     pub(crate) symbol_input: String,
