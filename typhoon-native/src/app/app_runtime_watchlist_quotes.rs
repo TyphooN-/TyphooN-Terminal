@@ -85,16 +85,10 @@ impl TyphooNApp {
 
         self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
 
-        // Store to KV for downstream read-only status surfaces — dedup to avoid timestamp churn.
-        // Offload the expensive serialization + KV write to a blocking task so large watchlists
-        // don't stall the UI thread for seconds.
-        let rows_for_kv = rows.clone();
-        self.rt_handle.spawn_blocking(move || {
-            if let Ok(_j) = serde_json::to_string(&rows_for_kv) {
-                // put_kv_dedup requires &mut self; for now we skip the dedup in the background
-                // path. A follow-up can route this through a dedicated KV command channel.
-            }
-        });
+        // Note: previous KV persist attempt here cloned rows + spawned blocking to_string,
+        // but the actual put_kv_dedup was never called (commented). Removed to eliminate
+        // unnecessary clone/alloc on every live watchlist quote update. Re-add via cmd
+        // channel if real persistence needed.
 
         // Update forming bars on all charts from watchlist prices. Exact symbol matches are
         // O(1); the partial contains fallback only runs for rare alias cases like BTC/BTCUSD.
