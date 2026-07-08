@@ -28,48 +28,32 @@ impl TyphooNApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_max_width(panel_width);
-
-                        if self.heavy_sync_in_progress {
-                            // Heavy backfill / sync in progress (high pending_fetches,
-                            // memory churn, cache loads). Skip expensive per-frame
-                            // account snapshots, PL sums, grids, toggles, and full
-                            // content in all right-panel sections.
-                            //
-                            // This directly targets the chrome_panels_ms stalls
-                            // (300-600ms+ and higher) + long frames in the attached log.
-                            ui.label(
-                                egui::RichText::new("⏳ heavy sync — right panel content deferred")
-                                    .small()
-                                    .color(AXIS_TEXT),
-                            );
-                        } else {
-                            let right_panel_order = self.normalized_right_panel_order();
-                            for section in right_panel_order {
-                                match section {
-                                    RightPanelSectionId::Trading => {
-                                        self.render_right_panel_trading_section(ui);
-                                    }
-                                    RightPanelSectionId::Positions => {
-                                        self.render_right_panel_positions_section(ui);
-                                    }
-                                    RightPanelSectionId::RecentFills => {
-                                        self.render_right_panel_recent_fills_section(ui);
-                                    }
-                                    RightPanelSectionId::Orders => {
-                                        self.render_right_panel_orders_section(ui);
-                                    }
-                                    RightPanelSectionId::Watchlist => {
-                                        self.render_right_panel_watchlist_section(ui);
-                                    }
-                                    RightPanelSectionId::Risk => {
-                                        self.render_right_panel_risk_section(ui);
-                                    }
-                                    RightPanelSectionId::News => {
-                                        self.render_right_panel_news_section(ui);
-                                    }
-                                    RightPanelSectionId::MtfGrid => {
-                                        self.render_right_panel_mtf_grid_section(ui);
-                                    }
+                        let right_panel_order = self.normalized_right_panel_order();
+                        for section in right_panel_order {
+                            match section {
+                                RightPanelSectionId::Trading => {
+                                    self.render_right_panel_trading_section(ui);
+                                }
+                                RightPanelSectionId::Positions => {
+                                    self.render_right_panel_positions_section(ui);
+                                }
+                                RightPanelSectionId::RecentFills => {
+                                    self.render_right_panel_recent_fills_section(ui);
+                                }
+                                RightPanelSectionId::Orders => {
+                                    self.render_right_panel_orders_section(ui);
+                                }
+                                RightPanelSectionId::Watchlist => {
+                                    self.render_right_panel_watchlist_section(ui);
+                                }
+                                RightPanelSectionId::Risk => {
+                                    self.render_right_panel_risk_section(ui);
+                                }
+                                RightPanelSectionId::News => {
+                                    self.render_right_panel_news_section(ui);
+                                }
+                                RightPanelSectionId::MtfGrid => {
+                                    self.render_right_panel_mtf_grid_section(ui);
                                 }
                             }
                         }
