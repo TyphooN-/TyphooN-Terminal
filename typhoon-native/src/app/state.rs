@@ -930,6 +930,11 @@ pub struct TyphooNApp {
     pub(crate) kraken_equity_universe_retry_after_ts: i64,
     pub(crate) kraken_equities_sync_pause_until_ts: i64,
     pub(crate) kraken_equities_sync_pause_reason: String,
+    pub(crate) alpaca_sync_pause_until_ts: i64,
+    pub(crate) alpaca_sync_pause_reason: String,
+    /// Consecutive Alpaca historical-data 429 events. A concurrent burst counts
+    /// once per active pause window; reset on successful Alpaca bar writes.
+    pub(crate) alpaca_consecutive_429: u32,
     pub(crate) yahoo_chart_sync_pause_until_ts: i64,
     pub(crate) yahoo_chart_sync_pause_reason: String,
     /// Consecutive Yahoo 429 rate-limit events (a concurrent burst counts once).

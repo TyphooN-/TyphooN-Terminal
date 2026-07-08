@@ -328,6 +328,14 @@ impl TyphooNApp {
                         self.kraken_equities_sync_pause_reason
                     )).color(egui::Color32::from_rgb(231, 76, 60)).small());
                 }
+                if self.alpaca_sync_pause_until_ts > now {
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!(
+                        "Alpaca background sync paused for {}s: {}",
+                        self.alpaca_sync_pause_until_ts - now,
+                        self.alpaca_sync_pause_reason
+                    )).color(egui::Color32::from_rgb(231, 76, 60)).small());
+                }
                 if self.yahoo_chart_sync_pause_until_ts > now {
                     ui.separator();
                     ui.label(egui::RichText::new(format!(

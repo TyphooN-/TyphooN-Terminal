@@ -185,6 +185,9 @@ pub async fn run_alpaca_batch_fetch_task(
                         success: false,
                     });
                 }
+                let _ = broker_msg_tx.send(BrokerMsg::AlpacaRateLimitObserved {
+                    historical_rpm: broker.bar_requests_per_minute(),
+                });
                 return;
             }
             for symbol in &symbols {
@@ -299,6 +302,9 @@ pub async fn run_alpaca_batch_fetch_task(
             }
         }
     }
+    let _ = broker_msg_tx.send(BrokerMsg::AlpacaRateLimitObserved {
+        historical_rpm: broker.bar_requests_per_minute(),
+    });
 }
 
 pub async fn run_alpaca_fetch_task(
@@ -509,22 +515,34 @@ pub async fn run_alpaca_fetch_task(
             Err(e) => {
                 let is_rate = e.contains("429") || e.to_lowercase().contains("rate limit");
                 let is_no_data = e.contains("No bar data for ");
-                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
-                    "Alpaca fetch bars failed for {} {}: {}",
-                    symbol, timeframe, e
-                )));
                 if is_no_data {
+                    tracing::debug!(
+                        "Alpaca {} {}: provider returned no bars — marking no-data",
+                        symbol,
+                        timeframe
+                    );
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaNoData {
                         symbol: symbol.clone(),
                         timeframe: timeframe.clone(),
                         reason: e.clone(),
                     });
                 } else if is_rate {
+                    tracing::debug!(
+                        "Alpaca {} {}: rate-limited fetch queued for retry: {}",
+                        symbol,
+                        timeframe,
+                        e
+                    );
                     let _ = broker_msg_tx.send(BrokerMsg::AlpacaRetryEnqueue {
                         symbol: symbol.clone(),
                         timeframe: timeframe.clone(),
                         reason: format!("err:{e}"),
                     });
+                } else {
+                    let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                        "Alpaca fetch bars failed for {} {}: {}",
+                        symbol, timeframe, e
+                    )));
                 }
             }
         }

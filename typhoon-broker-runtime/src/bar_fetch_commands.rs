@@ -158,10 +158,6 @@ pub async fn handle_bar_fetch_command(
                     Err(e) => {
                         let is_rate = e.contains("429") || e.to_lowercase().contains("rate limit");
                         let is_no_data = e.contains("No bar data for ");
-                        let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "BARDATA: {} {} — {}",
-                            symbol, timeframe, e
-                        )));
                         if is_no_data {
                             let _ = broker_msg_tx.send(BrokerMsg::AlpacaNoData {
                                 symbol: symbol.clone(),
@@ -174,6 +170,11 @@ pub async fn handle_bar_fetch_command(
                                 timeframe: timeframe.clone(),
                                 reason: format!("err:{}", e),
                             });
+                        } else {
+                            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "BARDATA: {} {} — {}",
+                                symbol, timeframe, e
+                            )));
                         }
                     }
                 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::app_runtime_support::should_emit_alpaca_retry_dispatch_log;
 
 fn kraken_equity_quote_meta_candidates(symbol: &str) -> Vec<String> {
     let raw = symbol.trim();
@@ -844,6 +845,7 @@ impl TyphooNApp {
         if !self.broker_connected
             || (!self.alpaca_full_bar_sync_enabled && !self.backfill_alpaca_kraken_equities_enabled)
             || self.alpaca_retry_queue.is_empty()
+            || self.alpaca_sync_pause_until_ts > now
             || !super::market_data_sync::background_retry_dispatch_allowed(
                 self.total_pending_market_data_fetches(),
             )
@@ -920,10 +922,7 @@ impl TyphooNApp {
             redispatched,
             self.alpaca_retry_queue.len()
         );
-        if redispatched >= redispatch_cap
-            || (self.alpaca_retry_queue.len() > 0
-                && self.alpaca_retry_queue.len().is_multiple_of(100))
-        {
+        if should_emit_alpaca_retry_dispatch_log(self.alpaca_retry_queue.len()) {
             self.log.push_back(LogEntry::info(format!(
                 "Alpaca retry: re-dispatched {} symbol(s) ({} in queue)",
                 redispatched,

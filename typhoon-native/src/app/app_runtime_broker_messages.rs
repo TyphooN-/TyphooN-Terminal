@@ -4,8 +4,8 @@ fn crossed_marker_milestone(before: usize, after: usize, interval: usize) -> boo
     interval > 0 && after > before && after.is_multiple_of(interval)
 }
 use crate::app::app_runtime_support::{
-    broker_msg_kind, is_routine_news_progress, json_result_card_from_text,
-    should_emit_alpaca_retry_queue_log,
+    alpaca_retry_reason_is_rate_limited, alpaca_sync_429_pause_secs, broker_msg_kind,
+    is_routine_news_progress, json_result_card_from_text, should_emit_alpaca_retry_queue_log,
 };
 
 impl TyphooNApp {
@@ -937,6 +937,19 @@ impl TyphooNApp {
                     timeframe,
                     reason,
                 } => {
+                    let now = chrono::Utc::now().timestamp();
+                    if alpaca_retry_reason_is_rate_limited(&reason)
+                        && self.alpaca_sync_pause_until_ts <= now
+                    {
+                        self.alpaca_consecutive_429 = self.alpaca_consecutive_429.saturating_add(1);
+                        let pause = alpaca_sync_429_pause_secs(self.alpaca_consecutive_429);
+                        self.alpaca_sync_pause_until_ts = now + pause;
+                        self.alpaca_sync_pause_reason = reason.clone();
+                        self.log.push_back(LogEntry::warn(format!(
+                            "Alpaca historical data rate limited (x{}) — pausing background Alpaca sync {}s",
+                            self.alpaca_consecutive_429, pause
+                        )));
+                    }
                     self.alpaca_retry_enqueue(&symbol, &timeframe, &reason);
                     let queue_len = self.alpaca_retry_queue.len();
                     tracing::debug!(

@@ -91,6 +91,9 @@ impl TyphooNApp {
             self.note_cached_sync_success(&source, &symbol, &timeframe, count);
         }
         if source == "alpaca" {
+            if self.alpaca_consecutive_429 != 0 {
+                self.alpaca_consecutive_429 = 0;
+            }
             // Any newly-written bars supersede prior no-data tombstones.
             self.alpaca_no_data_drain(&symbol, &timeframe);
             // Avoid a synchronous full SQLite storage-stat scan for every

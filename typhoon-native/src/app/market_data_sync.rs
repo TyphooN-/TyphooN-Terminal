@@ -158,6 +158,10 @@ fn background_market_data_fetch_allowed(focus: bool, pending_fetches: usize) -> 
     current_market_data_memory_pressure() != MarketDataMemoryPressure::PauseBackground
 }
 
+fn alpaca_background_sync_paused_until(pause_until_ts: i64, now_s: i64) -> bool {
+    pause_until_ts > now_s
+}
+
 fn memory_bounded_available_slots(
     queue_window: usize,
     pending: usize,
@@ -1388,7 +1392,10 @@ impl TyphooNApp {
             }
         }
 
-        if self.backfill_alpaca_kraken_equities_enabled && !fallback_timeframes.is_empty() {
+        if self.backfill_alpaca_kraken_equities_enabled
+            && !fallback_timeframes.is_empty()
+            && !alpaca_background_sync_paused_until(self.alpaca_sync_pause_until_ts, now_s)
+        {
             let alpaca_timeframes: Vec<String> = fallback_timeframes
                 .iter()
                 .filter(|tf| alpaca_sync_target_bars(tf).is_some())
@@ -1866,6 +1873,14 @@ impl TyphooNApp {
             .copied();
         let norm_sym = normalize_market_data_symbol(&symbol).replace("/", "");
         let focus = self.cached_active_symbols_set.contains(&norm_sym);
+        if !focus
+            && alpaca_background_sync_paused_until(
+                self.alpaca_sync_pause_until_ts,
+                chrono::Utc::now().timestamp(),
+            )
+        {
+            return false;
+        }
         if !background_market_data_fetch_allowed(focus, self.total_pending_market_data_fetches()) {
             return false;
         }
@@ -2242,6 +2257,10 @@ impl TyphooNApp {
         }
 
         let full_tilt = self.full_tilt_sync_enabled();
+        let now_s = chrono::Utc::now().timestamp();
+        if alpaca_background_sync_paused_until(self.alpaca_sync_pause_until_ts, now_s) {
+            return 0;
+        }
         let capacity = self.alpaca_sync_capacity();
         let available_slots = memory_bounded_available_slots(
             capacity.queue_window,
@@ -2268,7 +2287,6 @@ impl TyphooNApp {
             self.alpaca_backfill_complete_load();
         }
         self.ensure_unresolvable_fetch_key_index();
-        let now_s = chrono::Utc::now().timestamp();
         let mut no_data_keys: std::collections::HashSet<String> =
             self.alpaca_no_data_pairs.keys().cloned().collect();
         if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca") {
@@ -2912,6 +2930,13 @@ mod tests {
         assert!(!background_retry_dispatch_allowed(
             BACKGROUND_RETRY_PENDING_FETCH_CAP
         ));
+    }
+
+    #[test]
+    fn alpaca_background_sync_pause_is_time_bounded() {
+        assert!(!alpaca_background_sync_paused_until(999, 1000));
+        assert!(!alpaca_background_sync_paused_until(1000, 1000));
+        assert!(alpaca_background_sync_paused_until(1001, 1000));
     }
 
     #[test]

@@ -377,7 +377,7 @@ impl YahooSession {
         // boot trace stays clean.
         match client.get("https://fc.yahoo.com").send().await {
             Ok(r) => tracing::debug!("Yahoo fc.yahoo.com: status {}", r.status()),
-            Err(e) => tracing::warn!("Yahoo fc.yahoo.com failed (non-fatal): {}", e),
+            Err(e) => tracing::debug!("Yahoo fc.yahoo.com failed (non-fatal): {}", e),
         }
 
         // Step 2: Get crumb directly (the fc.yahoo.com cookies are enough)
@@ -395,7 +395,7 @@ impl YahooSession {
             .map_err(|e| format!("Yahoo crumb read failed: {e}"))?;
 
         if !status.is_success() {
-            tracing::warn!("Yahoo crumb returned {} — trying without crumb", status);
+            tracing::debug!("Yahoo crumb returned {} — trying without crumb", status);
             return Ok(Self {
                 client,
                 crumb: String::new(),
@@ -403,7 +403,7 @@ impl YahooSession {
         }
 
         if crumb.is_empty() || crumb.contains('<') || crumb.len() > 50 {
-            tracing::warn!(
+            tracing::debug!(
                 "Yahoo crumb looks invalid ({} bytes) — trying without crumb",
                 crumb.len()
             );

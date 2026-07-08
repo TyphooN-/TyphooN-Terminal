@@ -36,6 +36,24 @@ pub(super) fn should_emit_alpaca_retry_queue_log(queue_len: usize) -> bool {
     queue_len > 0 && queue_len.is_multiple_of(100)
 }
 
+pub(super) fn should_emit_alpaca_retry_dispatch_log(queue_len: usize) -> bool {
+    queue_len > 0 && queue_len.is_multiple_of(100)
+}
+
+pub(super) fn alpaca_retry_reason_is_rate_limited(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("429") || lower.contains("rate_limited") || lower.contains("rate limit")
+}
+
+pub(super) fn alpaca_sync_429_pause_secs(consecutive_429: u32) -> i64 {
+    match consecutive_429 {
+        0 | 1 => 60,
+        2 => 120,
+        3 => 300,
+        _ => 600,
+    }
+}
+
 pub(super) fn is_routine_news_progress(msg: &str) -> bool {
     (msg.starts_with("News ")
         && (msg.contains(": base asset ")

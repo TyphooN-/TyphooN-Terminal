@@ -90,6 +90,33 @@ fn alpaca_retry_queue_log_is_milestoned() {
 }
 
 #[test]
+fn alpaca_retry_dispatch_log_is_milestoned_not_every_tick() {
+    assert!(!should_emit_alpaca_retry_dispatch_log(0));
+    assert!(!should_emit_alpaca_retry_dispatch_log(24));
+    assert!(!should_emit_alpaca_retry_dispatch_log(263));
+    assert!(should_emit_alpaca_retry_dispatch_log(300));
+}
+
+#[test]
+fn alpaca_retry_reason_detects_rate_limit_variants() {
+    assert!(alpaca_retry_reason_is_rate_limited("rate_limited_empty"));
+    assert!(alpaca_retry_reason_is_rate_limited("batch_rate_limited_partial"));
+    assert!(alpaca_retry_reason_is_rate_limited("err:HTTP 429 (feed=Some(\"iex\"))"));
+    assert!(alpaca_retry_reason_is_rate_limited("Rate limit exceeded"));
+    assert!(!alpaca_retry_reason_is_rate_limited("provider returned no bars"));
+}
+
+#[test]
+fn alpaca_sync_429_pause_escalates_and_caps() {
+    assert_eq!(alpaca_sync_429_pause_secs(0), 60);
+    assert_eq!(alpaca_sync_429_pause_secs(1), 60);
+    assert_eq!(alpaca_sync_429_pause_secs(2), 120);
+    assert_eq!(alpaca_sync_429_pause_secs(3), 300);
+    assert_eq!(alpaca_sync_429_pause_secs(4), 600);
+    assert_eq!(alpaca_sync_429_pause_secs(99), 600);
+}
+
+#[test]
 fn broad_kraken_fundamentals_auto_scrape_is_bounded() {
     assert!(!should_auto_start_kraken_fundamentals_scrape(0));
     assert!(should_auto_start_kraken_fundamentals_scrape(512));
