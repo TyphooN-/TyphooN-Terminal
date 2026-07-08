@@ -65,6 +65,7 @@ impl TyphooNApp {
         let kraken_scrape_schema = value["kraken_scrape_schema"].as_u64().unwrap_or(1);
         if let Some(enabled) = value["alpaca_enabled"].as_bool() {
             self.alpaca_enabled = enabled;
+            self.primary_cycle_dirty = true;
         }
         if let Some(enabled) = value["alpaca_full_bar_sync_enabled"].as_bool() {
             self.alpaca_full_bar_sync_enabled = enabled;
@@ -74,6 +75,7 @@ impl TyphooNApp {
         }
         if let Some(enabled) = value["kraken_enabled"].as_bool() {
             self.kraken_enabled = enabled;
+            self.primary_cycle_dirty = true;
         }
         if let Some(primary) = value["primary_broker"]
             .as_str()

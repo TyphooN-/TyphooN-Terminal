@@ -14,15 +14,7 @@ impl TyphooNApp {
         self.live_account = Some(acct);
     }
 
-    pub(super) fn handle_alpaca_positions(&mut self, pos: Vec<PositionInfo>) {
-        if !self.alpaca_enabled {
-            return;
-        }
-        self.positions_last_update_ts = chrono::Utc::now().timestamp();
-        if let Ok(json) = serde_json::to_string(&pos) {
-            self.put_kv_dedup("broker:positions", &json);
-        }
-        self.live_positions = pos;
+    fn rebuild_live_positions_by_symbol(&mut self) {
         self.live_positions_by_symbol = self
             .live_positions
             .iter()
@@ -35,6 +27,18 @@ impl TyphooNApp {
                 (key, p.clone())
             })
             .collect();
+    }
+
+    pub(super) fn handle_alpaca_positions(&mut self, pos: Vec<PositionInfo>) {
+        if !self.alpaca_enabled {
+            return;
+        }
+        self.positions_last_update_ts = chrono::Utc::now().timestamp();
+        if let Ok(json) = serde_json::to_string(&pos) {
+            self.put_kv_dedup("broker:positions", &json);
+        }
+        self.live_positions = pos;
+        self.rebuild_live_positions_by_symbol();
     }
 
     pub(super) fn handle_alpaca_account_positions(&mut self, accounts: Vec<AccountPositions>) {
@@ -60,18 +64,7 @@ impl TyphooNApp {
                 self.put_kv_dedup("broker:positions", &json);
             }
             self.live_positions = primary.positions.clone();
-            self.live_positions_by_symbol = self
-                .live_positions
-                .iter()
-                .map(|p| {
-                    let key = bare_symbol_from_key(&p.symbol)
-                        .replace("/", "")
-                        .trim_end_matches(".EQ")
-                        .trim_end_matches(".eq")
-                        .to_ascii_uppercase();
-                    (key, p.clone())
-                })
-                .collect();
+            self.rebuild_live_positions_by_symbol();
         }
         self.alpaca_account_positions = accounts;
         self.alpaca_account_positions_by_id = self

@@ -1433,6 +1433,7 @@ impl TyphooNApp {
                 }
                 if let Some(enabled) = v["alpaca_enabled"].as_bool() {
                     self.alpaca_enabled = enabled;
+                    self.primary_cycle_dirty = true;
                 }
                 if let Some(enabled) = v["alpaca_full_bar_sync_enabled"].as_bool() {
                     self.alpaca_full_bar_sync_enabled = enabled;
@@ -1442,6 +1443,7 @@ impl TyphooNApp {
                 }
                 if let Some(enabled) = v["kraken_enabled"].as_bool() {
                     self.kraken_enabled = enabled;
+                    self.primary_cycle_dirty = true;
                 }
                 if let Some(enabled) = v["backfill_alpaca_kraken_equities_enabled"].as_bool() {
                     self.backfill_alpaca_kraken_equities_enabled = enabled;

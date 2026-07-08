@@ -336,12 +336,12 @@ impl TyphooNApp {
                 )
             })
             .collect();
-        self.log.push_back(LogEntry::info(format!(
+        tracing::debug!(
             "{} accounts ({} connected): {}",
             broker.label(),
             connected,
             summary.join(", ")
-        )));
+        );
         match broker {
             OrderBroker::Alpaca => {
                 let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
@@ -364,9 +364,10 @@ impl TyphooNApp {
                 {
                     self.alpaca_primary_account_id = primary.id.clone();
                 }
-                self.alpaca_account_roster = accounts.clone();
+                self.alpaca_account_roster = accounts;
                 self.alpaca_roster_by_id = roster_by_id;
                 self.alpaca_primary_roster_entry = primary_entry;
+                self.primary_cycle_dirty = true;
             }
             OrderBroker::Kraken => {
                 let mut roster_by_id = std::collections::HashMap::with_capacity(accounts.len());
@@ -389,9 +390,10 @@ impl TyphooNApp {
                 {
                     self.kraken_primary_account_id = primary.id.clone();
                 }
-                self.kraken_account_roster = accounts.clone();
+                self.kraken_account_roster = accounts;
                 self.kraken_roster_by_id = roster_by_id;
                 self.kraken_primary_roster_entry = primary_entry;
+                self.primary_cycle_dirty = true;
             }
         }
     }
@@ -399,7 +401,10 @@ impl TyphooNApp {
     /// Cycle order for the top-bar Primary switch: every connected (or, before
     /// connect, configured) account of every enabled broker. Entries are
     /// (broker, account_id, chip label).
-    pub(crate) fn primary_account_cycle(&self) -> Vec<(OrderBroker, String, String)> {
+    pub(crate) fn primary_account_cycle(&mut self) -> Vec<(OrderBroker, String, String)> {
+        if !self.primary_cycle_dirty && !self.cached_primary_cycle.is_empty() {
+            return self.cached_primary_cycle.clone();
+        }
         let mut out: Vec<(OrderBroker, String, String)> = Vec::new();
         if self.alpaca_enabled {
             let connected: Vec<&AccountRosterEntry> = self
@@ -437,14 +442,16 @@ impl TyphooNApp {
                 }
             }
         }
+        self.cached_primary_cycle = out.clone();
+        self.primary_cycle_dirty = false;
         out
     }
 
     /// Currently-selected account id for a broker (the per-broker primary).
-    pub(crate) fn primary_account_id_for(&self, broker: OrderBroker) -> String {
+    pub(crate) fn primary_account_id_for(&self, broker: OrderBroker) -> &str {
         match broker {
-            OrderBroker::Alpaca => self.alpaca_primary_account_id.clone(),
-            OrderBroker::Kraken => self.kraken_primary_account_id.clone(),
+            OrderBroker::Alpaca => &self.alpaca_primary_account_id,
+            OrderBroker::Kraken => &self.kraken_primary_account_id,
         }
     }
 
@@ -518,8 +525,8 @@ impl TyphooNApp {
             return;
         }
         let mut show = self.show_tradecopy;
-        let alpaca_roster = self.alpaca_account_roster.clone();
-        let kraken_roster = self.kraken_account_roster.clone();
+        let alpaca_roster = &self.alpaca_account_roster;
+        let kraken_roster = &self.kraken_account_roster;
         let alpaca_connected: Vec<&AccountRosterEntry> =
             alpaca_roster.iter().filter(|a| a.connected).collect();
         let kraken_connected: Vec<&AccountRosterEntry> =

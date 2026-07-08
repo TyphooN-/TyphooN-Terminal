@@ -347,6 +347,9 @@ pub struct TyphooNApp {
         std::collections::HashMap<String, KrakenAccountPositions>,
     pub(crate) kraken_account_orders_by_id: std::collections::HashMap<String, KrakenAccountOrders>,
     pub(crate) kraken_account_trades_by_id: std::collections::HashMap<String, KrakenAccountTrades>,
+    /// Cached primary account cycle to avoid repeated filter + collect in every render frame (toolbar).
+    pub(crate) cached_primary_cycle: Vec<(OrderBroker, String, String)>,
+    pub(crate) primary_cycle_dirty: bool,
     pub(crate) kraken_enabled: bool,
     pub(crate) kraken_connected: bool,
     pub(crate) kraken_pairs_requested: bool,

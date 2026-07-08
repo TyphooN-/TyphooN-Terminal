@@ -2951,6 +2951,8 @@ impl TyphooNApp {
             screenshots_sort_asc: false,
             screenshots_last_refresh: 0,
             show_screenshots_gallery: false,
+            cached_primary_cycle: Vec::new(),
+            primary_cycle_dirty: true,
         };
 
         // ── Prometheus metrics server ────────────────────────────────────────
