@@ -365,117 +365,10 @@ impl TyphooNApp {
                                 .iter()
                                 .chain(self.kr_positions.iter())
                                 .find(|pos| pos.symbol.contains(chart_symbol));
-                            let account_snaps: Vec<_> = self
-                                .selected_trade_account_snapshots()
-                                .into_iter()
-                                .filter(|snap| match snap.broker {
-                                    "Alpaca" => self.show_alpaca_positions,
-                                    "Kraken" => self.show_kr_positions,
-                                    _ => true,
-                                })
-                                .collect();
-                            // One row: position info first, broker chip(s) trailing.
-                            // Wraps if it overflows the panel width, so SL/TP/RR can
-                            // spill to the next line — but the L/P&L/chip group stays
-                            // together when there's space.
-                            ui.horizontal_wrapped(|ui| {
-                                let alpaca_account_pl = if self.live_positions.is_empty() {
-                                    None
-                                } else {
-                                    let mut total_pl = 0.0;
-                                    for pos in &self.live_positions {
-                                        let current_price = self
-                                            .live_quote_mid_for_symbol(&pos.symbol)
-                                            .or_else(|| self.latest_cached_equity_price_for_symbol(&pos.symbol))
-                                            .or_else(|| {
-                                                (pos.qty.abs() > f64::EPSILON)
-                                                    .then_some(pos.market_value.abs() / pos.qty.abs())
-                                            });
-                                        let display_pl = super::app_runtime_right_panel_positions::position_unrealized_pl_from_price(pos, current_price);
-                                        total_pl += display_pl;
-                                    }
-                                    let account_basis = self
-                                        .live_account
-                                        .as_ref()
-                                        .map(|acct| {
-                                            if acct.last_equity.is_finite()
-                                                && acct.last_equity > f64::EPSILON
-                                            {
-                                                acct.last_equity
-                                            } else {
-                                                acct.equity
-                                            }
-                                        })
-                                        .unwrap_or(0.0);
-                                    (account_basis.abs() > f64::EPSILON).then_some((
-                                        total_pl,
-                                        super::app_runtime_right_panel_positions::position_unrealized_pl_pct_of_account(total_pl, account_basis),
-                                    ))
-                                };
-                                for snap in &account_snaps {
-                                    let is_alpaca = snap.broker == "Alpaca";
-                                    let is_kraken = snap.broker == "Kraken";
-                                    let broker_pl = if is_kraken {
-                                        let mut total_pl = 0.0;
-                                        let mut total_basis = 0.0;
-                                        for (asset, qty) in
-                                            self.kraken_balances.iter().filter(|(asset, qty)| {
-                                                qty.is_finite()
-                                                    && *qty > 0.0
-                                                    && !Self::kraken_is_cash_balance_asset(asset)
-                                            })
-                                        {
-                                            let pair =
-                                                Self::kraken_spot_pair_for_balance_asset(asset);
-                                            let avg = self.kraken_balance_avg_price(asset);
-                                            let current = if Self::kraken_display_asset(asset)
-                                                .ends_with(".EQ")
-                                            {
-                                                self.latest_cached_equity_price_for_symbol(&pair)
-                                            } else {
-                                                self.latest_cached_price_for_symbol(&pair)
-                                            };
-                                            if let (Some(avg), Some(current)) = (avg, current) {
-                                                total_pl += (current - avg) * qty;
-                                                total_basis += avg.abs() * qty.abs();
-                                            }
-                                        }
-                                        (total_basis > f64::EPSILON)
-                                            .then_some((total_pl, total_pl / total_basis * 100.0))
-                                    } else {
-                                        alpaca_account_pl
-                                    };
-                                    let primary_paper = self.alpaca_primary_is_paper();
-                                    let is_live = !is_alpaca || !primary_paper;
-                                    let mode = if is_alpaca && primary_paper {
-                                        "Paper"
-                                    } else {
-                                        "Live"
-                                    };
-                                    let account_color =
-                                        if is_live { UP } else { egui::Color32::WHITE };
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "[ {} ({}) ] Equity: ${:.0}",
-                                            snap.broker, mode, snap.equity
-                                        ))
-                                        .color(account_color)
-                                        .small()
-                                        .strong(),
-                                    );
-                                    let (pl, pl_pct) = broker_pl.unwrap_or((0.0, 0.0));
-                                    let pl_c = if pl >= 0.0 { UP } else { DOWN };
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "Open P&L: ${:+.2} ({:+.2}%)",
-                                            pl, pl_pct
-                                        ))
-                                        .color(pl_c)
-                                        .small()
-                                        .strong(),
-                                    );
-                                }
-                                if let Some(pos) = active_pos {
+                            // SL/TP/R:R info (trading-specific). Risk/equity summaries
+                            // now live only inside the Risk & Account widget.
+                            if let Some(pos) = active_pos {
+                                ui.horizontal_wrapped(|ui| {
                                     if let Some(sl) = self.sl_price {
                                         let sl_pl = (close - sl)
                                             * pos.qty
@@ -508,8 +401,8 @@ impl TyphooNApp {
                                                 .small(),
                                         );
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     }
                 });
