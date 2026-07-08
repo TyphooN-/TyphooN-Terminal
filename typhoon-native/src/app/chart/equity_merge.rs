@@ -1138,11 +1138,11 @@ pub(crate) fn chart_log_merged_cache_load_start(
     timeframe: &str,
 ) -> (std::time::Instant, Option<f64>) {
     let rss = chart_process_rss_mb();
-    let msg = format!(
+    let _ = log;
+    tracing::debug!(
         "Merged cache load start ({context}): {symbol} [{timeframe}] rss={}",
         chart_rss_label(rss)
     );
-    log.push_back(LogEntry::info(msg));
     (std::time::Instant::now(), rss)
 }
 
@@ -1156,13 +1156,19 @@ pub(crate) fn chart_log_merged_cache_load_done(
     rss_before_mb: Option<f64>,
 ) {
     let rss_after_mb = chart_process_rss_mb();
-    let msg = format!(
-        "Merged cache load done ({context}): {bars} bars for {symbol} [{timeframe}] load_ms={:.2} rss={} → {}",
-        started_at.elapsed().as_secs_f64() * 1000.0,
+    let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
+    tracing::debug!(
+        "Merged cache load done ({context}): {bars} bars for {symbol} [{timeframe}] load_ms={elapsed_ms:.2} rss={} → {}",
         chart_rss_label(rss_before_mb),
         chart_rss_label(rss_after_mb)
     );
-    log.push_back(LogEntry::info(msg));
+    if elapsed_ms >= 250.0 {
+        log.push_back(LogEntry::warn(format!(
+            "Slow merged cache load ({context}): {bars} bars for {symbol} [{timeframe}] load_ms={elapsed_ms:.2} rss={} → {}",
+            chart_rss_label(rss_before_mb),
+            chart_rss_label(rss_after_mb)
+        )));
+    }
 }
 
 fn chart_build_merged_equity_bars_from_cache(

@@ -1847,10 +1847,11 @@ impl TyphooNApp {
             .contains_key(&alpaca_fetch_key(&symbol, tf))
             || self.is_unresolvable_fetch_key("alpaca", &symbol, tf)
         {
-            self.log.push_back(LogEntry::warn(format!(
+            tracing::debug!(
                 "Alpaca {} {}: known no-data symbol — skipping fetch",
-                symbol, tf
-            )));
+                symbol,
+                tf
+            );
             return false;
         }
         if !self.alpaca_backfill_complete_loaded {

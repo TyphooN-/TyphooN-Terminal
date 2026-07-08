@@ -57,6 +57,7 @@ pub(crate) fn draw_header_crosshair_and_legend(
             sym_galley.rect.height() + header_pad_y * 2.0,
         ),
     );
+    let mut hover_data_occupies_header_row = false;
 
     // ── crosshair ────────────────────────────────────────────────────────────
     if let Some(pos) = crosshair {
@@ -274,12 +275,20 @@ pub(crate) fn draw_header_crosshair_and_legend(
                     .unwrap_or(tooltip.len());
                 let data_h = if ind_text.is_some() { 34.0 } else { 20.0 };
                 // Anchor below both the symbol header row AND the indicator legend
-                // row (which starts at ~top+34) so the hover readout never overlaps
-                // either overlay and remains readable in all MTF/single views.
+                // row when the pane is tall enough. In compressed MTF cells there
+                // physically is not room for header + legend + a two-line data
+                // window; clamping the data window upward made the rows paint on
+                // top of each other. In that case, let hover data take the header
+                // row for this frame and skip lower-priority header/legend text.
                 let legend_row = chart_rect.top() + 38.0;
-                let data_y = (sym_rect.bottom() + 22.0)
-                    .max(legend_row)
-                    .min((chart_rect.bottom() - data_h - 2.0).max(chart_rect.top() + 2.0));
+                let stacked_y = (sym_rect.bottom() + 22.0).max(legend_row);
+                let stacked_fits = stacked_y + data_h + 2.0 <= chart_rect.bottom();
+                let data_y = if stacked_fits {
+                    stacked_y
+                } else {
+                    hover_data_occupies_header_row = true;
+                    (chart_rect.bottom() - data_h - 2.0).max(chart_rect.top() + 2.0)
+                };
                 // Semi-transparent background behind data text. It intentionally
                 // sits under the symbol/timeframe header with matching blue trim,
                 // instead of competing for the same top-left pixels.
@@ -316,6 +325,10 @@ pub(crate) fn draw_header_crosshair_and_legend(
                 }
             }
         }
+    }
+
+    if hover_data_occupies_header_row {
+        return;
     }
 
     // ── symbol / tf label ───────────────────────────────────────────────────

@@ -601,6 +601,26 @@ impl TyphooNApp {
             let first_ready_snapshot = data.sync_state_ready && !self.bg.sync_state_ready;
             if !self.heavy_sync_in_progress || bg_window_visible || first_ready_snapshot {
                 self.replace_bg_snapshot_off_ui_drop(data);
+                if first_ready_snapshot {
+                    // The broad bar schedulers are intentionally gated until the
+                    // BG thread has produced the first cache coverage snapshot;
+                    // before this point every catalog cell looks Missing and a
+                    // cold start can stampede full-history requests. Catalog and
+                    // broker-connect messages can arrive earlier, so their refill
+                    // attempts no-op under the gate. Kick the scheduler exactly
+                    // when the gate opens instead of waiting for the next periodic
+                    // tick or a chart-hover/user-demand path to enqueue work.
+                    let pending_before = self.total_pending_market_data_fetches();
+                    self.refill_market_data_sync_slots();
+                    let pending_after = self.total_pending_market_data_fetches();
+                    if pending_after > pending_before {
+                        self.log.push_back(LogEntry::info(format!(
+                            "Bar sync scheduler started from startup cache snapshot — queued {} fetch(es), {} pending",
+                            pending_after - pending_before,
+                            pending_after
+                        )));
+                    }
+                }
             } else {
                 tracing::debug!(
                     "Deferred BG snapshot apply during heavy sync (sec_filings={}, details={})",

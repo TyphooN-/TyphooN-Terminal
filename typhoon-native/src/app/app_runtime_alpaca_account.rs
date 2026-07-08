@@ -87,6 +87,7 @@ impl TyphooNApp {
         }
         self.all_broker_assets = assets;
         self.all_broker_assets_fetched = true;
+        self.refill_market_data_sync_slots();
     }
 
     pub(super) fn handle_alpaca_recent_fills(&mut self, fills: Vec<RecentFillRow>) {
