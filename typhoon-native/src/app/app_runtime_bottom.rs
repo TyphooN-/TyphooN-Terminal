@@ -229,28 +229,49 @@ impl TyphooNApp {
                 ui.separator();
                 match self.bottom_tab {
                     BottomTab::Log => {
-                        egui::ScrollArea::both()
+                        // Rendering every retained log row every frame is extremely
+                        // expensive when the terminal is printing high-frequency sync
+                        // progress. Virtualize it: layout all rows for scroll height,
+                        // paint/click-test only the visible rows. Keep vertical-only
+                        // scrolling; horizontal `ScrollArea::both` with unwrapped
+                        // long log strings was the dominant bottom-panel stall during
+                        // heavy sync.
+                        let visible_log_indices: Vec<usize> = self
+                            .log
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(idx, entry)| {
+                                entry.matches_filter(self.log_filter).then_some(idx)
+                            })
+                            .collect();
+                        let mut selected_ticker: Option<String> = None;
+                        egui::ScrollArea::vertical()
                             .stick_to_bottom(true)
                             .auto_shrink(false)
-                            .show(ui, |ui| {
-                                for entry in &self.log {
-                                    if !entry.matches_filter(self.log_filter) {
+                            .show_rows(ui, 14.0, visible_log_indices.len(), |ui, row_range| {
+                                for row_idx in row_range {
+                                    let Some(entry) = visible_log_indices
+                                        .get(row_idx)
+                                        .and_then(|idx| self.log.get(*idx))
+                                    else {
                                         continue;
-                                    }
-                                    let response = ui.add(
+                                    };
+                                    let response = ui.add_sized(
+                                        [ui.available_width(), 14.0],
                                         egui::Label::new(
                                             egui::RichText::new(&entry.display)
                                                 .color(entry.color())
                                                 .font(egui::FontId::monospace(11.0)),
                                         )
-                                        .wrap_mode(egui::TextWrapMode::Extend)
+                                        .wrap_mode(egui::TextWrapMode::Truncate)
                                         .sense(egui::Sense::click()),
                                     );
-                                    // Clickable log entries: detect ticker symbols (ALL CAPS, 2-6 chars)
+                                    // Clickable log entries: detect ticker symbols (ALL CAPS, 2-8 chars)
                                     if response.clicked() {
-                                        // Extract first uppercase word that looks like a ticker
-                                        if let Some(ticker) =
-                                            entry.msg.split_whitespace().find(|w| {
+                                        selected_ticker = entry
+                                            .msg
+                                            .split_whitespace()
+                                            .find(|w| {
                                                 w.len() >= 2
                                                     && w.len() <= 8
                                                     && w.chars().all(|c| {
@@ -259,12 +280,13 @@ impl TyphooNApp {
                                                             || c == '/'
                                                     })
                                             })
-                                        {
-                                            self.symbol_input = ticker.to_string();
-                                        }
+                                            .map(|ticker| ticker.to_string());
                                     }
                                 }
                             });
+                        if let Some(ticker) = selected_ticker {
+                            self.symbol_input = ticker;
+                        }
                     }
                 }
             });
