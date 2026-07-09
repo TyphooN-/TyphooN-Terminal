@@ -474,6 +474,7 @@ impl TyphooNApp {
                     ws_api_key: self.kraken_ws_api_key.clone(),
                     ws_api_secret: self.kraken_ws_api_secret.clone(),
                     extra_accounts: self.kraken_extra_account_specs(),
+                    primary_paper: self.kraken_paper,
                 });
                 self.log
                     .push_back(LogEntry::info("Kraken auto-connecting..."));

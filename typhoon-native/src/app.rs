@@ -296,6 +296,7 @@ impl TyphooNApp {
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
+            kraken_paper: false,
             alpaca_extra_accounts: default_alpaca_extra_accounts(),
             alpaca_primary_account_id: "alpaca1".to_string(),
             alpaca_account_roster: Vec::new(),

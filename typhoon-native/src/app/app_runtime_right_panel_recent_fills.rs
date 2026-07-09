@@ -118,7 +118,7 @@ impl TyphooNApp {
             label: primary
                 .as_ref()
                 .map(|account| account.label.clone())
-                .unwrap_or_else(|| "Alpaca 1".to_string()),
+                .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
             is_primary: true,
             rows: self.recent_fills.clone(),
         }]
@@ -195,9 +195,10 @@ impl TyphooNApp {
     ) {
         ui.horizontal_wrapped(|ui| {
             if self.alpaca_enabled && alpaca_accounts.len() <= 1 {
+                let alpaca_slabel = if self.broker_paper { "Alpaca (Paper)" } else { "Alpaca (Live)" };
                 ui.checkbox(
                     &mut self.show_alpaca_positions,
-                    egui::RichText::new("Alpaca").small(),
+                    egui::RichText::new(alpaca_slabel).small(),
                 );
             }
             for account in alpaca_accounts {

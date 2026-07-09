@@ -98,7 +98,7 @@ impl TyphooNApp {
                                 .find(|account| account.is_primary)
                                 .map(|account| account.label.clone())
                         })
-                        .unwrap_or_else(|| "Alpaca 1".to_string()),
+                        .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
                     is_primary: true,
                     account_equity: self
                         .live_account
@@ -202,7 +202,8 @@ impl TyphooNApp {
                     .collect();
                 ui.horizontal_wrapped(|ui| {
                     if alpaca_positions_available && alpaca_toggles.len() <= 1 {
-                        ui.checkbox(&mut self.show_alpaca_positions, egui::RichText::new("Alpaca").small());
+                        let alpaca_slabel = if self.broker_paper { "Alpaca (Paper)" } else { "Alpaca (Live)" };
+                        ui.checkbox(&mut self.show_alpaca_positions, egui::RichText::new(alpaca_slabel).small());
                     }
                     for (account_id, label, count, is_primary) in alpaca_toggles {
                         let mut shown = self.show_alpaca_positions
@@ -241,7 +242,8 @@ impl TyphooNApp {
                         })
                         .collect();
                     if kr_positions_available && kraken_toggles.len() <= 1 {
-                        ui.checkbox(&mut self.show_kr_positions, egui::RichText::new("Kraken (Live)").small());
+                        let slabel = kraken_toggles.first().map(|(_, l, _, _)| l.clone()).unwrap_or_else(|| "Kraken (Live)".to_string());
+                        ui.checkbox(&mut self.show_kr_positions, egui::RichText::new(slabel).small());
                     }
                     let single_kraken_account = kraken_toggles.len() <= 1;
                     if !single_kraken_account {

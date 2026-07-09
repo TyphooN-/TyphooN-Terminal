@@ -298,6 +298,7 @@ pub struct TyphooNApp {
     pub(crate) broker_api_key: String,
     pub(crate) broker_secret: String,
     pub(crate) broker_paper: bool,
+    pub(crate) kraken_paper: bool,
     /// Alpaca account slots 2–4 (credentials via keyring slots, metadata via
     /// session persistence).
     pub(crate) alpaca_extra_accounts: Vec<ExtraAccountConfig>,

@@ -103,7 +103,7 @@ impl TyphooNApp {
                     .unwrap_or_else(|| self.alpaca_primary_account_id.clone()),
                 label: primary
                     .map(|account| account.label.clone())
-                    .unwrap_or_else(|| "Alpaca 1".to_string()),
+                    .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
                 is_primary: true,
                 equity: acct.equity,
                 previous_equity: acct.last_equity,
@@ -197,7 +197,8 @@ impl TyphooNApp {
                     .alpaca_primary_risk_account_id()
                     .map(|id| !self.hidden_alpaca_risk_account_ids.contains(&id))
                     .unwrap_or(true);
-                if ui.checkbox(&mut shown, egui::RichText::new("Alpaca").small()).changed() {
+                let alpaca_slabel = if self.broker_paper { "Alpaca (Paper)" } else { "Alpaca (Live)" };
+                if ui.checkbox(&mut shown, egui::RichText::new(alpaca_slabel).small()).changed() {
                     if let Some(id) = self.alpaca_primary_risk_account_id() {
                         if shown {
                             self.hidden_alpaca_risk_account_ids.remove(&id);

@@ -220,6 +220,7 @@ pub async fn handle_connection_command(
             ws_api_key,
             ws_api_secret,
             extra_accounts,
+            primary_paper,
         } => {
             use typhoon_engine::broker::kraken::KrakenBroker;
             let msg_tx = broker_msg_tx.clone();
@@ -296,9 +297,9 @@ pub async fn handle_connection_command(
                     // only number it when there are actually multiple Kraken
                     // account slots to distinguish.
                     let primary_label = if extra_accounts.is_empty() {
-                        "Kraken (Live)"
+                        if primary_paper { "Kraken (Paper)" } else { "Kraken (Live)" }
                     } else {
-                        "Kraken 1 (Live)"
+                        if primary_paper { "Kraken 1 (Paper)" } else { "Kraken 1 (Live)" }
                     };
                     let mut handles = vec![KrakenAccountHandle {
                         spec: BrokerAccountSpec {
@@ -306,7 +307,7 @@ pub async fn handle_connection_command(
                             label: primary_label.into(),
                             api_key: rest_api_key,
                             secret: rest_api_secret,
-                            paper: false,
+                            paper: primary_paper,
                             trade_enabled: true,
                             data_sync_enabled: false,
                         },

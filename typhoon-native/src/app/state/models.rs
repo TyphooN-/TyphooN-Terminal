@@ -289,8 +289,8 @@ pub(crate) struct BookmapWindowState {
 
 /// One extra broker account slot (2–4). Credentials are stored in the keyring
 /// (per-slot keys, written as soon as the Settings field is edited); only the
-/// Paper/Live mode is persisted with the session (ADR-130). `paper` is
-/// Alpaca-only; Kraken ignores it. Every configured slot joins the data-sync
+/// Paper/Live mode is persisted with the session (ADR-130). `paper` controls the badge for both Alpaca and Kraken (Kraken now supports paper accounts for labels).
+/// Alpaca-only; Kraken supports it for (Paper)/(Live) label suffix. Every configured slot joins the data-sync
 /// rotation and is a valid trade/TradeCopy target — the per-slot
 /// label/trade/data toggles were removed so all slots behave identically.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

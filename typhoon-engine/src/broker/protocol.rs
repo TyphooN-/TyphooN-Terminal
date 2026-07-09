@@ -2591,6 +2591,7 @@ pub enum BrokerCmd {
         ws_api_key: String,
         ws_api_secret: String,
         extra_accounts: Vec<BrokerAccountSpec>,
+        primary_paper: bool,
     },
     /// Get Kraken account balance.
     KrakenGetBalance,

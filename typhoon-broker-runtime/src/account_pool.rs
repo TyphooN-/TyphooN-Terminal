@@ -309,7 +309,7 @@ impl KrakenAccountPool {
             .map(|(idx, a)| AccountRosterEntry {
                 id: a.spec.id.clone(),
                 label: a.spec.label.clone(),
-                paper: false,
+                paper: a.spec.paper,
                 trade_enabled: a.spec.trade_enabled,
                 data_sync_enabled: false,
                 equity: 0.0,

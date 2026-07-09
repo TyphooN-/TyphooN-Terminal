@@ -159,7 +159,7 @@ impl TyphooNApp {
                         .iter()
                         .find(|account| account.is_primary)
                         .map(|account| account.label.clone())
-                        .unwrap_or_else(|| "Alpaca 1".to_string()),
+                        .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
                     is_primary: true,
                     orders: self.live_orders.clone(),
                 }]
@@ -286,7 +286,8 @@ impl TyphooNApp {
             if alpaca_toggles.len() > 1 || kraken_toggles.len() > 1 || [alpaca_orders_available, kr_orders_available].into_iter().filter(|visible| *visible).count() > 1 {
                 ui.horizontal_wrapped(|ui| {
                     if alpaca_orders_available && alpaca_toggles.len() <= 1 {
-                        ui.checkbox(&mut self.show_alpaca_orders, egui::RichText::new("Alpaca").small());
+                        let alpaca_slabel = if self.broker_paper { "Alpaca (Paper)" } else { "Alpaca (Live)" };
+                        ui.checkbox(&mut self.show_alpaca_orders, egui::RichText::new(alpaca_slabel).small());
                     }
                     for (account_id, label, count, is_primary) in alpaca_toggles {
                         let mut shown = self.show_alpaca_orders
@@ -314,7 +315,8 @@ impl TyphooNApp {
                         }
                     }
                     if kr_orders_available && kraken_toggles.len() <= 1 {
-                        ui.checkbox(&mut self.show_kr_orders, egui::RichText::new("Kraken (Live)").small());
+                        let slabel = kraken_toggles.first().map(|(_, l, _, _)| l.clone()).unwrap_or_else(|| "Kraken (Live)".to_string());
+                        ui.checkbox(&mut self.show_kr_orders, egui::RichText::new(slabel).small());
                     }
                     let single_kraken_account = kraken_toggles.len() <= 1;
                     if !single_kraken_account {

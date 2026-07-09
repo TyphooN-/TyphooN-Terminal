@@ -222,7 +222,7 @@ impl TyphooNApp {
                 },
                 api_key: acct.api_key.clone(),
                 secret: acct.secret.clone(),
-                paper: acct.paper,
+                paper: false,
                 // Every configured slot syncs data and can trade — slots are
                 // uniform; TradeCopy target selection happens in its own window.
                 trade_enabled: true,
@@ -241,10 +241,10 @@ impl TyphooNApp {
             let slot = idx + 2;
             specs.push(BrokerAccountSpec {
                 id: format!("kraken{slot}"),
-                label: format!("Kraken {slot} (Live)"),
+                label: if acct.paper { format!("Kraken {slot} (Paper)") } else { format!("Kraken {slot} (Live)") },
                 api_key: acct.api_key.clone(),
                 secret: acct.secret.clone(),
-                paper: false,
+                paper: acct.paper,
                 trade_enabled: true,
                 data_sync_enabled: false,
             });

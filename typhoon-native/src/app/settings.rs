@@ -143,6 +143,15 @@ impl TyphooNApp {
                             kraken_main_edits.push((keyring::keys::KRAKEN_WS_API_SECRET, self.kraken_ws_api_secret.clone()));
                         }
                         ui.end_row();
+                        ui.label("Kraken Mode:");
+                        ui.horizontal(|ui| {
+                            let a = ui.radio_value(&mut self.kraken_paper, true, "Paper").changed();
+                            let b = ui.radio_value(&mut self.kraken_paper, false, "Live").changed();
+                            if a || b {
+                                settings_save_after = true;
+                            }
+                        });
+                        ui.end_row();
                         for (key_name, value) in kraken_main_edits {
                             self.persist_credential_async(key_name.into(), value);
                             settings_save_after = true;
@@ -164,10 +173,17 @@ impl TyphooNApp {
                                 self.persist_credential_async(secret_name, self.kraken_extra_accounts[idx].secret.clone());
                                 settings_save_after = true;
                             }
-                            ui.label(format!("Kraken #{slot}:"));
-                            if ui.button("✕ Remove").on_hover_text("Remove this account slot").clicked() {
-                                kraken_remove_account = Some(idx);
-                            }
+                            ui.label(format!("Kraken #{slot} Mode:"));
+                            ui.horizontal(|ui| {
+                                let a = ui.radio_value(&mut self.kraken_extra_accounts[idx].paper, true, "Paper").changed();
+                                let b = ui.radio_value(&mut self.kraken_extra_accounts[idx].paper, false, "Live").changed();
+                                if a || b {
+                                    settings_save_after = true;
+                                }
+                                if ui.button("✕ Remove").on_hover_text("Remove this account slot").clicked() {
+                                    kraken_remove_account = Some(idx);
+                                }
+                            });
                             ui.end_row();
                         }
                         if super::broker_accounts::can_add_account_slot(self.kraken_extra_accounts.len()) {
@@ -375,6 +391,7 @@ impl TyphooNApp {
                                 ws_api_key: self.kraken_ws_api_key.clone(),
                                 ws_api_secret: self.kraken_ws_api_secret.clone(),
                                 extra_accounts: self.kraken_extra_account_specs(),
+                                primary_paper: self.kraken_paper,
                             });
                             self.log.push_back(LogEntry::info("Kraken — connecting..."));
                             settings_save_after = true;
