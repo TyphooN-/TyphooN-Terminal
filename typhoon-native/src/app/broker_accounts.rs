@@ -75,6 +75,25 @@ pub(crate) fn alpaca_slot_keyring_keys(slot: usize) -> (String, String) {
     }
 }
 
+fn alpaca_extra_account_spec(idx: usize, acct: &ExtraAccountConfig) -> BrokerAccountSpec {
+    let slot = idx + 2;
+    BrokerAccountSpec {
+        id: format!("alpaca{slot}"),
+        label: if acct.paper {
+            format!("Alpaca {slot} (Paper)")
+        } else {
+            format!("Alpaca {slot} (Live)")
+        },
+        api_key: acct.api_key.clone(),
+        secret: acct.secret.clone(),
+        paper: acct.paper,
+        // Every configured slot syncs data and can trade — slots are uniform;
+        // TradeCopy target selection happens in its own window.
+        trade_enabled: true,
+        data_sync_enabled: true,
+    }
+}
+
 pub(crate) fn kraken_slot_keyring_keys(slot: usize) -> (String, String) {
     if slot <= 1 {
         (
@@ -212,22 +231,7 @@ impl TyphooNApp {
             if acct.api_key.trim().is_empty() || acct.secret.trim().is_empty() {
                 continue;
             }
-            let slot = idx + 2;
-            specs.push(BrokerAccountSpec {
-                id: format!("alpaca{slot}"),
-                label: if acct.paper {
-                    format!("Alpaca {slot} (Paper)")
-                } else {
-                    format!("Alpaca {slot} (Live)")
-                },
-                api_key: acct.api_key.clone(),
-                secret: acct.secret.clone(),
-                paper: false,
-                // Every configured slot syncs data and can trade — slots are
-                // uniform; TradeCopy target selection happens in its own window.
-                trade_enabled: true,
-                data_sync_enabled: true,
-            });
+            specs.push(alpaca_extra_account_spec(idx, acct));
         }
         specs
     }
@@ -241,7 +245,11 @@ impl TyphooNApp {
             let slot = idx + 2;
             specs.push(BrokerAccountSpec {
                 id: format!("kraken{slot}"),
-                label: if acct.paper { format!("Kraken {slot} (Paper)") } else { format!("Kraken {slot} (Live)") },
+                label: if acct.paper {
+                    format!("Kraken {slot} (Paper)")
+                } else {
+                    format!("Kraken {slot} (Live)")
+                },
                 api_key: acct.api_key.clone(),
                 secret: acct.secret.clone(),
                 paper: acct.paper,
@@ -834,6 +842,29 @@ mod tests {
         assert!(can_add_account_slot(BROKER_ACCOUNT_SLOT_CAP - 2));
         // … and one more would exceed it (extras + slot 1 == cap already).
         assert!(!can_add_account_slot(BROKER_ACCOUNT_SLOT_CAP - 1));
+    }
+
+    #[test]
+    fn alpaca_extra_account_spec_preserves_paper_endpoint_flag() {
+        let paper_acct = ExtraAccountConfig {
+            api_key: "paper-key".to_string(),
+            secret: "paper-secret".to_string(),
+            paper: true,
+        };
+        let paper_spec = alpaca_extra_account_spec(0, &paper_acct);
+        assert_eq!(paper_spec.id, "alpaca2");
+        assert_eq!(paper_spec.label, "Alpaca 2 (Paper)");
+        assert!(paper_spec.paper);
+
+        let live_acct = ExtraAccountConfig {
+            api_key: "live-key".to_string(),
+            secret: "live-secret".to_string(),
+            paper: false,
+        };
+        let live_spec = alpaca_extra_account_spec(1, &live_acct);
+        assert_eq!(live_spec.id, "alpaca3");
+        assert_eq!(live_spec.label, "Alpaca 3 (Live)");
+        assert!(!live_spec.paper);
     }
 
     #[test]
