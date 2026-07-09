@@ -264,16 +264,46 @@ impl TyphooNApp {
                 let _ = self.broker_tx.send(BrokerCmd::GetQuote { symbol: sym });
             }
             "CLOCK" => {
-                let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
-                if !self.broker_connected {
-                    self.log
-                        .push_back(LogEntry::warn("Broker not connected — clock may fail"));
+                if self.alpaca_enabled && self.broker_connected {
+                    if self.market_clock_status.is_empty() {
+                        self.log
+                            .push_back(LogEntry::info("Market clock: refreshing…"));
+                    } else {
+                        self.log.push_back(LogEntry::info(format!(
+                            "Market clock: {} (refreshing)",
+                            self.market_clock_status
+                        )));
+                    }
+                    let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
+                } else if !self.market_clock_status.is_empty() {
+                    self.log.push_back(LogEntry::info(format!(
+                        "Market clock: {}",
+                        self.market_clock_status
+                    )));
+                } else if self.kraken_enabled && self.kraken_connected {
+                    self.log.push_back(LogEntry::info(
+                        "Market clock: Kraken crypto trades 24/7; xStocks session status is shown in the toolbar",
+                    ));
+                } else {
+                    self.log.push_back(LogEntry::warn(
+                        "Connect Alpaca for the US-equities market clock",
+                    ));
                 }
             }
             "FILLS" => {
                 if self.broker_connected {
-                    self.show_kraken_trade_history = true;
-                    let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
+                    self.right_recent_fills_open = true;
+                    if self.alpaca_enabled {
+                        let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 100 });
+                    }
+                    if self.kraken_enabled {
+                        self.show_kraken_trade_history = true;
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenFetchTrades);
+                    }
+                    if !self.alpaca_enabled && !self.kraken_enabled {
+                        self.log
+                            .push_back(LogEntry::warn("No supported broker enabled for fills"));
+                    }
                 } else {
                     self.log
                         .push_back(LogEntry::warn("Connect to broker first"));
@@ -307,9 +337,6 @@ impl TyphooNApp {
                 }
             }
             // "ALERTS" handled above (alert builder)
-            "ORDER" => {
-                self.submit_quick_trade();
-            }
             "CRYPTO_FEAR_GREED" | "FEAR_GREED" | "FNG" => {
                 self.show_fear_greed = true;
                 if self.fear_greed_value == 0 {

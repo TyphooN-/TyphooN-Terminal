@@ -263,6 +263,7 @@ impl TyphooNApp {
                                                 .color(entry.color())
                                                 .font(egui::FontId::monospace(11.0)),
                                         )
+                                        .halign(egui::Align::LEFT)
                                         .wrap_mode(egui::TextWrapMode::Truncate)
                                         .sense(egui::Sense::click()),
                                     );

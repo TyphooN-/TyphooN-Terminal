@@ -73,10 +73,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     // Trading
     Command {
-        name: "OPEN_TRADE",
-        desc: "Open order entry panel",
-    },
-    Command {
         name: "OCO",
         desc: "OCO exit order — one-cancels-other (OCO SELL AAPL 10 200 180)",
     },

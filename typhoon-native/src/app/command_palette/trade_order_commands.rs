@@ -3,9 +3,6 @@ use super::super::*;
 impl TyphooNApp {
     pub(super) fn handle_trade_order_command(&mut self, cmd_upper: &str) -> bool {
         match cmd_upper {
-            "OPEN_TRADE" => {
-                self.submit_quick_trade();
-            }
             "EXPORT_CALENDAR" => {
                 if self.event_calendar_rows.is_empty() {
                     self.log
@@ -70,20 +67,6 @@ impl TyphooNApp {
             }
             "CLOSE_PARTIAL" => {
                 self.close_partial_active_symbol();
-            }
-            "BUY_LINES" | "SELL_LINES" => {
-                let is_buy = cmd_upper == "BUY_LINES";
-                match self.set_visible_range_trade_lines(is_buy) {
-                    Ok((sl, tp)) => {
-                        self.log.push_back(LogEntry::info(format!(
-                            "{}: SL {} TP {} (drag to adjust)",
-                            if is_buy { "Buy Lines" } else { "Sell Lines" },
-                            format_price(sl),
-                            format_price(tp)
-                        )));
-                    }
-                    Err(e) => self.log.push_back(LogEntry::warn(e)),
-                }
             }
             _ => return false,
         }

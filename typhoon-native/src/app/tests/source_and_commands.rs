@@ -2037,6 +2037,10 @@ fn ui_owned_controls_are_not_palette_commands() {
     let removed = [
         "SET_SL",
         "SET_TP",
+        "OPEN_TRADE",
+        "ORDER",
+        "BUY_LINES",
+        "SELL_LINES",
         "M1",
         "M5",
         "M15",
