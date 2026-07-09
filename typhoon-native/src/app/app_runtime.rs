@@ -57,6 +57,12 @@ impl eframe::App for TyphooNApp {
         let msgs_drained;
         let perf_post_broker_setup_ms;
         let perf_chrome_panels_ms;
+        let perf_menu_bar_ms;
+        let perf_toolbar_ms;
+        let perf_autocomplete_ms;
+        let perf_tab_bar_ms;
+        let perf_bottom_panels_ms;
+        let perf_right_panel_ms;
         let perf_floating_windows_ms;
         // Track user activity for the auto-compact idle gate. Any input event in
         // the frame counts as activity. Cheap — `events` is always queried below.
@@ -282,14 +288,26 @@ impl eframe::App for TyphooNApp {
         perf_post_broker_setup_ms = post_broker_setup_started.elapsed().as_secs_f64() * 1000.0;
 
         let chrome_panels_started = std::time::Instant::now();
+        let chrome_step_started = std::time::Instant::now();
         self.render_menu_bar(ui);
+        perf_menu_bar_ms = chrome_step_started.elapsed().as_secs_f64() * 1000.0;
+        let chrome_step_started = std::time::Instant::now();
         self.render_symbol_timeframe_toolbar(ui);
+        perf_toolbar_ms = chrome_step_started.elapsed().as_secs_f64() * 1000.0;
+        let chrome_step_started = std::time::Instant::now();
         self.render_symbol_autocomplete_dropdown(ctx);
+        perf_autocomplete_ms = chrome_step_started.elapsed().as_secs_f64() * 1000.0;
 
+        let chrome_step_started = std::time::Instant::now();
         self.render_tab_bar(ui);
+        perf_tab_bar_ms = chrome_step_started.elapsed().as_secs_f64() * 1000.0;
+        let chrome_step_started = std::time::Instant::now();
         self.render_bottom_panels(ui);
+        perf_bottom_panels_ms = chrome_step_started.elapsed().as_secs_f64() * 1000.0;
 
+        let chrome_step_started = std::time::Instant::now();
         self.render_right_panel(ui);
+        perf_right_panel_ms = chrome_step_started.elapsed().as_secs_f64() * 1000.0;
         perf_chrome_panels_ms = chrome_panels_started.elapsed().as_secs_f64() * 1000.0;
 
         // ── floating windows ─────────────────────────────────────────────────
@@ -761,13 +779,19 @@ impl eframe::App for TyphooNApp {
                 - perf_floating_windows_ms)
                 .max(0.0);
             tracing::warn!(
-                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={} mem_available_mb={} mem_total_mb={}",
+                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} chrome_breakdown=menu:{:.2} toolbar:{:.2} ac:{:.2} tabs:{:.2} bottom:{:.2} right:{:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={} mem_available_mb={} mem_total_mb={}",
                 update_ms,
                 perf_pre_broker_ms,
                 perf_broker_drain_ms,
                 render_after_broker_ms,
                 perf_post_broker_setup_ms,
                 perf_chrome_panels_ms,
+                perf_menu_bar_ms,
+                perf_toolbar_ms,
+                perf_autocomplete_ms,
+                perf_tab_bar_ms,
+                perf_bottom_panels_ms,
+                perf_right_panel_ms,
                 perf_floating_windows_ms,
                 render_residual_ms,
                 session_save_ms,

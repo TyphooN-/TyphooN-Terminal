@@ -3,121 +3,6 @@ use super::*;
 #[allow(deprecated)]
 impl TyphooNApp {
     pub(super) fn render_right_panel_watchlist_section(&mut self, ui: &mut egui::Ui) {
-        // ── Watchlist: populate from cache for symbols not yet in rows ──
-        {
-            let have_syms: std::collections::HashSet<&str> = self
-                .watchlist_rows
-                .iter()
-                .filter(|r| r.last > 0.0)
-                .map(|r| r.symbol.as_str())
-                .collect();
-            let missing: Vec<String> = self
-                .user_watchlist
-                .iter()
-                .filter(|s| !have_syms.contains(s.as_str()))
-                .cloned()
-                .collect();
-            if !self.heavy_sync_in_progress && !missing.is_empty() && !self.watchlist_cache_tried {
-                self.watchlist_cache_tried = true;
-                if let Some(ref cache) = self.cache {
-                    let primary_tf = self
-                        .charts
-                        .get(self.active_tab)
-                        .map(|c| c.timeframe.cache_suffix().to_string())
-                        .unwrap_or_else(|| "1Day".to_string());
-                    let mut tfs = vec![primary_tf.clone()];
-                    for fallback_tf in ["1Day", "4Hour", "1Hour"] {
-                        if !tfs.iter().any(|tf| tf.eq_ignore_ascii_case(fallback_tf)) {
-                            tfs.push(fallback_tf.to_string());
-                        }
-                    }
-                    let mut rows: Vec<WatchlistRow> = self.watchlist_rows.clone();
-                    let mut updated_from_cache = false;
-                    // Lazily-built lowercased detailed_stats keys (parallel to
-                    // self.bg.detailed_stats by index) so the fuzzy fallback below
-                    // lowercases the ~tens-of-thousands of keys at most once per
-                    // populate instead of once per (missing symbol × timeframe) —
-                    // the cold-start chrome_panels stall (ADR-098).
-                    let mut lowered_stats: Option<Vec<String>> = None;
-                    for sym in &missing {
-                        let mut found = false;
-                        'tf_search: for tf in &tfs {
-                            for source in ["alpaca", "kraken", "kraken-equities", "default"] {
-                                for key in chart_source_cache_keys(source, sym, tf) {
-                                    if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
-                                        if let Some(row) =
-                                            watchlist_row_from_raw_bars(sym, &key, &raw)
-                                        {
-                                            rows.retain(|existing| {
-                                                !existing.symbol.eq_ignore_ascii_case(sym)
-                                            });
-                                            rows.push(row);
-                                            updated_from_cache = true;
-                                            found = true;
-                                            break 'tf_search;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if !found {
-                            let lowered_keys = lowered_stats.get_or_insert_with(|| {
-                                // Cache metadata keys (`<prefix>:__NAME__:…`) never hold
-                                // bar blobs; mark them empty so the contains-match can't
-                                // hit them for a symbol like "HEART" or a TF that equals
-                                // an account tag.
-                                self.bg
-                                    .detailed_stats
-                                    .iter()
-                                    .map(|(k, _, _)| {
-                                        if k.contains(":__") {
-                                            String::new()
-                                        } else {
-                                            k.to_lowercase()
-                                        }
-                                    })
-                                    .collect()
-                            });
-                            let stats = &self.bg.detailed_stats;
-                            let sym_lower = sym.to_lowercase();
-                            for tf in &tfs {
-                                let tf_lower = tf.to_lowercase();
-                                for (idx, (k, _, _)) in stats.iter().enumerate() {
-                                    let kl = &lowered_keys[idx];
-                                    if kl.is_empty() {
-                                        continue;
-                                    }
-                                    if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
-                                        if let Ok(Some(raw)) = cache.get_bars_raw(k) {
-                                            if let Some(row) =
-                                                watchlist_row_from_raw_bars(sym, k, &raw)
-                                            {
-                                                rows.retain(|existing| {
-                                                    !existing.symbol.eq_ignore_ascii_case(sym)
-                                                });
-                                                rows.push(row);
-                                                updated_from_cache = true;
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                if found {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if updated_from_cache {
-                        self.watchlist_rows = rows;
-                        self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
-                        self.rebuild_live_indices();
-                    }
-                }
-            }
-        }
-
         // ── Watchlist Section ─────────────────────────────────
         let wl_count = self.user_watchlist.len();
         let (wl_stale_lbl, wl_stale_col) = self.staleness_badge(self.watchlist_last_update_ts);
@@ -131,6 +16,126 @@ impl TyphooNApp {
         .id_salt("watchlist_section") // stable ID — don't reset on count change
         .default_open(self.right_watchlist_open)
         .show(ui, |ui| {
+            // ── Watchlist: populate from cache for symbols not yet in rows ──
+            // This can walk the user's watchlist plus cache metadata. Keep it
+            // inside the open section so collapsed right-panel headers stay cheap
+            // during full-universe sync stalls.
+            {
+                let have_syms: std::collections::HashSet<&str> = self
+                    .watchlist_rows
+                    .iter()
+                    .filter(|r| r.last > 0.0)
+                    .map(|r| r.symbol.as_str())
+                    .collect();
+                let missing: Vec<String> = self
+                    .user_watchlist
+                    .iter()
+                    .filter(|s| !have_syms.contains(s.as_str()))
+                    .cloned()
+                    .collect();
+                if !self.heavy_sync_in_progress
+                    && !missing.is_empty()
+                    && !self.watchlist_cache_tried
+                {
+                    self.watchlist_cache_tried = true;
+                    if let Some(ref cache) = self.cache {
+                        let primary_tf = self
+                            .charts
+                            .get(self.active_tab)
+                            .map(|c| c.timeframe.cache_suffix().to_string())
+                            .unwrap_or_else(|| "1Day".to_string());
+                        let mut tfs = vec![primary_tf.clone()];
+                        for fallback_tf in ["1Day", "4Hour", "1Hour"] {
+                            if !tfs.iter().any(|tf| tf.eq_ignore_ascii_case(fallback_tf)) {
+                                tfs.push(fallback_tf.to_string());
+                            }
+                        }
+                        let mut rows: Vec<WatchlistRow> = self.watchlist_rows.clone();
+                        let mut updated_from_cache = false;
+                        // Lazily-built lowercased detailed_stats keys (parallel to
+                        // self.bg.detailed_stats by index) so the fuzzy fallback below
+                        // lowercases the ~tens-of-thousands of keys at most once per
+                        // populate instead of once per (missing symbol × timeframe) —
+                        // the cold-start chrome_panels stall (ADR-098).
+                        let mut lowered_stats: Option<Vec<String>> = None;
+                        for sym in &missing {
+                            let mut found = false;
+                            'tf_search: for tf in &tfs {
+                                for source in ["alpaca", "kraken", "kraken-equities", "default"] {
+                                    for key in chart_source_cache_keys(source, sym, tf) {
+                                        if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                                            if let Some(row) =
+                                                watchlist_row_from_raw_bars(sym, &key, &raw)
+                                            {
+                                                rows.retain(|existing| {
+                                                    !existing.symbol.eq_ignore_ascii_case(sym)
+                                                });
+                                                rows.push(row);
+                                                updated_from_cache = true;
+                                                found = true;
+                                                break 'tf_search;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if !found {
+                                let lowered_keys = lowered_stats.get_or_insert_with(|| {
+                                    // Cache metadata keys (`<prefix>:__NAME__:…`) never hold
+                                    // bar blobs; mark them empty so the contains-match can't
+                                    // hit them for a symbol like "HEART" or a TF that equals
+                                    // an account tag.
+                                    self.bg
+                                        .detailed_stats
+                                        .iter()
+                                        .map(|(k, _, _)| {
+                                            if k.contains(":__") {
+                                                String::new()
+                                            } else {
+                                                k.to_lowercase()
+                                            }
+                                        })
+                                        .collect()
+                                });
+                                let stats = &self.bg.detailed_stats;
+                                let sym_lower = sym.to_lowercase();
+                                for tf in &tfs {
+                                    let tf_lower = tf.to_lowercase();
+                                    for (idx, (k, _, _)) in stats.iter().enumerate() {
+                                        let kl = &lowered_keys[idx];
+                                        if kl.is_empty() {
+                                            continue;
+                                        }
+                                        if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
+                                            if let Ok(Some(raw)) = cache.get_bars_raw(k) {
+                                                if let Some(row) =
+                                                    watchlist_row_from_raw_bars(sym, k, &raw)
+                                                {
+                                                    rows.retain(|existing| {
+                                                        !existing.symbol.eq_ignore_ascii_case(sym)
+                                                    });
+                                                    rows.push(row);
+                                                    updated_from_cache = true;
+                                                    found = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if found {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if updated_from_cache {
+                            self.watchlist_rows = rows;
+                            self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
+                            self.rebuild_live_indices();
+                        }
+                    }
+                }
+            }
             // ── Add symbol input ──────────────────────────
             ui.add_space(2.0);
             ui.horizontal(|ui| {
@@ -422,6 +427,11 @@ impl TyphooNApp {
 
                 // Data rows
                 for (idx, wl) in sorted_wl.iter().enumerate() {
+                    let (row_rect, row_resp) =
+                        ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
+                    if !row_rect.intersects(ui.clip_rect()) {
+                        continue;
+                    }
                     let sym_color = WL_COLORS[idx % WL_COLORS.len()];
                     let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
                     // Flags any regulatory alert (Reg SHO threshold OR trading halt)
@@ -438,9 +448,6 @@ impl TyphooNApp {
                         .get(self.active_tab)
                         .map(|c| c.symbol == wl.cache_key || c.symbol.contains(&wl.symbol))
                         .unwrap_or(false);
-
-                    let (row_rect, row_resp) =
-                        ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
                     // Rich L1 tooltip polish. Match the chart's 30s live freshness rule;
                     // stale bid/ask sizes must not masquerade as current tape.
                     let live_quote_fresh = wl
