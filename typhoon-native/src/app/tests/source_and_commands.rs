@@ -2039,6 +2039,21 @@ fn sma_intelligence_command_is_registered() {
 }
 
 #[test]
+fn ui_owned_controls_are_not_palette_commands() {
+    let removed = [
+        "SET_SL", "SET_TP", "M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1",
+    ];
+    for name in removed {
+        assert!(
+            crate::app::commands::COMMANDS
+                .iter()
+                .all(|c| c.name != name),
+            "{name} should stay out of the command palette; use the chart/toolbar UI instead"
+        );
+    }
+}
+
+#[test]
 fn sma_default_outfits_round_trip_through_the_spec_parser() {
     // The session-restore path re-validates persisted outfits through
     // parse_outfit_spec; the shipped defaults must always survive it.

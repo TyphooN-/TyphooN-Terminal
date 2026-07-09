@@ -105,14 +105,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "CLOSE_PARTIAL",
         desc: "Close 50% of largest position",
     },
-    Command {
-        name: "SET_SL",
-        desc: "Click chart to set stop loss",
-    },
-    Command {
-        name: "SET_TP",
-        desc: "Click chart to set take profit",
-    },
     // Tools
     Command {
         name: "BACKTEST",
@@ -717,43 +709,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "OBJECTS",
         desc: "Open drawing object list (manage/delete drawings)",
-    },
-    // Timeframes (direct switch)
-    Command {
-        name: "M1",
-        desc: "Switch to 1-minute timeframe",
-    },
-    Command {
-        name: "M5",
-        desc: "Switch to 5-minute timeframe",
-    },
-    Command {
-        name: "M15",
-        desc: "Switch to 15-minute timeframe",
-    },
-    Command {
-        name: "M30",
-        desc: "Switch to 30-minute timeframe",
-    },
-    Command {
-        name: "H1",
-        desc: "Switch to 1-hour timeframe",
-    },
-    Command {
-        name: "H4",
-        desc: "Switch to 4-hour timeframe",
-    },
-    Command {
-        name: "D1",
-        desc: "Switch to daily timeframe",
-    },
-    Command {
-        name: "W1",
-        desc: "Switch to weekly timeframe",
-    },
-    Command {
-        name: "MN1",
-        desc: "Switch to monthly timeframe",
     },
     // Analytics
     Command {

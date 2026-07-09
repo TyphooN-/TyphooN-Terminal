@@ -71,37 +71,6 @@ impl TyphooNApp {
             "CLOSE_PARTIAL" => {
                 self.close_partial_active_symbol();
             }
-            "SET_SL" => {
-                // Use last close price as initial SL, then user can drag
-                if let Some(chart) = self.charts.get(self.active_tab) {
-                    if let Some(last) = chart.bars.last() {
-                        let sl = last.close * 0.98; // default: 2% below current price
-                        self.sl_price = Some(sl);
-                        self.sl_enabled = true;
-                        self.mark_trade_lines_owner();
-                        self.sync_trade_line_inputs();
-                        self.log.push_back(LogEntry::info(format!(
-                            "SL set at {} — drag to adjust",
-                            format_price(sl)
-                        )));
-                    }
-                }
-            }
-            "SET_TP" => {
-                if let Some(chart) = self.charts.get(self.active_tab) {
-                    if let Some(last) = chart.bars.last() {
-                        let tp = last.close * 1.04; // default: 4% above current price
-                        self.tp_price = Some(tp);
-                        self.tp_enabled = true;
-                        self.mark_trade_lines_owner();
-                        self.sync_trade_line_inputs();
-                        self.log.push_back(LogEntry::info(format!(
-                            "TP set at {} — drag to adjust",
-                            format_price(tp)
-                        )));
-                    }
-                }
-            }
             "BUY_LINES" | "SELL_LINES" => {
                 let is_buy = cmd_upper == "BUY_LINES";
                 match self.set_visible_range_trade_lines(is_buy) {

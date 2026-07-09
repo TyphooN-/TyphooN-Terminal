@@ -13,6 +13,7 @@ pub(crate) fn draw_planning_and_compare_overlays(
     price_geometry: &crate::render::PriceViewGeometry,
     sl_price: Option<f64>,
     tp_price: Option<f64>,
+    active_position_avg_price: Option<f64>,
     price_to_y: impl Fn(f64) -> f32,
     format_price: impl Fn(f64) -> String,
 ) {
@@ -84,16 +85,17 @@ pub(crate) fn draw_planning_and_compare_overlays(
                     egui::Color32::BLACK,
                 );
 
-                // P&L from last price
+                // Distance from live/current price, plus active position entry
+                // when available. The SL/TP UI owns the action; this label keeps
+                // chart lines self-explanatory without requiring the command
+                // palette or right-panel fields.
                 if let Some(last) = bars.last() {
-                    let dist = *p - last.close;
-                    let dist_label = if dist > 0.0 {
-                        format!("+{}", format_price(dist.abs()))
-                    } else if dist < 0.0 {
-                        format!("-{}", format_price(dist.abs()))
-                    } else {
-                        format!("±{}", format_price(0.0))
-                    };
+                    let dist_label = planning_line_distance_label(
+                        *p,
+                        last.close,
+                        active_position_avg_price,
+                        &format_price,
+                    );
                     let dist_galley = painter.layout_no_wrap(
                         dist_label,
                         egui::FontId::monospace(10.0),
@@ -192,5 +194,64 @@ pub(crate) fn draw_planning_and_compare_overlays(
                 }
             }
         }
+    }
+}
+
+fn signed_pct(from: f64, reference: f64) -> Option<f64> {
+    (from.is_finite() && reference.is_finite() && reference > 0.0)
+        .then_some((from - reference) / reference * 100.0)
+}
+
+fn signed_price_delta(price: f64, reference: f64, format_price: &impl Fn(f64) -> String) -> String {
+    let dist = price - reference;
+    if dist > 0.0 {
+        format!("+{}", format_price(dist.abs()))
+    } else if dist < 0.0 {
+        format!("-{}", format_price(dist.abs()))
+    } else {
+        format!("±{}", format_price(0.0))
+    }
+}
+
+fn signed_pct_text(pct: f64) -> String {
+    if pct > 0.0 {
+        format!("+{pct:.1}%")
+    } else if pct < 0.0 {
+        format!("{pct:.1}%")
+    } else {
+        "±0.0%".to_string()
+    }
+}
+
+pub(crate) fn planning_line_distance_label(
+    line_price: f64,
+    current_price: f64,
+    active_position_avg_price: Option<f64>,
+    format_price: &impl Fn(f64) -> String,
+) -> String {
+    let mut label = signed_price_delta(line_price, current_price, format_price);
+    if let Some(cur_pct) = signed_pct(line_price, current_price) {
+        label.push_str(&format!(" {} cur", signed_pct_text(cur_pct)));
+    }
+    if let Some(avg_pct) = active_position_avg_price.and_then(|avg| signed_pct(line_price, avg)) {
+        label.push_str(&format!(" | {} avg", signed_pct_text(avg_pct)));
+    }
+    label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::planning_line_distance_label;
+
+    #[test]
+    fn planning_line_distance_label_includes_current_and_avg_percentages() {
+        let label = planning_line_distance_label(95.0, 100.0, Some(90.0), &|p| format!("{p:.2}"));
+        assert_eq!(label, "-5.00 -5.0% cur | +5.6% avg");
+    }
+
+    #[test]
+    fn planning_line_distance_label_skips_missing_avg() {
+        let label = planning_line_distance_label(105.0, 100.0, None, &|p| format!("{p:.2}"));
+        assert_eq!(label, "+5.00 +5.0% cur");
     }
 }

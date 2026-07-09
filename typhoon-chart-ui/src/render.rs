@@ -134,6 +134,7 @@ pub fn draw_chart(
     show_squeeze: bool,
     sl_price: Option<f64>,
     tp_price: Option<f64>,
+    active_position_avg_price: Option<f64>,
     trade_overlay: &TradeOverlay,
     alerts: &[(f64, String)],
     regulatory_alerts: &[typhoon_engine::core::regulatory_alerts::RegulatoryAlert],
@@ -1859,6 +1860,7 @@ pub fn draw_chart(
         &price_geometry,
         sl_price,
         tp_price,
+        active_position_avg_price,
         price_to_y,
         format_price,
     );

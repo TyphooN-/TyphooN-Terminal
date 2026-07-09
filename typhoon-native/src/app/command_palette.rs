@@ -389,19 +389,6 @@ impl TyphooNApp {
                     .map(|c| c.symbol.clone())
                     .unwrap_or_default();
             }
-            // Timeframe shortcuts — any TF label works (M1, M2, H6, D3, Y1, etc.)
-            _ if Timeframe::from_label(&cmd_upper).is_some() => {
-                let tf = match Timeframe::from_label(&cmd_upper) {
-                    Some(t) => t,
-                    None => return,
-                };
-                let sym = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| c.symbol.clone())
-                    .unwrap_or_else(|| self.symbol_input.clone());
-                self.reload_symbol(&sym, tf);
-            }
             // Aliases
             "CALC" => self.show_risk_calc = true,
             "COMPARE" => {

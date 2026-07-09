@@ -9,6 +9,26 @@ use typhoon_chart_ui::drawing_interaction::{
 };
 
 impl TyphooNApp {
+    fn active_trade_line_avg_price(&self) -> Option<f64> {
+        let chart = self.charts.get(self.active_tab)?;
+        let key = bare_symbol_from_key(&chart.symbol).to_ascii_uppercase();
+        self.live_positions_by_symbol
+            .get(&key)
+            .and_then(|pos| {
+                (pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0)
+                    .then_some(pos.avg_entry_price)
+            })
+            .or_else(|| {
+                self.kr_positions_by_symbol.get(&key).and_then(|pos| {
+                    if pos.avg_entry_price.is_finite() && pos.avg_entry_price > 0.0 {
+                        Some(pos.avg_entry_price)
+                    } else {
+                        self.kraken_position_avg_price(&pos.symbol)
+                    }
+                })
+            })
+    }
+
     pub(crate) fn render_central_panel(
         &mut self,
         ctx: &egui::Context,
@@ -456,6 +476,7 @@ impl TyphooNApp {
         let tp_price = self.tp_price;
         let trade_lines_on_active = self.trade_lines_active_on(self.active_tab);
         let trade_lines_tab = self.active_tab;
+        let trade_line_avg_price = self.active_trade_line_avg_price();
         for chart in &mut self.charts {
             let symbol = regulatory_alerts::normalize_regulatory_symbol(&chart.symbol);
             chart.regulatory_alerts = self
@@ -799,6 +820,11 @@ impl TyphooNApp {
                     self.show_squeeze,
                     cell_sl,
                     cell_tp,
+                    if cell_sl.is_some() || cell_tp.is_some() {
+                        trade_line_avg_price
+                    } else {
+                        None
+                    },
                     &trade_ov,
                     &self.alerts,
                     &chart.regulatory_alerts,
@@ -1092,6 +1118,11 @@ impl TyphooNApp {
                     self.show_squeeze,
                     active_sl,
                     active_tp,
+                    if active_sl.is_some() || active_tp.is_some() {
+                        trade_line_avg_price
+                    } else {
+                        None
+                    },
                     &trade_ov,
                     &self.alerts,
                     &chart.regulatory_alerts,
