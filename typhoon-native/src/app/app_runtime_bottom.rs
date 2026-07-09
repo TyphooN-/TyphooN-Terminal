@@ -256,16 +256,16 @@ impl TyphooNApp {
                                     else {
                                         continue;
                                     };
-                                    let response = ui.add_sized(
-                                        [ui.available_width(), 14.0],
-                                        egui::Label::new(
-                                            egui::RichText::new(&entry.display)
-                                                .color(entry.color())
-                                                .font(egui::FontId::monospace(11.0)),
-                                        )
-                                        .halign(egui::Align::LEFT)
-                                        .wrap_mode(egui::TextWrapMode::Truncate)
-                                        .sense(egui::Sense::click()),
+                                    let (row_rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width(), 14.0),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter_at(row_rect).text(
+                                        row_rect.left_center(),
+                                        egui::Align2::LEFT_CENTER,
+                                        &entry.display,
+                                        egui::FontId::monospace(11.0),
+                                        entry.color(),
                                     );
                                     // Clickable log entries: detect ticker symbols (ALL CAPS, 2-8 chars)
                                     if response.clicked() {
