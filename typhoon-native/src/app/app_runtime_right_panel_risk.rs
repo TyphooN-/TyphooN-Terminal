@@ -176,7 +176,7 @@ impl TyphooNApp {
                 .unwrap_or_else(|| self.kraken_primary_account_id.clone()),
             label: primary
                 .map(|account| account.label.clone())
-                .unwrap_or_else(|| "Kraken".to_string()),
+                .unwrap_or_else(|| "Kraken (Live)".to_string()),
             is_primary: true,
             equity: self.kraken_usd_equivalent_balance(),
             previous_equity: 0.0,
@@ -236,7 +236,7 @@ impl TyphooNApp {
                     .kraken_primary_risk_account_id()
                     .map(|id| !self.hidden_kraken_risk_account_ids.contains(&id))
                     .unwrap_or(true);
-                if ui.checkbox(&mut shown, egui::RichText::new("Kraken").small()).changed() {
+                if ui.checkbox(&mut shown, egui::RichText::new("Kraken (Live)").small()).changed() {
                     if let Some(id) = self.kraken_primary_risk_account_id() {
                         if shown {
                             self.hidden_kraken_risk_account_ids.remove(&id);

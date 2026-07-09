@@ -59,7 +59,7 @@ fn alpaca_account_pl_basis(account: &AccountPositions) -> f64 {
 }
 
 pub(super) fn single_kraken_account_label(label: &str, single_account: bool) -> &str {
-    if single_account { "Kraken" } else { label }
+    if single_account { "Kraken (Live)" } else { label }
 }
 
 pub(super) fn primary_marker(is_primary: bool, single_account: bool) -> &'static str {
@@ -134,7 +134,7 @@ impl TyphooNApp {
                                 .find(|account| account.is_primary)
                                 .map(|account| account.label.clone())
                         })
-                        .unwrap_or_else(|| "Kraken".to_string()),
+                        .unwrap_or_else(|| "Kraken (Live)".to_string()),
                     is_primary: true,
                     positions: self.kr_positions.clone(),
                 }]
@@ -241,7 +241,7 @@ impl TyphooNApp {
                         })
                         .collect();
                     if kr_positions_available && kraken_toggles.len() <= 1 {
-                        ui.checkbox(&mut self.show_kr_positions, egui::RichText::new("Kraken").small());
+                        ui.checkbox(&mut self.show_kr_positions, egui::RichText::new("Kraken (Live)").small());
                     }
                     let single_kraken_account = kraken_toggles.len() <= 1;
                     if !single_kraken_account {

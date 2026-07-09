@@ -296,9 +296,9 @@ pub async fn handle_connection_command(
                     // only number it when there are actually multiple Kraken
                     // account slots to distinguish.
                     let primary_label = if extra_accounts.is_empty() {
-                        "Kraken"
+                        "Kraken (Live)"
                     } else {
-                        "Kraken 1"
+                        "Kraken 1 (Live)"
                     };
                     let mut handles = vec![KrakenAccountHandle {
                         spec: BrokerAccountSpec {

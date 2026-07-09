@@ -241,7 +241,7 @@ impl TyphooNApp {
             let slot = idx + 2;
             specs.push(BrokerAccountSpec {
                 id: format!("kraken{slot}"),
-                label: format!("Kraken {slot}"),
+                label: format!("Kraken {slot} (Live)"),
                 api_key: acct.api_key.clone(),
                 secret: acct.secret.clone(),
                 paper: false,
@@ -438,7 +438,7 @@ impl TyphooNApp {
                 out.push((
                     OrderBroker::Kraken,
                     self.kraken_primary_account_id.clone(),
-                    "Kraken".to_string(),
+                    "Kraken (Live)".to_string(),
                 ));
             } else {
                 for a in connected {

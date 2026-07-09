@@ -185,7 +185,7 @@ impl TyphooNApp {
                         .iter()
                         .find(|account| account.is_primary)
                         .map(|account| account.label.clone())
-                        .unwrap_or_else(|| "Kraken".to_string()),
+                        .unwrap_or_else(|| "Kraken (Live)".to_string()),
                     is_primary: true,
                     orders: self.kraken_open_orders.clone(),
                 }]
@@ -314,7 +314,7 @@ impl TyphooNApp {
                         }
                     }
                     if kr_orders_available && kraken_toggles.len() <= 1 {
-                        ui.checkbox(&mut self.show_kr_orders, egui::RichText::new("Kraken").small());
+                        ui.checkbox(&mut self.show_kr_orders, egui::RichText::new("Kraken (Live)").small());
                     }
                     let single_kraken_account = kraken_toggles.len() <= 1;
                     if !single_kraken_account {

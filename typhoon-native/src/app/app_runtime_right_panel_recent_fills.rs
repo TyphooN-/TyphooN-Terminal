@@ -161,7 +161,7 @@ impl TyphooNApp {
             label: primary
                 .as_ref()
                 .map(|account| account.label.clone())
-                .unwrap_or_else(|| "Kraken".to_string()),
+                .unwrap_or_else(|| "Kraken (Live)".to_string()),
             is_primary: true,
             rows: self
                 .kraken_trades
