@@ -12,8 +12,8 @@ struct FillAccountRows {
 impl TyphooNApp {
     pub(super) fn render_right_panel_recent_fills_section(&mut self, ui: &mut egui::Ui) {
         // ── Recent Fills Section ──────────────────────────────
-        let alpaca_accounts = if !self.heavy_sync_in_progress { self.recent_fill_alpaca_accounts() } else { vec![] };
-        let kraken_accounts = if !self.heavy_sync_in_progress { self.recent_fill_kraken_accounts() } else { vec![] };
+        let alpaca_accounts = self.recent_fill_alpaca_accounts();
+        let kraken_accounts = self.recent_fill_kraken_accounts();
         let fills_count = alpaca_accounts
             .iter()
             .filter(|account| {

@@ -82,7 +82,7 @@ impl TyphooNApp {
             .into_iter()
             .filter(|visible| *visible)
             .count();
-        let alpaca_position_groups: Vec<AccountPositions> = if !self.heavy_sync_in_progress && show_alpaca_positions {
+        let alpaca_position_groups: Vec<AccountPositions> = if show_alpaca_positions {
             if !self.alpaca_account_positions.is_empty() {
                 self.alpaca_account_positions.clone()
             } else if !self.live_positions.is_empty() {
@@ -118,7 +118,7 @@ impl TyphooNApp {
         } else {
             Vec::new()
         };
-        let kraken_position_groups: Vec<KrakenAccountPositions> = if !self.heavy_sync_in_progress && show_kr_positions {
+        let kraken_position_groups: Vec<KrakenAccountPositions> = if show_kr_positions {
             if !self.kraken_account_positions.is_empty() {
                 self.kraken_account_positions.clone()
             } else if !self.kr_positions.is_empty() {
@@ -399,7 +399,7 @@ impl TyphooNApp {
                     self.deferred_symbol_action = lp_action;
                 }
             }
-            if !self.heavy_sync_in_progress && show_kr_positions {
+            if show_kr_positions {
                 let mut close_sym: Option<String> = None;
                 let mut kr_action = SymbolAction::None;
                 let single_kraken_account = kraken_position_groups.len() <= 1;
