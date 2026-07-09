@@ -1,43 +1,6 @@
 use super::*;
 
 impl TyphooNApp {
-    pub(super) fn export_csv(&mut self) {
-        if let Some(chart) = self.charts.get(self.active_tab) {
-            if chart.bars.is_empty() {
-                self.log.push_back(LogEntry::warn("No bars to export"));
-                return;
-            }
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("CSV", &["csv"])
-                .set_file_name(&format!("{}_{}.csv", chart.symbol, chart.timeframe.label()))
-                .set_title("Export Chart Data")
-                .save_file()
-            {
-                match std::fs::File::create(&path) {
-                    Ok(mut f) => {
-                        let _ = writeln!(f, "timestamp,open,high,low,close,volume");
-                        for bar in &chart.bars {
-                            let _ = writeln!(
-                                f,
-                                "{},{},{},{},{},{}",
-                                bar.ts_ms, bar.open, bar.high, bar.low, bar.close, bar.volume
-                            );
-                        }
-                        self.log.push_back(LogEntry::info(format!(
-                            "Exported {} bars to {}",
-                            chart.bars.len(),
-                            path.display()
-                        )));
-                    }
-                    Err(e) => {
-                        self.log
-                            .push_back(LogEntry::err(format!("Export failed: {}", e)));
-                    }
-                }
-            }
-        }
-    }
-
     pub(super) fn close_all_windows(&mut self) {
         self.show_settings = false;
         self.show_risk_calc = false;
@@ -118,6 +81,4 @@ impl TyphooNApp {
         // here makes body-drag free-look visibly snap back after scroll zoom.
         chart.zoom_chart_bars_by(factor as f64);
     }
-
-    // ── floating window rendering ────────────────────────────────────────────
 }

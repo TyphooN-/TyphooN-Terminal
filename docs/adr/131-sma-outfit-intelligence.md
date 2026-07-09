@@ -2,8 +2,8 @@
 
 **Status:** Implemented
 **Date:** 2026-07-03
-**Related:** ADR-125 (chart-ui crate owns indicator math), ADR-092/094 (command
-palette), `typhoon-chart-ui/src/sma_outfits.rs`,
+**Related:** ADR-125 (chart-ui crate owns indicator math), ADR-133 (research-only
+command palette), SMA Outfits research (https://github.com/unfairmarket/SMA-outfits), `typhoon-chart-ui/src/sma_outfits.rs`,
 `typhoon-native/src/app/floating_windows/sma_intelligence.rs`
 
 ## Context
@@ -37,11 +37,13 @@ Implement the concept natively — original Rust, no code from either project:
   neutral, so 100 = fully dressed bullish, 0 = fully dressed bearish,
   50 = flat). Partial history never claims a stack: any missing leg forces
   Mixed and an `insufficient history` marker.
-- **`SMA_INTELLIGENCE` palette command** (also in the chart-context command
-  set) opens the **SMA Intelligence** floating window: per-outfit tables for
+- **`SMA_INTELLIGENCE` remains a research floating-window command** under
+  ADR-133's research-only palette rule: per-outfit tables for
   the focused chart's symbol/timeframe, an outfit editor (add `10/50/200`
   style specs, remove, reset to the two canonical defaults), and a concept
-  attribution footer. Custom outfits persist in the session JSON and are
+  attribution footer. The intended research target is to identify the SMA outfits
+  most correlated with a pair's behavior per the Unfair Market SMA Outfits work;
+  the current implementation is a partial foundation. Custom outfits persist in the session JSON and are
   re-validated through the spec parser on restore, so a hand-edited session
   cannot smuggle out-of-range periods.
 

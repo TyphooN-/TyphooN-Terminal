@@ -4,7 +4,7 @@ impl TyphooNApp {
     pub(super) fn handle_price_path_gap_volatility_command(&mut self, cmd_upper: &String) -> bool {
         match cmd_upper.as_str() {
             // ── Price-path, gap, and volatility-cluster palette aliases ──
-            "DRAWUP" | "DRAW_UP" | "RALLYHIST" | "RALLY_HISTORY" => {
+            "RALLYHIST" | "RALLY_HISTORY" => {
                 let sym = command_chart_symbol(
                     self.charts.get(self.active_tab).map(|c| c.symbol.as_str()),
                 );

@@ -12,10 +12,10 @@
 
 **Latest full comb-over (2026-07-08 console/ADR accuracy):**
 - Cross-checked docs/adr/*.md (110 files) + high-level docs (README, ROADMAP, ARCHITECTURE, DESIGN_PHILOSOPHY, KEYBOARD_SHORTCUTS, API_KEYS, RESEARCH_PACKET, doc-drift-checklist) vs live code: typhoon-native/src/app/commands.rs (228 Command {} entries), command_palette.rs (handle_command + special paths), command_palette/ai_commands.rs (ASK*/RESUME*/HERMES handlers + investigate_symbols + packet), ai_processes.rs (antigravity_cli_binary prefers "agy" > "antigravity" > "gemini"; spawn_*, model options).
-- Command registry: 228 total structs; 59 DRAW_*; ~168 core non-draw palette commands (UI label "Command palette (N commands)" + separate drawings section in workspace_reference_windows.rs). Fuzzy autocomplete from COMMANDS only; many AI/RESUME* supported via direct starts_with in handle_ai_command (called first in handle_command) even if absent from registry.
+- Command registry: research-only palette (ADR-133). Drawing/chart-type/indicator/timeframe/template/screenshot commands were removed from the registry and hidden handlers; fuzzy autocomplete from COMMANDS is for research/workflow commands only. Many AI/RESUME* research aliases remain supported via direct starts_with in handle_ai_command (called before handle_command registry matching) even if absent from registry.
 - Verified: ASKANTIGRAVITY primary (with ASKGEMINI legacy), TRADECOPY|TRADE_COPY|COPYTRADE aliases, KRAKEN command (connect/balance/trade desc), INGEST_RESEARCH/BARDATA/AICACHE present, NEW_TAB/CLOSE_TAB present.
 - **Drift fixed**:
-  - All "225" hard-coded counts in README (2 places), ARCHITECTURE, DESIGN_PHILOSOPHY, KEYBOARD_SHORTCUTS, ROADMAP, prior checklist notes updated to "registered palette commands (~168 core + ~59 drawings + hundreds research-surface/aliases)".
+  - Prior hard-coded command counts were superseded by ADR-133; docs now describe the palette by policy (research-only) instead of stale counts.
   - KEYBOARD_SHORTCUTS: removed non-existent `CONNECT` (replaced with real `KRAKEN`); fixed `OPTIMIZER` desc from "SMA Cross grid optimization" to "Strategy parameter optimizer" (matches commands.rs).
   - ROADMAP: updated Phase 4 console count; Phase 6 optimizer desc; Phase 10 changed POSITION_CHARTS [x] to historical note (absent from COMMANDS + no handler); Phase 14 LAN "15 remote commands (SEC_SCRAPE, FETCH_BARS...)" updated with accuracy note (LAN removed; current equivalents like INGEST_RESEARCH/BARDATA live in palette).
   - Confirmed no CONNECT or POSITION_CHARTS in code/handlers.

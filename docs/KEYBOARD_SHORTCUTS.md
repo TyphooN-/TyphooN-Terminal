@@ -74,22 +74,19 @@
 
 ## Command Palette Commands
 
-Open with `~` and type to fuzzy-search across the registered palette
-commands (auto-generated from the COMMANDS registry in code: ~168 core
-commands shown in "Command palette (N commands)" + ~59 drawing tools in
-separate section). The console additionally accepts hundreds of
-research-surface commands (e.g. `CDL*` candlestick primitives, valuation/risk
-model windows) and aliases not listed in the palette (e.g. RESUME* AI resume
-commands, ASKHERMES, some direct broker actions). Selected examples:
+Open with `~` and type to fuzzy-search across registered research commands.
+Per ADR-133, the command palette is intentionally research-only: drawing,
+chart-type, chart-template, indicator-toggle, timeframe, SL/TP, screenshot, and
+other graphical chart controls live in the chart toolbar/navbar/right-panel UI,
+not in typed commands. The console additionally accepts research-surface
+commands and aliases not listed in the registry (for example RESUME* AI resume
+commands and ASKHERMES). Selected examples:
 
 | Command | Action |
 |---------|--------|
 | `KRAKEN` | Kraken crypto exchange (connect, balance, trade) |
 | `SETTINGS` | Application settings |
 | `TRADECOPY` | Copy positions / mirror orders between broker accounts (opt-in) |
-| `RELOAD` | Reload bars from cache |
-| `MTF` | Toggle multi-timeframe grid |
-| `INDICATORS` | Indicator settings panel |
 | `BACKTEST` | Run backtest on loaded bars |
 | `OPTIMIZER` | Strategy parameter optimizer |
 | `RISK_CALC` | Position sizing calculator |
@@ -101,15 +98,9 @@ commands, ASKHERMES, some direct broker actions). Selected examples:
 | `SEASONALS` | Monthly return patterns |
 | `MONTECARLO` | Monte Carlo VaR simulation |
 | `STRESS_TEST` | Portfolio stress test |
-| `VOLUME_PROFILE` | POC + Value Area |
-| `SMA_INTELLIGENCE` | SMA Outfit Intelligence window (ADR-131) |
 | `RESEARCH_PACKET` | Research packet viewer |
-| `SCREENSHOT` | Capture chart to `typhoon_chart_*.webp` |
 | `REG_SHO` / `HALTS` | Regulatory outlier windows (ADR-120) |
 | `BOOKMAP [SYM]` | Bookmap-style depth window |
-| `CANDLE` / `HEIKINASHI` / `LINE` / `OHLC` / `RENKO` | Switch chart type |
-| `EXPORT_CSV` | Export chart data to CSV |
-| `NEW_TAB` / `CLOSE_TAB` | Open / close chart tab |
 | `CACHE_STATS` | Show cache statistics |
 | `CLOSE_WINDOWS` | Close all floating windows |
 | `HELP` | Keyboard shortcuts |

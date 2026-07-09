@@ -13,7 +13,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Startup Time** | < 2 seconds |
 | **Lines of Code** | ~165K GUI (native + chart-ui + research-ui) + ~140K engine/broker-runtime + ~11K transpiler (pure Rust) |
 | **Indicators** | 46+ chart indicators plus ~375 TA-Lib/Godel research surfaces |
-| **Commands** | ~170 core palette commands + ~59 drawing commands (auto from COMMANDS registry) plus hundreds of research-surface commands and aliases |
+| **Commands** | Research-only command palette (auto from COMMANDS registry) plus AI/research aliases; charting, drawing, indicator, timeframe, and screenshot controls are graphical UI only (ADR-133) |
 | **Drawing Tools** | 89 drawing and annotation types |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
@@ -35,7 +35,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **WebSocket Streaming** | Real-time trades/quotes via Alpaca WebSocket, Time & Sales |
 | **Options Chain** | Full Greeks, strike/expiry/bid/ask via Alpaca options API |
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
-| **Command Palette** | ~ (tilde) Quake-console: BACKTEST, RISK_CALC, SCREENER, EXPORT_CSV |
+| **Command Palette** | ~ (tilde) research launcher: BACKTEST, RISK_CALC, SCREENER, SEC, NEWS, FRED, RESEARCH_PACKET |
 | **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
 | **Storage Manager** | View, delete, compact (zstd-22), and schedule idle auto-compaction by symbol/source |
 | **Multi-Window** | Open additional terminal windows (NEW_WINDOW/POPOUT) for multi-monitor setups |
@@ -43,7 +43,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
 | **Drawing Tools** | 89 types: trend, fib, ray, ruler, rectangle, channel, pitchfork, Elliott, Gann, regression, arrows, labels + GPU rendering |
 | **Multi-Chart Layouts** | MTF grid (2-5 timeframes with full NNFX indicators per cell) |
-| **Screenshot Export** | `SCREENSHOT` command captures the chart to `typhoon_chart_*.webp` (~/Pictures), with an in-app screenshots browser |
+| **Screenshot Export** | Graphical UI capture path for chart screenshots, with an in-app screenshots browser |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |
 | **Chart Types** | Candlestick, Heikin-Ashi, Line, OHLC Bar, and Renko chart rendering |
@@ -318,6 +318,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [130](docs/adr/130-multi-account-broker-support.md) | Multi-Account Broker Support (Pooled Sync Fan-Out, Account-Primary Cycling, TradeCopy) |
 | [131](docs/adr/131-sma-outfit-intelligence.md) | SMA Outfit Intelligence Window (Unfair Market SMA Outfits Concept) |
 | [132](docs/adr/132-sl-tp-lines-active-chart-scope.md) | SL/TP Trade Lines Are Active-Chart-Scoped (Exact-Geometry Dragging) |
+| [133](docs/adr/133-command-palette-research-only.md) | Command Palette Is Research-Only |
 
 ---
 

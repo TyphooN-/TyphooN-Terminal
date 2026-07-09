@@ -25,9 +25,9 @@ The indicator system follows the No-Nonsense Forex (NNFX) methodology:
 
 All ported from MQL5 with computational equivalence to the originals.
 
-### 5. Quake Console Interface
+### 5. Research Command Palette
 
-The `~` key opens a Quake-style dropdown command palette with fuzzy search across registered commands (auto-generated from the COMMANDS registry in code: ~168 core commands shown in "Command palette (N commands)" + ~59 drawing tools in separate section). The console additionally accepts hundreds of research-surface commands and aliases not listed in the palette (e.g. RESUME* AI resume commands, ASKHERMES, some direct broker actions). Every panel, feature, and chart type is accessible via typed command.
+The `~` key opens a Quake-style dropdown palette for research commands. Per ADR-133, this surface is not a shadow chart UI: drawing tools, chart types, indicator toggles/templates, timeframes, SL/TP planning, screenshots, replay, and other graphical chart controls belong to the toolbar/navbar/right-panel UI. The typed palette is for research, data retrieval, regulatory/fundamental windows, AI research packets, and broker/account workflows.
 
 ### 6. Immediate Mode Rendering
 

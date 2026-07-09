@@ -34,7 +34,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with registered palette commands (~168 core + ~59 drawings + research-surface commands/aliases)
+- [x] Console (`~`) as a research-only command palette; charting/drawing/indicator controls are graphical UI only (ADR-133)
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
@@ -65,7 +65,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Walk-forward optimizer (70/30 in-sample/out-of-sample, 5 strategies)
 - [x] Seasonals (monthly return patterns from bar data)
 - [x] Volume Profile (POC, Value Area High/Low)
-- [x] SMA Outfit Intelligence (`SMA_INTELLIGENCE` — stack/trigger analysis per outfit, ADR-131)
+- [x] SMA Outfit Intelligence (`SMA_INTELLIGENCE` research window — correlated outfit target per Unfair Market, partially complete; ADR-131/133)
 - [x] Monte Carlo VaR (from DARWIN daily returns)
 - [x] Stress test (8 historical scenarios)
 - [x] VaR multiplier (per-DARWIN corridor status)
@@ -201,4 +201,4 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Holiday-aware Kraken xStocks session status (rule-based NYSE holiday calendar, ADR-110)
 - [x] General stock-split feed: bulk research scrape populates `research_stock_splits` via FMP + keyless Yahoo for every scraped symbol (ADR-122/123)
 - [x] SL/TP trade lines active-chart-scoped with exact painted-geometry dragging (ADR-132)
-- [x] SMA Outfit Intelligence window (`SMA_INTELLIGENCE`, ADR-131)
+- [x] SMA Outfit Intelligence research window (`SMA_INTELLIGENCE`, ADR-131/133)

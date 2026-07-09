@@ -40,10 +40,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Finviz-style market treemap + sector groups (ADR-116)",
     },
     Command {
-        name: "RELOAD",
-        desc: "Reload bars from cache",
-    },
-    Command {
         name: "QUIT",
         desc: "Exit the application",
     },
@@ -70,15 +66,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "HISTORY",
         desc: "Order history (closed orders)",
-    },
-    // View
-    Command {
-        name: "MTF",
-        desc: "Toggle multi-timeframe grid",
-    },
-    Command {
-        name: "INDICATORS",
-        desc: "Toggle indicator settings panel",
     },
     Command {
         name: "FULLSCREEN",
@@ -161,7 +148,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "SMA_INTELLIGENCE",
-        desc: "SMA outfit stack/trigger intelligence (Unfair Market SMA Outfits)",
+        desc: "SMA Outfit research window — correlated SMA outfits per Unfair Market",
     },
     Command {
         name: "REG_SHO",
@@ -227,10 +214,6 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "WATCHLISTS",
         desc: "Alpaca watchlists",
     },
-    Command {
-        name: "COMPILE",
-        desc: "Indicator compiler: MQL5/MQL4/PineScript v4+v5/EasyLanguage/thinkScript/AFL/ProBuilder/NinjaScript/cAlgo + cross-language transpiler",
-    },
     // Analysis
     Command {
         name: "CORRELATION",
@@ -247,10 +230,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "STRESS_TEST",
         desc: "Portfolio stress test",
-    },
-    Command {
-        name: "VOLUME_PROFILE",
-        desc: "Volume profile (POC + value area)",
     },
     Command {
         name: "ORDER_FLOW",
@@ -277,57 +256,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Upcoming events calendar (earnings/dividends) per broker",
     },
     Command {
-        name: "CONFLUENCE",
-        desc: "Multi-timeframe RSI/MACD confluence score",
-    },
-    Command {
         name: "STAT_ARB",
         desc: "Statistical arbitrage pairs (z-score + half-life)",
     },
     Command {
         name: "RISK_BUDGET",
         desc: "Portfolio risk budget (marginal VaR contribution)",
-    },
-    // Chart types
-    Command {
-        name: "CANDLE",
-        desc: "Switch to candlestick chart",
-    },
-    Command {
-        name: "HEIKINASHI",
-        desc: "Switch to Heikin-Ashi chart",
-    },
-    Command {
-        name: "LINE",
-        desc: "Switch to line chart",
-    },
-    Command {
-        name: "OHLC",
-        desc: "Switch to OHLC bars chart",
-    },
-    Command {
-        name: "RENKO",
-        desc: "Switch to Renko chart",
-    },
-    Command {
-        name: "EXPORT_CSV",
-        desc: "Export chart data to CSV",
-    },
-    Command {
-        name: "SCREENSHOT",
-        desc: "Save chart as lossless WebP screenshot",
-    },
-    Command {
-        name: "SHARE",
-        desc: "Share last screenshot to community chat",
-    },
-    Command {
-        name: "NEW_TAB",
-        desc: "Open new chart tab",
-    },
-    Command {
-        name: "CLOSE_TAB",
-        desc: "Close current chart tab",
     },
     Command {
         name: "OUTLIERS",
@@ -350,16 +284,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Scrape status dashboard — fundamentals, SEC, crypto",
     },
     Command {
-        name: "ALERTS",
-        desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)",
-    },
-    Command {
         name: "RISKRUIN",
         desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)",
-    },
-    Command {
-        name: "REPLAY",
-        desc: "Market replay mode — step through history bar-by-bar",
     },
     Command {
         name: "STORAGE",
@@ -369,360 +295,11 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "SYNC",
         desc: "Bar sync status — % healthy per broker/TF across Kraken, Alpaca",
     },
-    // Drawing tools
-    Command {
-        name: "DRAW_HLINE",
-        desc: "Draw horizontal line",
-    },
-    Command {
-        name: "DRAW_TRENDLINE",
-        desc: "Draw trendline (2 clicks)",
-    },
-    Command {
-        name: "DRAW_FIBO",
-        desc: "Draw Fibonacci retracement",
-    },
     Command {
         name: "JOURNAL",
         desc: "Trade Journal — log trades with notes",
     },
-    Command {
-        name: "DRAW_VLINE",
-        desc: "Draw vertical line",
-    },
-    Command {
-        name: "DRAW_RECT",
-        desc: "Draw rectangle zone",
-    },
-    Command {
-        name: "DRAW_RAY",
-        desc: "Draw ray (extends right)",
-    },
-    Command {
-        name: "DRAW_CHANNEL",
-        desc: "Draw parallel channel (3 clicks)",
-    },
-    Command {
-        name: "DRAW_PARALLEL_CH",
-        desc: "Draw parallel channel (2 clicks)",
-    },
-    Command {
-        name: "DRAW_FIB_CHANNEL",
-        desc: "Draw Fibonacci channel (3 clicks)",
-    },
-    Command {
-        name: "DRAW_FIB_TIME",
-        desc: "Draw Fibonacci time zones",
-    },
-    Command {
-        name: "DRAW_PRICE_LABEL",
-        desc: "Draw price label with badge",
-    },
-    Command {
-        name: "DRAW_CALLOUT",
-        desc: "Draw callout with arrow (2 clicks)",
-    },
-    Command {
-        name: "DRAW_HIGHLIGHTER",
-        desc: "Draw highlighter zone (2 clicks)",
-    },
-    Command {
-        name: "DRAW_CROSS_MARKER",
-        desc: "Draw cross marker (+)",
-    },
-    Command {
-        name: "DRAW_POLYLINE",
-        desc: "Draw polyline (multi-click, dbl-click end)",
-    },
-    Command {
-        name: "DRAW_ANCHOR_NOTE",
-        desc: "Draw anchor note with text box",
-    },
-    Command {
-        name: "DRAW_REGRESSION",
-        desc: "Draw regression channel with StdDev bands",
-    },
-    Command {
-        name: "DRAW_GANN_BOX",
-        desc: "Draw Gann Box with grid lines (2 clicks)",
-    },
-    Command {
-        name: "DRAW_ELLIOTT",
-        desc: "Draw Elliott Wave labels 1-5 (5 clicks)",
-    },
-    Command {
-        name: "DRAW_ABC",
-        desc: "Draw ABC correction labels (3 clicks)",
-    },
-    Command {
-        name: "DRAW_DATE_RANGE",
-        desc: "Draw date range measurement (2 clicks)",
-    },
-    Command {
-        name: "DRAW_DATE_PRICE",
-        desc: "Draw date & price range measurement (2 clicks)",
-    },
-    Command {
-        name: "DRAW_HEAD_SHOULDERS",
-        desc: "Draw Head & Shoulders pattern (5 clicks)",
-    },
-    Command {
-        name: "DRAW_XABCD",
-        desc: "Draw XABCD harmonic pattern (5 clicks)",
-    },
-    Command {
-        name: "DRAW_BRUSH",
-        desc: "Draw freehand brush (click-drag)",
-    },
-    Command {
-        name: "DRAW_FIB_CIRCLE",
-        desc: "Draw Fibonacci circle (2 clicks: center + radius)",
-    },
-    Command {
-        name: "DRAW_ARC",
-        desc: "Draw arc through 3 points",
-    },
-    Command {
-        name: "DRAW_CURVE",
-        desc: "Draw Bezier curve (4 clicks: start, ctrl1, ctrl2, end)",
-    },
-    Command {
-        name: "DRAW_PATH",
-        desc: "Draw smooth path (multi-click, dbl-click end)",
-    },
-    Command {
-        name: "DRAW_FORECAST",
-        desc: "Draw forecast projection (2 clicks)",
-    },
-    Command {
-        name: "DRAW_GHOST_FEED",
-        desc: "Draw ghost feed (mirrors history forward, 2 clicks)",
-    },
-    Command {
-        name: "DRAW_SIGNPOST",
-        desc: "Draw signpost marker",
-    },
-    Command {
-        name: "DRAW_RULER",
-        desc: "Draw ruler (price, bars, % measurement)",
-    },
-    Command {
-        name: "DRAW_TIME_CYCLE",
-        desc: "Draw time cycle with semi-circles (2 clicks)",
-    },
-    Command {
-        name: "DRAW_SPEED_FAN",
-        desc: "Draw speed resistance fan (3 clicks)",
-    },
-    Command {
-        name: "DRAW_SPEED_ARC",
-        desc: "Draw speed resistance arc (3 clicks)",
-    },
-    Command {
-        name: "DRAW_FIB_SPIRAL",
-        desc: "Draw Fibonacci spiral (2 clicks: center + radius)",
-    },
-    Command {
-        name: "DRAW_ROTATED_RECT",
-        desc: "Draw rotated rectangle (3 clicks)",
-    },
-    Command {
-        name: "DRAW_ANCHORED_VWAP",
-        desc: "Draw anchored VWAP line from bar",
-    },
-    Command {
-        name: "DRAW_ANCHORED_TEXT",
-        desc: "Draw anchored text (1-click)",
-    },
-    Command {
-        name: "DRAW_COMMENT",
-        desc: "Draw comment note (1-click)",
-    },
-    Command {
-        name: "DRAW_ARROW_LEFT",
-        desc: "Draw left arrow marker (1-click)",
-    },
-    Command {
-        name: "DRAW_ARROW_RIGHT",
-        desc: "Draw right arrow marker (1-click)",
-    },
-    Command {
-        name: "DRAW_CIRCLE",
-        desc: "Draw circle (2-click center + radius)",
-    },
-    Command {
-        name: "DRAW_PITCH_FAN",
-        desc: "Draw pitch fan (2 clicks)",
-    },
-    Command {
-        name: "DRAW_TREND_FIB_TIME",
-        desc: "Draw trend-based fib time (2 clicks)",
-    },
-    Command {
-        name: "DRAW_GANN_SQUARE",
-        desc: "Draw Gann square (2 clicks)",
-    },
-    Command {
-        name: "DRAW_GANN_SQUARE_FIXED",
-        desc: "Draw Gann square fixed (2 clicks)",
-    },
-    Command {
-        name: "DRAW_BARS_PATTERN",
-        desc: "Draw bars pattern (2 clicks)",
-    },
-    Command {
-        name: "DRAW_PROJECTION",
-        desc: "Draw projection (2 clicks)",
-    },
-    Command {
-        name: "DRAW_DOUBLE_CURVE",
-        desc: "Draw double curve (2 clicks)",
-    },
-    Command {
-        name: "DRAW_TRIANGLE_PATTERN",
-        desc: "Draw triangle pattern (3 clicks)",
-    },
-    Command {
-        name: "DRAW_THREE_DRIVES",
-        desc: "Draw three drives pattern (3 clicks)",
-    },
-    Command {
-        name: "DRAW_ELLIOTT_DOUBLE",
-        desc: "Draw Elliott double combo WXY (3 clicks)",
-    },
-    Command {
-        name: "DRAW_ABCD",
-        desc: "Draw ABCD pattern (4 clicks)",
-    },
-    Command {
-        name: "DRAW_CYPHER",
-        desc: "Draw Cypher pattern (5 clicks)",
-    },
-    Command {
-        name: "DRAW_ELLIOTT_TRIANGLE",
-        desc: "Draw Elliott triangle ABCDE (5 clicks)",
-    },
-    Command {
-        name: "DRAW_ELLIOTT_TRIPLE",
-        desc: "Draw Elliott triple combo WXYXZ (5 clicks)",
-    },
-    Command {
-        name: "DRAW_ERASER",
-        desc: "Eraser mode — click to delete drawings",
-    },
-    Command {
-        name: "CLEAR_DRAWINGS",
-        desc: "Clear all drawings on chart",
-    },
-    Command {
-        name: "SESSIONS",
-        desc: "Toggle trading session highlighting (Asian/London/NY)",
-    },
-    Command {
-        name: "VOL_HEATMAP",
-        desc: "Toggle volume heatmap candle coloring",
-    },
-    Command {
-        name: "VWAP",
-        desc: "Toggle VWAP with deviation bands",
-    },
-    Command {
-        name: "PRICE_HIST",
-        desc: "Toggle price distribution histogram",
-    },
-    Command {
-        name: "SUPERTREND",
-        desc: "Toggle Supertrend indicator (ATR-based trend)",
-    },
-    Command {
-        name: "DONCHIAN",
-        desc: "Toggle Donchian Channels (N-bar high/low)",
-    },
-    Command {
-        name: "KELTNER",
-        desc: "Toggle Keltner Channels (EMA ± ATR)",
-    },
-    Command {
-        name: "REGRESSION",
-        desc: "Toggle Regression Channel (linear regression ± 2σ)",
-    },
-    Command {
-        name: "SQUEEZE",
-        desc: "Toggle Squeeze Momentum (BB inside KC)",
-    },
-    Command {
-        name: "VAROSC",
-        desc: "Toggle VaR Oscillator (20-bar rolling 95% VaR units)",
-    },
-    Command {
-        name: "CMO_CHART",
-        desc: "Toggle chart CMO pane (period 9)",
-    },
-    Command {
-        name: "QSTICK_CHART",
-        desc: "Toggle chart QStick pane (period 14)",
-    },
-    Command {
-        name: "DISPARITY_CHART",
-        desc: "Toggle chart Disparity pane (period 14)",
-    },
-    Command {
-        name: "BOP_CHART",
-        desc: "Toggle chart BOP pane (period 14)",
-    },
-    Command {
-        name: "STDDEV_CHART",
-        desc: "Toggle chart StdDev pane (period 20)",
-    },
-    Command {
-        name: "MFI_CHART",
-        desc: "Toggle chart MFI pane (period 14)",
-    },
-    Command {
-        name: "TRIX_CHART",
-        desc: "Toggle chart TRIX pane (15,9)",
-    },
-    Command {
-        name: "PPO_CHART",
-        desc: "Toggle chart PPO pane (12,26,9)",
-    },
-    Command {
-        name: "ULTOSC_CHART",
-        desc: "Toggle chart Ultimate Oscillator pane (7,14,28)",
-    },
-    Command {
-        name: "STOCHRSI_CHART",
-        desc: "Toggle chart StochRSI pane (14,14,3,3)",
-    },
-    Command {
-        name: "FVG",
-        desc: "Toggle Fair Value Gaps (3-bar imbalance zones)",
-    },
-    Command {
-        name: "ORDER_BLOCKS",
-        desc: "Toggle Order Blocks (ICT/Smart Money last opposite candle)",
-    },
-    Command {
-        name: "COPY_CHART",
-        desc: "Copy visible chart bars to clipboard as CSV",
-    },
-    Command {
-        name: "OBJECTS",
-        desc: "Open drawing object list (manage/delete drawings)",
-    },
     // Analytics
-    Command {
-        name: "COMPARE",
-        desc: "Normalized multi-symbol overlay",
-    },
-    Command {
-        name: "PIVOTS",
-        desc: "Classic pivot points on chart",
-    },
-    Command {
-        name: "SIGNAL",
-        desc: "Composite 0-100 trading signal",
-    },
     Command {
         name: "STATUS",
         desc: "Cache, memory, uptime status",
@@ -758,41 +335,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         name: "HELP",
         desc: "Keyboard shortcuts reference",
     },
-    // NNFX system presets
-    Command {
-        name: "NNFX",
-        desc: "Enable NNFX indicator preset (KAMA+Fisher+ATR+BVol)",
-    },
-    Command {
-        name: "RESET_IND",
-        desc: "Disable all indicators",
-    },
     // Additional analytics
-    Command {
-        name: "DATA_WINDOW",
-        desc: "All indicator values at cursor",
-    },
     // ORDER command removed — use Trading tab Open Trade button
-    Command {
-        name: "PREV_LEVELS",
-        desc: "Toggle previous candle levels (D/W)",
-    },
-    Command {
-        name: "FRACTALS",
-        desc: "Toggle Bill Williams fractals",
-    },
-    Command {
-        name: "HARMONICS",
-        desc: "Toggle harmonic pattern detection (Carney)",
-    },
-    Command {
-        name: "AUTO_FIB",
-        desc: "Auto Fibonacci (fractal swing retracement + extension)",
-    },
-    Command {
-        name: "SUPPLY_DEMAND",
-        desc: "Toggle supply/demand zone detection",
-    },
     Command {
         name: "NEW_WINDOW",
         desc: "Open new terminal window (separate process, multi-monitor)",
@@ -809,19 +353,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "CONGRESS",
         desc: "Congressional stock trades (House Stock Watcher)",
-    },
-    // Chart templates
-    Command {
-        name: "SAVE_TEMPLATE",
-        desc: "Save current indicators as named template (SAVE_TEMPLATE <name>)",
-    },
-    Command {
-        name: "LOAD_TEMPLATE",
-        desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)",
-    },
-    Command {
-        name: "TEMPLATES",
-        desc: "List all available chart templates",
     },
     Command {
         name: "WORKSPACE_SAVE",
@@ -898,15 +429,6 @@ pub(crate) const COMMANDS: &[Command] = &[
     Command {
         name: "KRAKEN",
         desc: "Kraken crypto exchange (connect, balance, trade)",
-    },
-    // ADR-092: UX improvements
-    Command {
-        name: "COMPACT",
-        desc: "Toggle compact execution mode (hide indicators + sub-panes)",
-    },
-    Command {
-        name: "RULER",
-        desc: "Ruler tool — measure price/time distance",
     },
 ];
 

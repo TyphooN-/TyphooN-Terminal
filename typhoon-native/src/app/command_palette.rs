@@ -1,7 +1,6 @@
 use super::*;
 
 mod ai_commands;
-mod chart_drawing;
 mod fundamental_event_commands;
 mod market_data_commands;
 mod outlier_scan_commands;
@@ -18,9 +17,6 @@ impl TyphooNApp {
             return;
         }
         if self.handle_research_window_command(&cmd_upper) {
-            return;
-        }
-        if self.handle_chart_drawing_command(&cmd_upper, ctx) {
             return;
         }
         if self.handle_ai_command(&cmd_upper) {
@@ -55,23 +51,7 @@ impl TyphooNApp {
             "HALTS" | "HALT" | "TRADE_HALTS" | "LULD" => {
                 self.show_halts_window = true;
             }
-            "MTF" | "MTF_GRID" => {
-                self.mtf_enabled = !self.mtf_enabled;
-                // When enabling the grid, queue empty cells for the off-thread
-                // deferred loader (was a synchronous try_load loop = UI freeze).
-                if self.mtf_enabled {
-                    self.queue_empty_charts_for_load();
-                }
-                self.log
-                    .push_back(LogEntry::info(format!("MTF grid: {}", self.mtf_enabled)));
-            }
-            "RELOAD" => {
-                // Queue all charts for the off-thread deferred loader instead of a
-                // synchronous try_load loop that blocked the UI for the whole reload.
-                self.queue_all_charts_for_reload();
-            }
             "SETTINGS" => self.show_settings = true,
-            "INDICATORS" => self.show_indicators_panel = !self.show_indicators_panel,
             "BACKTEST" => self.show_backtest = true,
             "SCREENER" => self.show_screener = true,
             "SYMBOLS" | "SYM" => self.show_symbols = true,
@@ -131,7 +111,6 @@ impl TyphooNApp {
             "SEC" => self.show_sec = true,
             "INSIDER" => self.show_insider = true,
             "SMA_INTELLIGENCE" => self.show_sma_intelligence = true,
-            "CONFLUENCE" => self.show_confluence = true,
             "STAT_ARB" => self.show_stat_arb = true,
             "RISK_BUDGET" => self.show_risk_budget = true,
             "ORDER_FLOW" => self.show_order_flow = true,
@@ -233,97 +212,6 @@ impl TyphooNApp {
                         .push_back(LogEntry::err(format!("Failed to launch new window: {}", e))),
                 }
             }
-            // Chart types
-            "CANDLE" => {
-                if let Some(c) = self.charts.get_mut(self.active_tab) {
-                    c.chart_type = ChartType::Candle;
-                }
-            }
-            "HEIKINASHI" => {
-                if let Some(c) = self.charts.get_mut(self.active_tab) {
-                    c.chart_type = ChartType::HeikinAshi;
-                }
-            }
-            "LINE" => {
-                if let Some(c) = self.charts.get_mut(self.active_tab) {
-                    c.chart_type = ChartType::Line;
-                }
-            }
-            "OHLC" => {
-                if let Some(c) = self.charts.get_mut(self.active_tab) {
-                    c.chart_type = ChartType::OhlcBars;
-                }
-            }
-            "RENKO" => {
-                if let Some(c) = self.charts.get_mut(self.active_tab) {
-                    c.chart_type = ChartType::Renko;
-                }
-            }
-            "EXPORT_CSV" => {
-                self.export_csv();
-            }
-            "SCREENSHOT" => {
-                self.screenshot_requested = true;
-                self.log.push_back(LogEntry::info(
-                    "Screenshot requested — capturing next frame...",
-                ));
-            }
-            "SHARE" | "SCREENSHOT_SHARE" => {
-                if let Some(ref path) = self.last_screenshot_path {
-                    if self.matrix_access_token.is_empty()
-                        || self.matrix_access_token == "none"
-                        || self.matrix_access_token == "pending"
-                    {
-                        self.log.push_back(LogEntry::warn(
-                            "Matrix: no access token — set it in Settings first",
-                        ));
-                    } else if path.exists() {
-                        let _ = self.broker_tx.send(BrokerCmd::MatrixSendImage {
-                            room_id: self.matrix_room.clone(),
-                            access_token: self.matrix_access_token.clone(),
-                            file_path: path.clone(),
-                        });
-                        self.log.push_back(LogEntry::info(format!(
-                            "Sharing screenshot to community chat: {}",
-                            path.display()
-                        )));
-                    } else {
-                        self.log.push_back(LogEntry::warn(
-                            "Screenshot file not found — take a SCREENSHOT first",
-                        ));
-                    }
-                } else {
-                    self.log.push_back(LogEntry::warn(
-                        "No screenshot taken yet — use SCREENSHOT first",
-                    ));
-                }
-            }
-            // Tabs
-            "NEW_TAB" => {
-                let tf = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| c.timeframe)
-                    .unwrap_or(Timeframe::H4);
-                let new_chart = ChartState::new(&self.symbol_input, tf);
-                self.charts.push(new_chart);
-                self.active_tab = self.charts.len() - 1;
-                self.rebuild_live_indices();
-                // Defer the expensive load to the paced loader so opening a tab never
-                // blocks the render thread on a heavy symbol (ADR-098).
-                self.queue_chart_reload(self.active_tab);
-                let sym = self.symbol_input.clone();
-                self.queue_open_symbol_sync_all_timeframes(&sym);
-            }
-            "CLOSE_TAB" => {
-                if self.charts.len() > 1 {
-                    self.charts.remove(self.active_tab);
-                    if self.active_tab >= self.charts.len() {
-                        self.active_tab = self.charts.len() - 1;
-                    }
-                    self.rebuild_live_indices();
-                }
-            }
             "RISKRUIN" => self.show_risk_ruin = true,
             "SCRAPESTATUS" => {
                 self.show_scrape_status = true;
@@ -359,92 +247,8 @@ impl TyphooNApp {
                     std::time::Instant::now(),
                 ));
             }
-
-            "REPLAY" => {
-                self.replay_active = !self.replay_active;
-                if self.replay_active {
-                    self.replay_bar_idx = 50.min(
-                        self.charts
-                            .get(self.active_tab)
-                            .map(|c| c.bars.len())
-                            .unwrap_or(0),
-                    );
-                    self.replay_playing = false;
-                    self.replay_timer = 0.0;
-                    self.log.push_back(LogEntry::info(
-                        "Replay ON — Space: play/pause, →: next bar, ←: prev bar, ↑/↓: speed"
-                            .to_string(),
-                    ));
-                } else {
-                    self.replay_bar_idx = 0;
-                    self.replay_playing = false;
-                    self.log.push_back(LogEntry::info("Replay OFF".to_string()));
-                }
-            }
-            "ALERTS" => {
-                self.show_alert_builder = true;
-                self.alert_symbol = self
-                    .charts
-                    .get(self.active_tab)
-                    .map(|c| c.symbol.clone())
-                    .unwrap_or_default();
-            }
             // Aliases
             "CALC" => self.show_risk_calc = true,
-            "COMPARE" => {
-                let sym = self.symbol_input.clone();
-                if !sym.is_empty() {
-                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        chart.compare_symbol = Some(sym.clone());
-                        chart.compare_bars.clear();
-                        if let Some(ref cache) = self.cache {
-                            let tf_label = chart.timeframe.cache_suffix();
-                            let keys = [
-                                format!("kraken:{}:{}", sym, tf_label),
-                                format!("alpaca:{}:{}", sym, tf_label),
-                            ];
-                            for key in &keys {
-                                if let Ok(Some(raw)) = cache.get_bars_raw(key) {
-                                    chart.compare_bars = raw
-                                        .into_iter()
-                                        .map(|(ts, o, h, l, c, v)| Bar {
-                                            ts_ms: ts,
-                                            open: o,
-                                            high: h,
-                                            low: l,
-                                            close: c,
-                                            volume: v,
-                                        })
-                                        .collect();
-                                    if !chart.compare_bars.is_empty() {
-                                        self.log.push_back(LogEntry::info(format!(
-                                            "Compare: {} loaded ({} bars)",
-                                            sym,
-                                            chart.compare_bars.len()
-                                        )));
-                                        break;
-                                    }
-                                }
-                            }
-                            if chart.compare_bars.is_empty() {
-                                self.log.push_back(LogEntry::warn(format!(
-                                    "Compare: no cached data for {}",
-                                    sym
-                                )));
-                            }
-                        }
-                    }
-                } else {
-                    // Empty symbol clears the compare overlay
-                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        chart.compare_symbol = None;
-                        chart.compare_bars.clear();
-                        self.log
-                            .push_back(LogEntry::info("Compare overlay cleared"));
-                    }
-                }
-            }
-            "SIGNAL" => self.show_indicators_panel = true,
             "DASHBOARD" => self.show_cache_stats = true,
             "STATUS" => self.show_cache_stats = true,
             "WORKSPACE" => {
@@ -502,107 +306,6 @@ impl TyphooNApp {
                         .push_back(LogEntry::warn("Connect to broker first"));
                 }
             }
-            "PIVOTS" => self.show_pivots = !self.show_pivots,
-            "SRLEVEL" => self.show_pivots = !self.show_pivots,
-            "FRACTALS" => self.show_fractals = !self.show_fractals,
-            "HARMONICS" => self.show_harmonics = !self.show_harmonics,
-            "AUTO_FIB" => self.show_auto_fib = !self.show_auto_fib,
-            "SUPPLY_DEMAND" => self.show_supply_demand = !self.show_supply_demand,
-            "NNFX" => {
-                // TyphooN NNFX preset (clean reset + enable)
-                // Reset all (skip sma200/kama since they get enabled below)
-                self.show_sma100 = false;
-                self.show_ema21 = false;
-                self.show_bollinger = false;
-                self.show_ichimoku = false;
-                self.show_wma = false;
-                self.show_hma = false;
-                self.show_psar = false;
-                self.show_rsi = false;
-                self.show_macd = false;
-                self.show_stochastic = false;
-                self.show_adx = false;
-                self.show_cci = false;
-                self.show_williams_r = false;
-                self.show_obv = false;
-                self.show_momentum = false;
-                self.show_cmo = false;
-                self.show_qstick = false;
-                self.show_disparity = false;
-                self.show_bop = false;
-                self.show_stddev = false;
-                self.show_mfi = false;
-                self.show_trix = false;
-                self.show_ppo = false;
-                self.show_ultosc = false;
-                self.show_stochrsi = false;
-                self.show_var_oscillator = false;
-                self.show_volume_pane = false;
-                self.show_fractals = false;
-                self.show_harmonics = false;
-                self.show_pivots = false;
-                self.show_ehlers_ss = false;
-                self.show_ehlers_decycler = false;
-                self.show_ehlers_itl = false;
-                self.show_ehlers_mama = false;
-                self.show_ehlers_ebsw = false;
-                self.show_ehlers_cyber = false;
-                self.show_ehlers_cg = false;
-                self.show_ehlers_roof = false;
-                // Main chart: ATR_Projection + PreviousCandleLevels + MultiKAMA + MTF_MA + SupplyDemand
-                self.show_atr_proj = true;
-                self.show_prev_levels = true;
-                self.show_kama = true;
-                self.show_sma200 = true;
-                self.show_supply_demand = true;
-                self.show_auto_fib = false;
-                // Sub-pane 1: EhlersFisherTransform | Sub-pane 2: BetterVolume
-                self.show_fisher = true;
-                self.show_better_volume = true;
-                self.log.push_back(LogEntry::info(
-                    "NNFX preset: ATR_Proj + PrevLevels + MultiKAMA + MTF_MA + S/D + Fisher + BVol",
-                ));
-            }
-            "RESET_IND" => {
-                self.show_sma200 = false;
-                self.show_sma100 = false;
-                self.show_kama = false;
-                self.show_ema21 = false;
-                self.show_bollinger = false;
-                self.show_ichimoku = false;
-                self.show_wma = false;
-                self.show_hma = false;
-                self.show_psar = false;
-                self.show_atr_proj = false;
-                self.show_prev_levels = false;
-                self.show_rsi = false;
-                self.show_fisher = false;
-                self.show_macd = false;
-                self.show_stochastic = false;
-                self.show_adx = false;
-                self.show_cci = false;
-                self.show_williams_r = false;
-                self.show_obv = false;
-                self.show_momentum = false;
-                self.show_cmo = false;
-                self.show_qstick = false;
-                self.show_disparity = false;
-                self.show_bop = false;
-                self.show_stddev = false;
-                self.show_mfi = false;
-                self.show_trix = false;
-                self.show_ppo = false;
-                self.show_ultosc = false;
-                self.show_stochrsi = false;
-                self.show_var_oscillator = false;
-                self.show_better_volume = false;
-                self.show_volume_pane = false;
-                self.show_fvg = false;
-                self.show_order_blocks = false;
-                self.log
-                    .push_back(LogEntry::info("All indicators disabled"));
-            }
-            "DATA_WINDOW" => self.show_data_window = true,
             // "ALERTS" handled above (alert builder)
             "ORDER" => {
                 self.submit_quick_trade();

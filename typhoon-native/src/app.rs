@@ -17,7 +17,6 @@ use eframe::egui;
 use egui_plot::{Bar as PlotBar, BarChart, Line, Plot, PlotPoints};
 use serde_json;
 use std::collections::{HashSet, VecDeque};
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 

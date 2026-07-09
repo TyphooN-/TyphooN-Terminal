@@ -412,156 +412,6 @@ fn test_chart_talib_gpu_fallback_series_have_expected_ranges() {
     assert!(stddev[19].unwrap_or_default() >= 0.0);
 }
 
-// ── Chart templates (snapshot capture/apply) ─────────────────────────
-
-#[test]
-fn test_capture_apply_indicator_snapshot() {
-    // We cannot construct TyphooNApp directly in tests (requires eframe context),
-    // but we can test the JSON round-trip logic directly.
-    // Build a snapshot matching the NNFX template
-    let snap = TyphooNApp::builtin_template_nnfx();
-    assert_eq!(snap["sma200"].as_bool(), Some(true));
-    assert_eq!(snap["kama"].as_bool(), Some(true));
-    assert_eq!(snap["fisher"].as_bool(), Some(true));
-    assert_eq!(snap["better_volume"].as_bool(), Some(true));
-    assert_eq!(snap["cmo"].as_bool(), Some(false));
-    assert_eq!(snap["qstick"].as_bool(), Some(false));
-    assert_eq!(snap["disparity"].as_bool(), Some(false));
-    assert_eq!(snap["bop"].as_bool(), Some(false));
-    assert_eq!(snap["stddev"].as_bool(), Some(false));
-    assert_eq!(snap["mfi"].as_bool(), Some(false));
-    assert_eq!(snap["trix"].as_bool(), Some(false));
-    assert_eq!(snap["ppo"].as_bool(), Some(false));
-    assert_eq!(snap["ultosc"].as_bool(), Some(false));
-    assert_eq!(snap["stochrsi"].as_bool(), Some(false));
-    assert_eq!(snap["var_oscillator"].as_bool(), Some(false));
-    assert_eq!(snap["bollinger"].as_bool(), Some(false));
-    assert_eq!(snap["macd"].as_bool(), Some(false));
-}
-
-#[test]
-fn test_clean_template_all_off_except_volume() {
-    let snap = TyphooNApp::builtin_template_clean();
-    assert_eq!(snap["volume_pane"].as_bool(), Some(true));
-    // All others should be false
-    for key in [
-        "sma200",
-        "sma100",
-        "kama",
-        "ema21",
-        "bollinger",
-        "ichimoku",
-        "rsi",
-        "fisher",
-        "macd",
-        "stochastic",
-        "adx",
-        "fractals",
-        "harmonics",
-        "supply_demand",
-        "fvg",
-        "cmo",
-        "qstick",
-        "disparity",
-        "bop",
-        "stddev",
-        "mfi",
-        "trix",
-        "ppo",
-        "ultosc",
-        "stochrsi",
-        "var_oscillator",
-    ] {
-        assert_eq!(
-            snap[key].as_bool(),
-            Some(false),
-            "CLEAN template: {} should be false",
-            key
-        );
-    }
-}
-
-#[test]
-fn test_full_template_all_on() {
-    let snap = TyphooNApp::builtin_template_full();
-    for key in [
-        "sma200",
-        "sma100",
-        "kama",
-        "ema21",
-        "bollinger",
-        "ichimoku",
-        "rsi",
-        "fisher",
-        "macd",
-        "stochastic",
-        "adx",
-        "fractals",
-        "harmonics",
-        "supply_demand",
-        "fvg",
-        "cmo",
-        "qstick",
-        "disparity",
-        "bop",
-        "stddev",
-        "mfi",
-        "trix",
-        "ppo",
-        "ultosc",
-        "stochrsi",
-        "var_oscillator",
-        "volume_pane",
-        "better_volume",
-        "squeeze",
-        "regression",
-    ] {
-        assert_eq!(
-            snap[key].as_bool(),
-            Some(true),
-            "FULL template: {} should be true",
-            key
-        );
-    }
-}
-
-#[test]
-fn test_template_roundtrip_json() {
-    // Verify that all templates produce valid JSON with consistent keys
-    let nnfx = TyphooNApp::builtin_template_nnfx();
-    let clean = TyphooNApp::builtin_template_clean();
-    let full = TyphooNApp::builtin_template_full();
-
-    // All three should have the same keys
-    let nnfx_obj = nnfx.as_object().unwrap();
-    let clean_obj = clean.as_object().unwrap();
-    let full_obj = full.as_object().unwrap();
-
-    assert_eq!(
-        nnfx_obj.len(),
-        clean_obj.len(),
-        "NNFX and CLEAN templates should have same number of keys"
-    );
-    assert_eq!(
-        nnfx_obj.len(),
-        full_obj.len(),
-        "NNFX and FULL templates should have same number of keys"
-    );
-
-    for key in nnfx_obj.keys() {
-        assert!(
-            clean_obj.contains_key(key),
-            "CLEAN template missing key: {}",
-            key
-        );
-        assert!(
-            full_obj.contains_key(key),
-            "FULL template missing key: {}",
-            key
-        );
-    }
-}
-
 // ── Format functions ─────────────────────────────────────────────────
 
 #[test]
@@ -1560,7 +1410,10 @@ fn armed_click_gate_over_central_panel() {
     // is what the placement gate consumes.
     assert!(raw_clicked, "primary_clicked() false on release frame");
     assert!(interact_pos.is_some(), "interact_pos None on release frame");
-    assert!(widget_clicked, "widget-routed clicked() false on release frame");
+    assert!(
+        widget_clicked,
+        "widget-routed clicked() false on release frame"
+    );
     // The chart body sits on the Background layer — the "over floating UI"
     // test used by chart input gating (windows = Middle, popups = Foreground)
     // must NOT fire here.

@@ -170,12 +170,10 @@ impl TyphooNApp {
                 }
             }
             "HOLDERS" => self.show_holders = true,
-            "COMPILE" => self.show_indicator_compiler = true,
             "CORRELATION" => self.show_cor = true,
             "SEASONALS" => self.show_seasonals = true,
             "MONTECARLO" => self.show_montecarlo = true,
             "STRESS_TEST" => self.show_stress_test = true,
-            "VOLUME_PROFILE" => self.show_volume_profile = true,
             "HV_CONE" => self.show_hv_cone = true,
             "SECTOR_HEATMAP" => self.show_sector_heatmap = true,
             "DIVSCREEN" => self.show_dividends = true,

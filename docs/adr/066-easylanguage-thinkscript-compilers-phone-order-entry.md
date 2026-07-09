@@ -90,7 +90,7 @@ Tests cover: simple MA, multi-input, multi-plot, `declare lower`, comment stripp
 - **Language dropdown** expanded from 2 to 4 entries (MQL5 / PineScript v5 / EasyLanguage / thinkScript).
 - **File loader** accepts `.el`, `.els` (EasyLanguage), `.ts`, `.tos` (thinkScript) in addition to `.mq5`/`.mqh`/`.pine`/`.txt`.
 - Auto-detection on load: `.pine` → PineScript, `.el`/`.els` → EasyLanguage, `.ts`/`.tos` → thinkScript, everything else → MQL5.
-- `COMPILE` command description updated to list all four languages.
+- Historical note: the old `COMPILE` palette route was removed by ADR-133; the compiler remains a graphical UI surface.
 
 ### 4. Phone order entry (ADR-052 Phase 2)
 

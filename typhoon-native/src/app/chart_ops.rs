@@ -1174,16 +1174,6 @@ impl TyphooNApp {
         }
     }
 
-    /// Queue every open chart for reload via the deferred loader (the RELOAD
-    /// command). Empty charts load off-thread; already-populated charts route to
-    /// the budget-gated synchronous refresh inside the scheduler, so even a full
-    /// reload spreads across frames instead of blocking one.
-    pub(super) fn queue_all_charts_for_reload(&mut self) {
-        for idx in 0..self.charts.len() {
-            self.queue_chart_reload(idx);
-        }
-    }
-
     pub(super) fn should_queue_empty_chart_reload(
         &self,
         idx: usize,

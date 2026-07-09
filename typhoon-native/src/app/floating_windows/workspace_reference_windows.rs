@@ -525,14 +525,10 @@ impl TyphooNApp {
                             ui.add_space(8.0);
 
                             // ── Commands reference (auto-generated from COMMANDS registry) ──
-                            // Skips the DRAW_* cluster — they're listed in their own section below.
                             ui.label(
                                 egui::RichText::new(format!(
                                     "Command palette ({} commands)",
-                                    COMMANDS
-                                        .iter()
-                                        .filter(|c| !c.name.starts_with("DRAW_"))
-                                        .count()
+                                    COMMANDS.len()
                                 ))
                                 .color(ACCENT)
                                 .strong(),
@@ -549,9 +545,6 @@ impl TyphooNApp {
                                 .num_columns(2)
                                 .show(ui, |ui| {
                                     for cmd in COMMANDS {
-                                        if cmd.name.starts_with("DRAW_") {
-                                            continue;
-                                        }
                                         if !matches(cmd.name, cmd.desc) {
                                             continue;
                                         }
@@ -564,44 +557,6 @@ impl TyphooNApp {
                                         ui.end_row();
                                     }
                                 });
-                            ui.add_space(8.0);
-
-                            // ── Drawing tools (separate section) ──
-                            ui.collapsing(
-                                egui::RichText::new(format!(
-                                    "Drawing tools ({} types)",
-                                    COMMANDS
-                                        .iter()
-                                        .filter(|c| c.name.starts_with("DRAW_"))
-                                        .count()
-                                ))
-                                .color(ACCENT)
-                                .strong(),
-                                |ui| {
-                                    egui::Grid::new("help_draw")
-                                        .striped(true)
-                                        .num_columns(2)
-                                        .show(ui, |ui| {
-                                            for cmd in COMMANDS {
-                                                if !cmd.name.starts_with("DRAW_") {
-                                                    continue;
-                                                }
-                                                if !matches(cmd.name, cmd.desc) {
-                                                    continue;
-                                                }
-                                                ui.label(
-                                                    egui::RichText::new(cmd.name)
-                                                        .monospace()
-                                                        .color(egui::Color32::from_rgb(
-                                                            150, 200, 255,
-                                                        )),
-                                                );
-                                                ui.label(cmd.desc);
-                                                ui.end_row();
-                                            }
-                                        });
-                                },
-                            );
                             ui.add_space(10.0);
 
                             // ── Status footer ──

@@ -16,7 +16,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with registered palette commands (~168 core + ~59 drawings) ││
+│  │ - Console (~) with research-only registered palette commands (ADR-133) ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
 │  │ - Risk / VaR / margin + research analytics  ││

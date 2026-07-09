@@ -1806,7 +1806,10 @@ fn packet_export_stem_sanitizes_path_unsafe_chars() {
 
 #[test]
 fn antigravity_cli_default_prefers_latest_stable_flash() {
-    assert_eq!(TyphooNApp::default_antigravity_cli_model(), "gemini-3.5-flash");
+    assert_eq!(
+        TyphooNApp::default_antigravity_cli_model(),
+        "gemini-3.5-flash"
+    );
 }
 
 #[test]
@@ -1855,8 +1858,14 @@ fn antigravity_cli_binary_prefers_agy_then_antigravity_then_gemini() {
         TyphooNApp::select_antigravity_cli_binary(|name| name == "gemini"),
         "gemini"
     );
-    assert_eq!(TyphooNApp::select_antigravity_cli_binary(|_| false), "gemini");
-    assert_eq!(TyphooNApp::antigravity_cli_display_name("agy"), "Antigravity");
+    assert_eq!(
+        TyphooNApp::select_antigravity_cli_binary(|_| false),
+        "gemini"
+    );
+    assert_eq!(
+        TyphooNApp::antigravity_cli_display_name("agy"),
+        "Antigravity"
+    );
 }
 
 #[test]
@@ -2023,25 +2032,142 @@ fn mtf_overlay_drops_misscaled_intraday_source_but_keeps_lagging_average() {
     ));
 }
 
-// ── SMA Intelligence (ADR-131) ───────────────────────────────────────────
-
-#[test]
-fn sma_intelligence_command_is_registered() {
-    let cmd = crate::app::commands::COMMANDS
-        .iter()
-        .find(|c| c.name == "SMA_INTELLIGENCE")
-        .expect("SMA_INTELLIGENCE must be in the palette");
-    assert!(
-        cmd.desc.to_lowercase().contains("outfit"),
-        "description should name the SMA-outfit concept: {}",
-        cmd.desc
-    );
-}
-
 #[test]
 fn ui_owned_controls_are_not_palette_commands() {
     let removed = [
-        "SET_SL", "SET_TP", "M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1",
+        "SET_SL",
+        "SET_TP",
+        "M1",
+        "M5",
+        "M15",
+        "M30",
+        "H1",
+        "H4",
+        "D1",
+        "W1",
+        "MN1",
+        "MTF",
+        "INDICATORS",
+        "RELOAD",
+        "CANDLE",
+        "HEIKINASHI",
+        "LINE",
+        "OHLC",
+        "RENKO",
+        "EXPORT_CSV",
+        "SCREENSHOT",
+        "SHARE",
+        "NEW_TAB",
+        "CLOSE_TAB",
+        "REPLAY",
+        "ALERTS",
+        "VOLUME_PROFILE",
+        "CLEAR_DRAWINGS",
+        "SESSIONS",
+        "VOL_HEATMAP",
+        "VWAP",
+        "PRICE_HIST",
+        "SUPERTREND",
+        "DONCHIAN",
+        "KELTNER",
+        "REGRESSION",
+        "SQUEEZE",
+        "VAROSC",
+        "CMO_CHART",
+        "QSTICK_CHART",
+        "DISPARITY_CHART",
+        "BOP_CHART",
+        "STDDEV_CHART",
+        "MFI_CHART",
+        "TRIX_CHART",
+        "PPO_CHART",
+        "ULTOSC_CHART",
+        "STOCHRSI_CHART",
+        "FVG",
+        "ORDER_BLOCKS",
+        "COPY_CHART",
+        "OBJECTS",
+        "COMPARE",
+        "PIVOTS",
+        "SIGNAL",
+        "NNFX",
+        "RESET_IND",
+        "DATA_WINDOW",
+        "PREV_LEVELS",
+        "FRACTALS",
+        "HARMONICS",
+        "AUTO_FIB",
+        "SUPPLY_DEMAND",
+        "SAVE_TEMPLATE",
+        "LOAD_TEMPLATE",
+        "TEMPLATES",
+        "COMPILE",
+        "CONFLUENCE",
+        "CDLDOJI",
+        "CDLHAMMER",
+        "RSI_DIST",
+        "MACDEXT",
+        "COMPACT",
+        "RULER",
+        "DRAW_HLINE",
+        "DRAW_TRENDLINE",
+        "DRAW_FIBO",
+        "DRAW_VLINE",
+        "DRAW_RECT",
+        "DRAW_RAY",
+        "DRAW_CHANNEL",
+        "DRAW_PARALLEL_CH",
+        "DRAW_FIB_CHANNEL",
+        "DRAW_FIB_TIME",
+        "DRAW_PRICE_LABEL",
+        "DRAW_CALLOUT",
+        "DRAW_HIGHLIGHTER",
+        "DRAW_CROSS_MARKER",
+        "DRAW_POLYLINE",
+        "DRAW_ANCHOR_NOTE",
+        "DRAW_REGRESSION",
+        "DRAW_GANN_BOX",
+        "DRAW_ELLIOTT",
+        "DRAW_ABC",
+        "DRAW_DATE_RANGE",
+        "DRAW_DATE_PRICE",
+        "DRAW_HEAD_SHOULDERS",
+        "DRAW_XABCD",
+        "DRAW_BRUSH",
+        "DRAW_FIB_CIRCLE",
+        "DRAW_ARC",
+        "DRAW_CURVE",
+        "DRAW_PATH",
+        "DRAW_FORECAST",
+        "DRAW_GHOST_FEED",
+        "DRAW_SIGNPOST",
+        "DRAW_RULER",
+        "DRAW_TIME_CYCLE",
+        "DRAW_SPEED_FAN",
+        "DRAW_SPEED_ARC",
+        "DRAW_FIB_SPIRAL",
+        "DRAW_ROTATED_RECT",
+        "DRAW_ANCHORED_VWAP",
+        "DRAW_ANCHORED_TEXT",
+        "DRAW_COMMENT",
+        "DRAW_ARROW_LEFT",
+        "DRAW_ARROW_RIGHT",
+        "DRAW_CIRCLE",
+        "DRAW_PITCH_FAN",
+        "DRAW_TREND_FIB_TIME",
+        "DRAW_GANN_SQUARE",
+        "DRAW_GANN_SQUARE_FIXED",
+        "DRAW_BARS_PATTERN",
+        "DRAW_PROJECTION",
+        "DRAW_DOUBLE_CURVE",
+        "DRAW_TRIANGLE_PATTERN",
+        "DRAW_THREE_DRIVES",
+        "DRAW_ELLIOTT_DOUBLE",
+        "DRAW_ABCD",
+        "DRAW_CYPHER",
+        "DRAW_ELLIOTT_TRIANGLE",
+        "DRAW_ELLIOTT_TRIPLE",
+        "DRAW_ERASER",
     ];
     for name in removed {
         assert!(
@@ -2051,6 +2177,26 @@ fn ui_owned_controls_are_not_palette_commands() {
             "{name} should stay out of the command palette; use the chart/toolbar UI instead"
         );
     }
+
+    assert!(
+        crate::app::commands::COMMANDS
+            .iter()
+            .all(|c| !c.name.starts_with("DRAW_")),
+        "drawing tools belong in the graphical chart UI, not the research command palette"
+    );
+}
+
+#[test]
+fn sma_intelligence_command_remains_research_surface() {
+    let cmd = crate::app::commands::COMMANDS
+        .iter()
+        .find(|c| c.name == "SMA_INTELLIGENCE")
+        .expect("SMA_INTELLIGENCE remains a research floating-window command");
+    assert!(
+        cmd.desc.to_lowercase().contains("outfit"),
+        "description should name SMA outfit research: {}",
+        cmd.desc
+    );
 }
 
 #[test]

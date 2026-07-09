@@ -3482,8 +3482,8 @@ body_abs, upper_wick, lower_wick, consecutive_same_color,
 last_close. First sentiment-run-length surface in the packet:
 unlike RUNLEN (ADR-079, *raw-close* run length), HEIKIN measures
 run length after the HA smoothing — which the AI can compare to
-detect raw/smoothed divergence. Note: the chart-type switch
-`HEIKINASHI` remains wired as the canonical chart transform; this
+detect raw/smoothed divergence. Note: the graphical chart UI still
+owns Heikin-Ashi as a canonical chart transform; this
 snapshot is the *numerical* complement shipped into the packet.
 Source: ADR-079 HEIKIN window.
 
@@ -5569,8 +5569,8 @@ wick, and consecutive-same-colour run-length diagnostics and
 STRONG_BULL_RUN (≥4 bars) / BULL / DOJI / BEAR / STRONG_BEAR_RUN
 labels — first sentiment-run-length surface ships the *smoothed* run
 complement to RUNLEN's (ADR-079) raw-close run so the AI can detect
-raw/smoothed divergence; note the chart-type switch `HEIKINASHI`
-remains wired as the canonical chart transform while this snapshot is
+raw/smoothed divergence; note the graphical chart UI owns Heikin-Ashi
+as a canonical chart transform while this snapshot is
 the *numerical* complement shipped into the packet; ADR-079 added five
 optional per-symbol blocks — STOCH / MACD / VWAP / MCGD / RWI — each
 measuring ~2 k/v rows and adding ~200-250 bytes when populated, for a
