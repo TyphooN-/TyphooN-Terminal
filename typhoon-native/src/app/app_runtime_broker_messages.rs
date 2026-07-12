@@ -3,6 +3,14 @@ use super::*;
 fn crossed_marker_milestone(before: usize, after: usize, interval: usize) -> bool {
     interval > 0 && after > before && after.is_multiple_of(interval)
 }
+
+fn should_refill_after_broker_drain(
+    refill_requested: bool,
+    heavy_sync: bool,
+    pending_fetches: usize,
+) -> bool {
+    refill_requested && (!heavy_sync || pending_fetches <= 200)
+}
 use crate::app::app_runtime_support::{
     alpaca_retry_reason_is_rate_limited, alpaca_sync_429_pause_secs, broker_msg_kind,
     is_routine_news_progress, json_result_card_from_text, should_emit_alpaca_retry_queue_log,
@@ -1049,7 +1057,18 @@ impl TyphooNApp {
                 );
             }
         }
-        if market_data_refill_requested {
+        // A refill walks the broad provider worksets (up to the full 13k xStocks
+        // catalog). Doing that after every settlement batch while the queue is
+        // already saturated made the nominal 3ms broker budget meaningless: the
+        // post-drain refill alone consumed 180-800ms on the egui thread. Let the
+        // existing one-second full-tilt scheduler refill a saturated queue; resume
+        // settlement-driven refills once it has drained enough to need capacity.
+        let pending_fetches = self.total_pending_market_data_fetches();
+        if should_refill_after_broker_drain(
+            market_data_refill_requested,
+            self.heavy_sync_in_progress,
+            pending_fetches,
+        ) {
             self.refill_market_data_sync_slots();
         }
         perf_broker_drain_ms = broker_drain_started.elapsed().as_secs_f64() * 1000.0;
@@ -1075,6 +1094,14 @@ impl TyphooNApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saturated_heavy_sync_defers_broad_refill_to_periodic_scheduler() {
+        assert!(!should_refill_after_broker_drain(true, true, 256));
+        assert!(should_refill_after_broker_drain(true, true, 200));
+        assert!(should_refill_after_broker_drain(true, false, 256));
+        assert!(!should_refill_after_broker_drain(false, true, 0));
+    }
 
     #[test]
     fn marker_milestone_logs_only_when_count_crosses_interval() {
