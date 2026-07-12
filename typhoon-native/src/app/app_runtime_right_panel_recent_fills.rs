@@ -12,26 +12,36 @@ struct FillAccountRows {
 impl TyphooNApp {
     pub(super) fn render_right_panel_recent_fills_section(&mut self, ui: &mut egui::Ui) {
         // ── Recent Fills Section ──────────────────────────────
-        let alpaca_accounts = self.recent_fill_alpaca_accounts();
-        let kraken_accounts = self.recent_fill_kraken_accounts();
-        let fills_count = alpaca_accounts
-            .iter()
-            .filter(|account| {
-                !self
-                    .hidden_alpaca_recent_fill_account_ids
-                    .contains(&account.account_id)
-            })
-            .map(|account| account.rows.len())
-            .sum::<usize>()
-            + kraken_accounts
-                .iter()
-                .filter(|account| {
-                    !self
-                        .hidden_kraken_recent_fill_account_ids
-                        .contains(&account.account_id)
-                })
-                .map(|account| account.rows.len())
-                .sum::<usize>();
+        // Cheap count for the header using source data directly.
+        // The full getters (which clone the fills/trades) are called only
+        // inside the expanded content, so collapsed panels stay cheap.
+        let fills_count = if self.alpaca_enabled {
+            let alpaca_hidden = &self.hidden_alpaca_recent_fill_account_ids;
+            if !self.alpaca_account_fills.is_empty() {
+                self.alpaca_account_fills
+                    .iter()
+                    .filter(|a| !alpaca_hidden.contains(&a.account_id))
+                    .map(|a| a.fills.len())
+                    .sum::<usize>()
+            } else {
+                self.recent_fills.len()
+            }
+        } else {
+            0
+        } + if self.kraken_enabled {
+            let kraken_hidden = &self.hidden_kraken_recent_fill_account_ids;
+            if !self.kraken_account_trades.is_empty() {
+                self.kraken_account_trades
+                    .iter()
+                    .filter(|a| !kraken_hidden.contains(&a.account_id))
+                    .map(|a| a.trades.len().min(100))
+                    .sum::<usize>()
+            } else {
+                self.kraken_trades.len().min(100)
+            }
+        } else {
+            0
+        };
 
         let recent_fills_section = egui::CollapsingHeader::new(
             egui::RichText::new(format!("☰ Recent Fills ({fills_count})"))
@@ -41,6 +51,9 @@ impl TyphooNApp {
         .id_salt("recent_fills_top")
         .default_open(self.right_recent_fills_open)
         .show(ui, |ui| {
+            let alpaca_accounts = self.recent_fill_alpaca_accounts();
+            let kraken_accounts = self.recent_fill_kraken_accounts();
+
             let source_count = [self.alpaca_enabled, self.kraken_enabled]
                 .into_iter()
                 .filter(|visible| *visible)

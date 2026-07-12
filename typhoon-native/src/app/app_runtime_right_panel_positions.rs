@@ -153,24 +153,34 @@ impl TyphooNApp {
         } else {
             Vec::new()
         };
-        let alpaca_count = alpaca_position_groups
-            .iter()
-            .filter(|account| {
-                !self
-                    .hidden_alpaca_position_account_ids
-                    .contains(&account.account_id)
-            })
-            .map(|account| account.positions.len())
-            .sum::<usize>();
-        let kr_count = kraken_position_groups
-            .iter()
-            .filter(|account| {
-                !self
-                    .hidden_kraken_position_account_ids
-                    .contains(&account.account_id)
-            })
-            .map(|account| account.positions.len())
-            .sum::<usize>();
+        // Cheap counts from source data for the header title.
+        // (groups are still built above for the content; this avoids re-filtering the cloned groups just for the "(N)").
+        let alpaca_count = if show_alpaca_positions {
+            if !self.alpaca_account_positions.is_empty() {
+                self.alpaca_account_positions
+                    .iter()
+                    .filter(|a| !self.hidden_alpaca_position_account_ids.contains(&a.account_id))
+                    .map(|a| a.positions.len())
+                    .sum::<usize>()
+            } else {
+                self.live_positions.len()
+            }
+        } else {
+            0
+        };
+        let kr_count = if show_kr_positions {
+            if !self.kraken_account_positions.is_empty() {
+                self.kraken_account_positions
+                    .iter()
+                    .filter(|a| !self.hidden_kraken_position_account_ids.contains(&a.account_id))
+                    .map(|a| a.positions.len())
+                    .sum::<usize>()
+            } else {
+                self.kr_positions.len()
+            }
+        } else {
+            0
+        };
         let pos_count = alpaca_count + kr_count;
         let (pos_stale_lbl, pos_stale_col) = self.staleness_badge(self.positions_last_update_ts);
         let pos_header = format!("☰ Positions ({})  •  {}", pos_count, pos_stale_lbl);
