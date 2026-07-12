@@ -686,8 +686,8 @@ impl TyphooNApp {
     }
 
     pub(super) fn schedule_light_market_data_targets(&mut self) -> usize {
-        let symbols: Vec<String> = self.market_data_focus_symbols().into_iter().collect();
-        if symbols.is_empty() {
+        let focus = self.market_data_focus_symbols();
+        if focus.is_empty() {
             return 0;
         }
         let timeframes = self.enabled_standard_sync_timeframes();
@@ -700,7 +700,7 @@ impl TyphooNApp {
             32
         };
         let mut dispatched = 0usize;
-        for symbol in symbols {
+        for symbol in &focus {
             for tf in &timeframes {
                 let mut queued = false;
                 if self.kraken_enabled {
@@ -1107,10 +1107,11 @@ impl TyphooNApp {
         let demand_symbols = self.kraken_equity_demand_symbols();
         let native_symbols =
             kraken_equity_native_history_symbols(&catalog_symbols, &demand_symbols);
+        // Move the chosen list instead of cloning either.
         let fallback_symbols = if catalog_symbols.is_empty() {
-            demand_symbols.clone()
+            demand_symbols
         } else {
-            catalog_symbols.clone()
+            catalog_symbols
         };
         if !self.kraken_enabled
             || !self.kraken_full_bar_sync_enabled

@@ -3496,6 +3496,7 @@ impl SqliteCache {
         // from Yahoo/Alpaca/Kraken can represent the same candle at 00:00,
         // 04:00, 05:00, or a live-close timestamp; keep one canonical bucket
         // and let the newer incoming/refetched bar replace older cache content.
+        all_bars.reserve(new_bars.len());
         all_bars.extend(new_bars);
         let mut keyed_bars: std::collections::BTreeMap<i64, serde_json::Value> =
             std::collections::BTreeMap::new();
