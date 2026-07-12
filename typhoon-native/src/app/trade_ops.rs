@@ -1026,8 +1026,8 @@ impl TyphooNApp {
         // Use cached list when populated (central rebuild in app_runtime) to avoid
         // repeated O(n) construction from charts/positions/orders/watchlist on every
         // news scrape or filter call.
-        let mut set: std::collections::HashSet<String> = if !self.cached_active_symbols.is_empty() {
-            self.cached_active_symbols.iter().cloned().collect()
+        let mut set: std::collections::HashSet<String> = if !self.cached_active_symbols_set.is_empty() {
+            self.cached_active_symbols_set.clone()
         } else {
             self.active_symbols().into_iter().collect()
         };
