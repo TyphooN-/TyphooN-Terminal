@@ -61,7 +61,9 @@ rustls = { version = "0.23", default-features = false, features = ["std", "aws_l
 chrono = { workspace = true }
 
 # Native file dialog
-rfd = "0.17"
+# Synchronous dialogs use the desktop portal. No parent window handle is passed,
+# so rfd's direct Wayland client backend is unnecessary.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 # Serialization for session persistence
 serde = { workspace = true }
@@ -82,7 +84,7 @@ image = { version = "0.25", default-features = false, features = ["webp", "png",
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 
 # Custom allocator — mimalloc is 5-15% faster than system malloc on small alloc heavy workloads
 mimalloc = { version = "0.1", default-features = false }

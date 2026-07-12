@@ -326,3 +326,35 @@ GPU tree just to chase crates.io latest.
 
 Validation for this pass: `cargo check --workspace`, `cargo audit`, manifest
 drift scan, duplicate tree inspection, and `git diff --check` all pass.
+
+## Follow-up alignment (2026-07-12)
+
+The workspace-wide security refresh advanced `tokio-tungstenite` to 0.30 and
+every compatible package Cargo could resolve, then audited feature unification
+and every duplicate family. Direct requirements remain aligned: dependencies
+used by multiple TyphooN crates inherit one requirement and default-feature
+policy from `[workspace.dependencies]`; member manifests add only call-site
+features.
+
+Feature minimization removed twelve resolved packages overall (563 → 551):
+unused tracing attribute/log/ANSI support, serial-test async support,
+rusqlite's desktop-irrelevant WASM VFS, rfd's redundant direct Wayland client,
+wasm-encoder's unused component model, the old WebSocket rand 0.9 line, and the
+`webpki-roots 0.26` compatibility wrapper. The WebSocket stack now shares
+RustCrypto 0.11 primitives where upstream permits and uses the platform trust
+store already selected by reqwest.
+
+The two update blockers are unchanged in principle:
+
+- `wgpu 30` cannot move independently of eframe/egui-wgpu 0.35's wgpu 29 type
+  pairing. A direct bump would create two incompatible GPU type universes.
+- `generic-array 0.14.7` remains exact-pinned by the latest Secret Service
+  backend's RustCrypto 0.10 family. `tokio-tungstenite 0.30` no longer
+  contributes to this blocker.
+
+Remaining `cargo tree -d` entries were traced to current upstream owners and are
+not workspace drift: Secret Service versus modern RustCrypto, winit versus
+clipboard Smithay generations, and independent GPU/SQLite/HTML/TLS support
+stacks. Removing them locally would require dropping supported behavior or
+forking upstream. See ADR-088's 2026-07-12 audit for the exact update and feature
+inventory.

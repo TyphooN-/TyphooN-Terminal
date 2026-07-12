@@ -30,6 +30,11 @@
 
 ## 1. High-level Docs (ROADMAP.md, ARCHITECTURE.md, DESIGN_PHILOSOPHY.md, INDICATORS.md)
 
+- [x] Security-first dependency refresh (2026-07-12): all workspace manifests
+  share common direct requirements, explicit minimum feature sets replace broad
+  defaults, `tokio-tungstenite` is current, the lockfile is at its compatible
+  ceiling, RustSec is clean under documented policy, and every remaining
+  duplicate family is traced to an upstream owner — ADR-031/088.
 - [x] Broker scope (Kraken Spot / Equities/xStocks / Futures + Alpaca + Yahoo corroborator) — matches code + tiers in ARCHITECTURE/PERFORMANCE.
 - [x] Deprecations (CLI/TUI archived on deprecated/cli-tui, MT5/Darwinex, CryptoCompare, LAN, martingale, custom TFs) — correctly documented in ROADMAP and DESIGN_PHILOSOPHY.
 - [x] Native GUI primary / engine as library — accurate.

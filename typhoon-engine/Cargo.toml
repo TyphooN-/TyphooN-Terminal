@@ -24,7 +24,9 @@ zstd = { workspace = true }
 # zeroize_derive proc-macro stays out of this crate's build graph.
 zeroize = { workspace = true }
 aes-gcm = { workspace = true }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+# Reuse the platform trust store already selected by reqwest/rustls. This avoids
+# compiling the legacy webpki-roots 0.26 compatibility wrapper beside v1.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 # Declared minimal: StreamExt (std) + SinkExt (sink) for the WS lanes.
 # `sink` was previously only enabled transitively by tokio-tungstenite's own
 # futures-util dep — declare what we call so a tungstenite feature change
@@ -33,9 +35,9 @@ futures-util = { workspace = true, features = ["std", "sink"] }
 # Alpaca's streaming APIs frame payloads as MessagePack; decode binary frames
 # into serde_json::Value so the existing JSON parsers can consume them.
 rmp-serde = "1"
-crc32fast = "1.5.0"
+crc32fast = { version = "1.5.0", default-features = false, features = ["std"] }
 async-trait = "0.1"
-rusqlite = { workspace = true, features = ["bundled"] }
+rusqlite = { workspace = true, features = ["bundled", "cache"] }
 # System keyring for credential storage (keyring 4.x split crates).
 # The sample test store rides in dev-dependencies only — the shipped
 # binary carries just the Entry/Error API + the Secret Service backend.
@@ -43,7 +45,7 @@ keyring-core = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
 pbkdf2 = { workspace = true }
-rand = "0.10"
+rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
 base64 = { workspace = true }
 # DOM-aware article body extractor: picks the publisher's main content node
 # (article/main/.caas-body/.article-body/etc.) and drops nav/header/footer/aside
@@ -55,5 +57,5 @@ dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 
 [dev-dependencies]
 tempfile = "3"
-serial_test = "3.5.0"
+serial_test = { version = "3.5.0", default-features = false }
 keyring-core = { workspace = true } # mock store for keyring tests

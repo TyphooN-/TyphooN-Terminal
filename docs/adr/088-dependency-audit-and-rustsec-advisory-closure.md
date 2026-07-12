@@ -1,7 +1,7 @@
 # ADR-088: Dependency Audit and RustSec Advisory Closure
 
 **Date:** 2026-04-25
-**Updated:** 2026-07-07
+**Updated:** 2026-07-12
 **Status:** Implemented
 **Related:** active workspace `Cargo.toml` files, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit). Historical CLI/vendor manifests referenced by the original audit are no longer on active master.
 
@@ -204,3 +204,69 @@ egui-wgpu 0.35 stack.
 
 Validation: `cargo check --workspace`, `cargo audit`, duplicate tree inspection,
 manifest drift scan, and `git diff --check` all pass.
+
+## Follow-up audit (2026-07-12)
+
+Full security-first manifest, feature, lockfile, advisory, and duplicate-version
+comb-over across all six workspace packages.
+
+### Upstream refresh
+
+- Direct semver-major: `tokio-tungstenite 0.29 → 0.30`; this also moves
+  `tungstenite 0.29 → 0.30` and `sha1 0.10 → 0.11`, consolidating the WebSocket
+  lane onto the same modern `digest 0.11`/`cpufeatures 0.3` family as TyphooN's
+  direct RustCrypto stack.
+- Compatible lockfile refreshes: `bytemuck 1.25.0 → 1.25.1`,
+  `bytemuck-derive 1.10.2 → 1.11.0`, `cc 1.2.66 → 1.2.67`,
+  `polyval 0.7.1 → 0.7.2`, `rand 0.8.6 → 0.8.7`,
+  `regex 1.12.4 → 1.13.0`, `regex-automata 0.4.14 → 0.4.15`,
+  `thread_local 1.1.9 → 1.1.10`, `tinyvec 1.11.0 → 1.12.0`,
+  `uuid 1.23.4 → 1.23.5`, `zerocopy`/`zerocopy-derive 0.8.53 → 0.8.54`,
+  and `zmij 1.0.21 → 1.0.22`.
+- `cargo update --workspace --dry-run --verbose` now reports only two
+  intentional blockers: `generic-array 0.14.7` and `wgpu 29.0.4`.
+
+### Feature and resolved-tree reduction
+
+- Disabled unused `tracing/attributes` and `tracing-subscriber` defaults;
+  retained only `tracing/std` plus subscriber `fmt` and `env-filter`. This
+  removes `tracing-attributes`, `tracing-log`, and `nu-ansi-term`.
+- Disabled `serial_test`'s unused async/logging defaults; the engine uses only
+  synchronous `#[serial]` tests. This removes `futures-executor` from the tree.
+- Disabled `rusqlite` defaults and retained only `bundled` + `cache`, both used
+  by the engine. This removes desktop-irrelevant `sqlite-wasm-rs` and
+  `rsqlite-vfs`.
+- Disabled `wasm-encoder/component-model`; TyphooN emits core WebAssembly
+  modules only. Retained `std`.
+- Disabled `rfd`'s direct Wayland backend and retained the XDG desktop portal;
+  TyphooN uses synchronous dialogs without a parent window handle. The app's
+  actual Wayland/X11 window support remains owned by eframe/winit.
+- Switched `tokio-tungstenite` from the `webpki-roots 0.26` compatibility
+  wrapper to native platform roots already present for reqwest/rustls. This
+  removes the duplicate `webpki-roots` major while preserving authenticated TLS.
+- Made minimal feature intent explicit for shared `serde`, `serde_json`,
+  `thiserror`, `zeroize`, `sha2`, `pbkdf2`, `base64`, `rusqlite`, plus engine
+  `crc32fast`, `rand`, and transpiler `pest`/`pest_derive`.
+
+The resolved lockfile shrank from **563 to 551 packages**. `cargo audit` exits
+clean with only the two documented build-time quick-xml acceptances in
+`.cargo/audit.toml`.
+
+### Remaining duplicate families
+
+`cargo tree -d --workspace` contains no direct workspace version drift and no
+locally avoidable duplicate identified by this pass. Remaining splits are owned
+by current upstream ecosystems:
+
+- Secret Service uses RustCrypto 0.10-era `aes/cipher/digest/hmac/sha2`, while
+  TyphooN encryption uses the current 0.11-era family. The latest published
+  `dbus-secret-service-keyring-store` still owns the old line.
+- eframe/winit/clipboard span `calloop`/Smithay 0.13/0.14 and 0.19/0.20;
+  disabling clipboard or a supported display backend would remove behavior, not
+  dead surface.
+- wgpu, rusqlite, scraper/HTML, TLS, and target-support owners require their
+  respective `foldhash`/`hashbrown`, `phf`, `rustix`, `getrandom`, `thiserror`,
+  and related semver lines. TyphooN does not declare competing direct versions.
+
+Do not patch or fork these merely to force a cosmetically single-version tree;
+retest them when their owning upstream stack releases a unifying version.

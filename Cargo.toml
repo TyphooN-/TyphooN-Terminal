@@ -10,28 +10,28 @@ members = [
 ]
 
 [workspace.dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0", features = ["preserve_order", "raw_value"] }
+serde = { version = "1.0", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std", "preserve_order", "raw_value"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
 reqwest = { version = "0.13", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "now"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-thiserror = "2"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false }
+thiserror = { version = "2", default-features = false, features = ["std"] }
 egui = { version = "0.35", default-features = false }
 futures-util = { version = "0.3", default-features = false }
-rusqlite = "0.40"
+rusqlite = { version = "0.40", default-features = false }
 # Cache blobs are modern zstd frames only — the legacy (v0.5–0.7 format)
 # and dictionary-builder default features stay off.
 zstd = { version = "0.13", default-features = false, features = ["arrays"] }
-zeroize = "1.9"
+zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 # Nonces come from rand::random, not the AEAD's rng — getrandom default off.
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 keyring-core = { version = "1", default-features = false }
-sha2 = "0.11"
+sha2 = { version = "0.11", default-features = false }
 hmac = "0.13"
-pbkdf2 = "0.13"
-base64 = "0.22"
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 typhoon-transpiler = { path = "typhoon-transpiler" }
 typhoon-engine = { path = "typhoon-engine" }
 typhoon-broker-runtime = { path = "typhoon-broker-runtime" }
