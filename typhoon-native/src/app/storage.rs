@@ -227,7 +227,15 @@ impl TyphooNApp {
 
     fn storage_filtered_rows_cache_key(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.bg_rev.hash(&mut h);
+        // Do not key this cache directly on `bg_rev`. The background snapshot
+        // refreshes every few seconds while heavy sync is active, and most of
+        // those refreshes only change timestamps/sizes for existing rows. Using
+        // `bg_rev` here forced Storage Manager to rebuild and resort 100k+
+        // rows on the egui thread every refresh, matching the observed
+        // `slow floating window: storage_sync took 240ms+` cadence and the
+        // multi-second stalls when SQLite was busy with maintenance. Treat the
+        // table as an operator snapshot: rebuild when row/filter/sort shape
+        // changes, not for every write-age tick.
         self.bg.detailed_stats.len().hash(&mut h);
         self.bg.cache_blob_sizes.len().hash(&mut h);
         self.storage_filter.hash(&mut h);
@@ -238,7 +246,10 @@ impl TyphooNApp {
 
     pub(super) fn cached_disabled_kraken_quote_cache_keys(&mut self) -> &[String] {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.bg_rev.hash(&mut h);
+        // Keep this independent of bg_rev for the same reason as
+        // `storage_filtered_rows_cache_key`: a broad sync can advance the
+        // background snapshot every few seconds without changing the set of
+        // cache keys eligible for this operator action.
         self.bg.detailed_stats.len().hash(&mut h);
         for quote in [
             "USD", "USDT", "USDC", "USDG", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF",
@@ -300,7 +311,9 @@ impl TyphooNApp {
 
     pub(super) fn cached_out_of_scope_kraken_cache_keys(&mut self) -> &[String] {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.bg_rev.hash(&mut h);
+        // Avoid rescanning all cache keys on every background snapshot; the
+        // eligibility set changes when the key count, Kraken universe, or sync
+        // filters change, not when existing rows get refreshed.
         self.bg.detailed_stats.len().hash(&mut h);
         // Eligibility inputs: every sector/quote flag plus the loaded-pairs set
         // (its size flips the delisted-residue half of the predicate on/off).
