@@ -486,12 +486,12 @@ impl TyphooNApp {
                         });
                 });
         }
-        let disabled_kraken_quote_keys = self.cached_disabled_kraken_quote_cache_keys().to_vec();
+        let disabled_kraken_quote_len = self.cached_disabled_kraken_quote_cache_keys().len();
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 egui::RichText::new(format!(
                     "Disabled Kraken quote caches: {}",
-                    disabled_kraken_quote_keys.len()
+                    disabled_kraken_quote_len
                 ))
                 .small()
                 .color(AXIS_TEXT),
@@ -499,11 +499,11 @@ impl TyphooNApp {
             if self.storage_prune_disabled_kraken_quotes_confirm {
                 if ui
                     .add_enabled(
-                        !disabled_kraken_quote_keys.is_empty(),
+                        disabled_kraken_quote_len > 0,
                         egui::Button::new(
                             egui::RichText::new(format!(
                                 "Confirm prune {} disabled Kraken quotes?",
-                                disabled_kraken_quote_keys.len()
+                                disabled_kraken_quote_len
                             ))
                             .small()
                             .strong()
@@ -514,7 +514,8 @@ impl TyphooNApp {
                     .clicked()
                 {
                     if let Some(cache) = self.cache.clone() {
-                        match cache.delete_keys(&disabled_kraken_quote_keys) {
+                        let keys = self.cached_disabled_kraken_quote_cache_keys().to_vec();
+                        match cache.delete_keys(&keys) {
                             Ok(deleted) => self.log.push_back(LogEntry::info(format!(
                                 "Pruned {} disabled Kraken quote cache entr{}",
                                 deleted,
@@ -538,7 +539,7 @@ impl TyphooNApp {
                 }
             } else if ui
                 .add_enabled(
-                    !disabled_kraken_quote_keys.is_empty(),
+                    disabled_kraken_quote_len > 0,
                     egui::Button::new(
                         egui::RichText::new("Prune disabled Kraken quotes")
                             .small()
@@ -552,12 +553,12 @@ impl TyphooNApp {
                 self.storage_prune_disabled_kraken_quotes_confirm = true;
             }
         });
-        let out_of_scope_kraken_keys = self.cached_out_of_scope_kraken_cache_keys().to_vec();
+        let out_of_scope_kraken_len = self.cached_out_of_scope_kraken_cache_keys().len();
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 egui::RichText::new(format!(
                     "Out-of-scope Kraken caches: {}",
-                    out_of_scope_kraken_keys.len()
+                    out_of_scope_kraken_len
                 ))
                 .small()
                 .color(AXIS_TEXT),
@@ -565,11 +566,11 @@ impl TyphooNApp {
             if self.storage_prune_out_of_scope_kraken_confirm {
                 if ui
                     .add_enabled(
-                        !out_of_scope_kraken_keys.is_empty(),
+                        out_of_scope_kraken_len > 0,
                         egui::Button::new(
                             egui::RichText::new(format!(
                                 "Confirm purge {} out-of-scope Kraken caches?",
-                                out_of_scope_kraken_keys.len()
+                                out_of_scope_kraken_len
                             ))
                             .small()
                             .strong()
@@ -580,7 +581,8 @@ impl TyphooNApp {
                     .clicked()
                 {
                     if let Some(cache) = self.cache.clone() {
-                        match cache.delete_keys(&out_of_scope_kraken_keys) {
+                        let keys = self.cached_out_of_scope_kraken_cache_keys().to_vec();
+                        match cache.delete_keys(&keys) {
                             Ok(deleted) => self.log.push_back(LogEntry::info(format!(
                                 "Purged {} out-of-scope Kraken cache entr{}",
                                 deleted,
@@ -591,7 +593,7 @@ impl TyphooNApp {
                                 e
                             ))),
                         }
-                        self.refresh_storage_snapshot_after_action("out-of-scope Kraken purge");
+                        self.refresh_storage_snapshot_after_action("out-of-scope Kraken prune");
                     }
                     self.pending_kraken_fetches.clear();
                     self.storage_prune_out_of_scope_kraken_confirm = false;
@@ -604,15 +606,15 @@ impl TyphooNApp {
                 }
             } else if ui
                 .add_enabled(
-                    !out_of_scope_kraken_keys.is_empty(),
+                    out_of_scope_kraken_len > 0,
                     egui::Button::new(
                         egui::RichText::new("Purge out-of-scope Kraken caches")
                             .small()
                             .color(egui::Color32::from_rgb(231, 76, 60)),
                     ),
                 )
-                .on_hover_text("Delete cached Kraken Spot pairs the current sync config would not fetch (disabled quote/sector, or no longer in Kraken's loaded universe). Keeps xStocks and fiat-FX. Catches residual like delisted tokens once Kraken pairs are loaded.")
-                .on_disabled_hover_text("No cached Kraken Spot entries are currently out of sync scope.")
+                .on_hover_text("Purge Kraken Spot pairs the current sync config would not fetch (disabled quotes/sectors + delisted/residual). Keeps xStocks and pure fiat-FX.")
+                .on_disabled_hover_text("No cached Kraken Spot entries currently out of scope for the active sync config.")
                 .clicked()
             {
                 self.storage_prune_out_of_scope_kraken_confirm = true;
