@@ -674,6 +674,12 @@ impl TyphooNApp {
     }
 
     pub(super) fn market_data_focus_symbols(&self) -> std::collections::HashSet<String> {
+        // The cached_active_symbols_set is precisely the normalized bare upper no-/ form
+        // (same logic as normalize_market_data_symbol + replace /). Use it directly for O(1)
+        // path when populated (avoids per-call map/collect in schedulers and workset builders).
+        if !self.cached_active_symbols_set.is_empty() {
+            return self.cached_active_symbols_set.clone();
+        }
         self.cached_active_symbols
             .iter()
             .map(|symbol| normalize_market_data_symbol(symbol).replace('/', ""))
@@ -890,6 +896,13 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_sync_symbol_sectors(&self) -> Vec<Vec<String>> {
+        // Use cached value if populated and key matches current active inputs.
+        // Cache is populated centrally in pre-broker cache block (O(1) hit after change).
+        let active_key = self.active_symbols_cache_key();
+        if self.cached_kraken_sync_sectors_key == Some(active_key) && !self.cached_kraken_sync_sectors.is_empty() {
+            return self.cached_kraken_sync_sectors.clone();
+        }
+        // Fallback / first build (rare after init).
         let mut sectors = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         let mut seen = std::collections::HashSet::new();
         let mut push_symbol = |source: &str| {

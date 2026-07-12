@@ -1023,8 +1023,14 @@ impl TyphooNApp {
     pub(super) fn news_focus_symbols(&self) -> std::collections::HashSet<String> {
         // Start from active_symbols(): open chart tabs + alpaca positions +
         // tt positions + kraken positions + user watchlist (deduped).
-        let mut set: std::collections::HashSet<String> =
-            self.active_symbols().into_iter().collect();
+        // Use cached list when populated (central rebuild in app_runtime) to avoid
+        // repeated O(n) construction from charts/positions/orders/watchlist on every
+        // news scrape or filter call.
+        let mut set: std::collections::HashSet<String> = if !self.cached_active_symbols.is_empty() {
+            self.cached_active_symbols.iter().cloned().collect()
+        } else {
+            self.active_symbols().into_iter().collect()
+        };
 
         // Open orders: live exposure that may not have a filled position yet.
         for o in &self.live_orders {

@@ -562,6 +562,8 @@ impl TyphooNApp {
             cached_active_symbols: Vec::with_capacity(64),
             cached_active_symbols_key: None,
             cached_active_symbols_set: std::collections::HashSet::with_capacity(64),
+            cached_kraken_sync_sectors: vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            cached_kraken_sync_sectors_key: None,
             cached_scoped_fundamentals: Vec::new(),
             cached_scoped_fundamentals_key: None,
             cached_alpaca_sync_state: std::collections::HashMap::new(),

@@ -828,6 +828,10 @@ pub struct TyphooNApp {
     pub(crate) cached_active_symbols_key: Option<u64>,
     /// PERF: HashSet of cached_active_symbols for O(1) lookup.
     pub(crate) cached_active_symbols_set: std::collections::HashSet<String>,
+    /// Cached Kraken sync sectors (4 buckets) for schedule_kraken_universe_sectors.
+    /// Recomputed only on active input or kraken_pairs/flags change (tied to active key + sig).
+    pub(crate) cached_kraken_sync_sectors: Vec<Vec<String>>,
+    pub(crate) cached_kraken_sync_sectors_key: Option<u64>,
     /// Cached scoped fundamentals (filtered by broker_scope). Rebuilt only when
     /// `(bg_rev, broker_scope)` changes — not per frame. Used by Sector Heatmap,
     /// Dividend Yield Screener, Outlier Scanner.

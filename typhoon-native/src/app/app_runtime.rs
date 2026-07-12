@@ -136,6 +136,12 @@ impl eframe::App for TyphooNApp {
                 })
                 .collect();
             self.cached_active_symbols_key = Some(active_symbols_key);
+            // Cache Kraken sectors result (avoids repeated linear scan over kraken_pairs + charts/watchlist
+            // on every schedule_kraken_universe_sectors call in background ticks).
+            if self.cached_kraken_sync_sectors_key != Some(active_symbols_key) {
+                self.cached_kraken_sync_sectors = self.kraken_sync_symbol_sectors();
+                self.cached_kraken_sync_sectors_key = Some(active_symbols_key);
+            }
         }
         // PERF: Cache scoped_fundamentals_owned() only when bg/scope changes — not per frame.
         // Was cloning ~500 Fundamentals structs (≈1 MB) every frame for no reason.
