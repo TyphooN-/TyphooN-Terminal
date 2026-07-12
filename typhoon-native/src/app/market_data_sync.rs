@@ -633,8 +633,8 @@ impl TyphooNApp {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return;
         };
-        let symbol = normalize_market_data_symbol(symbol).replace('/', "");
-        if symbol.is_empty() {
+        let sym_key = normalize_market_data_symbol(symbol).replace('/', "");
+        if sym_key.is_empty() {
             return;
         }
         let now_s = chrono::Utc::now().timestamp();
@@ -643,30 +643,28 @@ impl TyphooNApp {
             write_ts_s: now_s,
             bar_count: bar_count as i64,
         };
+        let tf_key = tf.to_string();
+        // Move the owned sym_key into the taken branch to avoid clone in hot per-bar path.
+        // Only clone if somehow multiple, but match ensures one.
         match source {
             "alpaca" => {
-                self.cached_alpaca_sync_state
-                    .insert((symbol.clone(), tf.to_string()), state);
+                self.cached_alpaca_sync_state.insert((sym_key, tf_key), state);
                 self.cached_alpaca_sync_state_rev = Some(self.bg_rev);
             }
             "kraken" => {
-                self.cached_kraken_sync_state
-                    .insert((symbol.clone(), tf.to_string()), state);
+                self.cached_kraken_sync_state.insert((sym_key.clone(), tf_key.clone()), state);
                 self.cached_kraken_sync_state_rev = Some(self.bg_rev);
             }
             "kraken-futures" => {
-                self.cached_kraken_futures_sync_state
-                    .insert((symbol.clone(), tf.to_string()), state);
+                self.cached_kraken_futures_sync_state.insert((sym_key.clone(), tf_key.clone()), state);
                 self.cached_kraken_futures_sync_state_rev = Some(self.bg_rev);
             }
             "kraken-equities" => {
-                self.cached_kraken_equities_sync_state
-                    .insert((symbol.clone(), tf.to_string()), state);
+                self.cached_kraken_equities_sync_state.insert((sym_key.clone(), tf_key.clone()), state);
                 self.cached_kraken_equities_sync_state_rev = Some(self.bg_rev);
             }
             "yahoo-chart" => {
-                self.cached_yahoo_chart_sync_state
-                    .insert((symbol.clone(), tf.to_string()), state);
+                self.cached_yahoo_chart_sync_state.insert((sym_key.clone(), tf_key.clone()), state);
                 self.cached_yahoo_chart_sync_state_rev = Some(self.bg_rev);
             }
             _ => {}
@@ -1162,7 +1160,7 @@ impl TyphooNApp {
             96
         };
         if self.cached_kraken_equities_sync_state_rev != Some(self.bg_rev) {
-            let previous = self.cached_kraken_equities_sync_state.clone();
+            let previous = std::mem::take(&mut self.cached_kraken_equities_sync_state);
             let mut rebuilt = self.build_source_cache_state_map("kraken-equities:");
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
             self.cached_kraken_equities_sync_state = rebuilt;
@@ -1251,7 +1249,7 @@ impl TyphooNApp {
             // rows the merged/chart path deliberately ignores.
             if !alpaca_timeframes.is_empty() {
                 if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
-                    let previous = self.cached_alpaca_sync_state.clone();
+                    let previous = std::mem::take(&mut self.cached_alpaca_sync_state);
                     let mut rebuilt = self.build_alpaca_cache_state_map();
                     merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
                     self.cached_alpaca_sync_state = rebuilt;
@@ -1351,7 +1349,7 @@ impl TyphooNApp {
                 );
                 if available_slots > 0 {
                     if self.cached_yahoo_chart_sync_state_rev != Some(self.bg_rev) {
-                        let previous = self.cached_yahoo_chart_sync_state.clone();
+                        let previous = std::mem::take(&mut self.cached_yahoo_chart_sync_state);
                         let mut rebuilt = self.build_source_cache_state_map("yahoo-chart:");
                         merge_recent_sync_overrides(&mut rebuilt, &previous, now_s);
                         self.cached_yahoo_chart_sync_state = rebuilt;
@@ -1706,7 +1704,7 @@ impl TyphooNApp {
             return false;
         }
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
-            let previous = self.cached_alpaca_sync_state.clone();
+            let previous = std::mem::take(&mut self.cached_alpaca_sync_state);
             let mut rebuilt = self.build_alpaca_cache_state_map();
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
             self.cached_alpaca_sync_state = rebuilt;
@@ -2119,7 +2117,7 @@ impl TyphooNApp {
         }
 
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
-            let previous = self.cached_alpaca_sync_state.clone();
+            let previous = std::mem::take(&mut self.cached_alpaca_sync_state);
             let mut rebuilt = self.build_alpaca_cache_state_map();
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
             self.cached_alpaca_sync_state = rebuilt;
@@ -2253,7 +2251,7 @@ impl TyphooNApp {
             return 0;
         }
         if self.cached_kraken_sync_state_rev != Some(self.bg_rev) {
-            let previous = self.cached_kraken_sync_state.clone();
+            let previous = std::mem::take(&mut self.cached_kraken_sync_state);
             let mut rebuilt = self.build_source_cache_state_map("kraken:");
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
             self.cached_kraken_sync_state = rebuilt;
@@ -2379,7 +2377,7 @@ impl TyphooNApp {
             return 0;
         }
         if self.cached_kraken_futures_sync_state_rev != Some(self.bg_rev) {
-            let previous = self.cached_kraken_futures_sync_state.clone();
+            let previous = std::mem::take(&mut self.cached_kraken_futures_sync_state);
             let mut rebuilt = self.build_source_cache_state_map("kraken-futures:");
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
             self.cached_kraken_futures_sync_state = rebuilt;

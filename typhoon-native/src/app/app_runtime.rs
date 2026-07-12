@@ -150,7 +150,7 @@ impl eframe::App for TyphooNApp {
             self.cached_scoped_fundamentals_key = Some(scope_key);
         }
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
-            let previous = self.cached_alpaca_sync_state.clone();
+            let previous = std::mem::take(&mut self.cached_alpaca_sync_state);
             let mut rebuilt = self.build_alpaca_cache_state_map();
             merge_recent_sync_overrides(&mut rebuilt, &previous, chrono::Utc::now().timestamp());
             self.cached_alpaca_sync_state = rebuilt;
