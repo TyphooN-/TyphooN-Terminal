@@ -907,6 +907,7 @@ impl TyphooNApp {
             let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(source);
             if symbol.is_empty()
                 || !self.kraken_spot_symbol_scrape_enabled(&symbol)
+                || seen.contains(&symbol)
                 || !seen.insert(symbol.clone())
             {
                 return;
