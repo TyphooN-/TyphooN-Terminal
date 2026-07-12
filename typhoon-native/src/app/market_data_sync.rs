@@ -1128,16 +1128,17 @@ impl TyphooNApp {
         // Kraken Equities is WS-first for live/current OHLC and REST/iapi remains
         // the repair/backfill lane. Treat all enabled standard timeframes as native
         // Kraken Equities coverage; assist providers keep their own narrower gates.
-        let native_timeframes: Vec<String> = enabled_timeframes
-            .iter()
-            .filter(|tf| kraken_equity_full_universe_timeframe(tf))
-            .cloned()
-            .collect();
-        let fallback_timeframes: Vec<String> = enabled_timeframes
-            .iter()
-            .filter(|tf| kraken_equity_broad_fallback_timeframe(tf))
-            .cloned()
-            .collect();
+        let mut native_timeframes = Vec::new();
+        let mut fallback_timeframes = Vec::new();
+        for tf in &enabled_timeframes {
+            let t = tf.as_str();
+            if kraken_equity_full_universe_timeframe(t) {
+                native_timeframes.push(tf.clone());
+            }
+            if kraken_equity_broad_fallback_timeframe(t) {
+                fallback_timeframes.push(tf.clone());
+            }
+        }
         if native_timeframes.is_empty() && fallback_timeframes.is_empty() {
             return 0;
         }
