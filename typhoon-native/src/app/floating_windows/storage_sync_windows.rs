@@ -214,13 +214,11 @@ impl TyphooNApp {
                                     }
                                 });
                                 ui.horizontal(|ui| {
-                                    // Guard against double-launch and sync starvation: compaction
-                                    // recompresses cache blobs and competes with historical bar
-                                    // writers. During broad catch-up it can make Storage look like
-                                    // sync has stopped, so keep manual compact out of the hot path
-                                    // just like the auto-compact gate does.
-                                    let compact_available = !self.auto_compact_in_progress
-                                        && !self.heavy_sync_in_progress;
+                                    // Manual compaction is an explicit operator action. Do not
+                                    // hide it behind the long-running `heavy_sync` flag; on a
+                                    // 96GB workstation the user may choose disk reclamation over
+                                    // maximum write throughput during closed-market catch-up.
+                                    let compact_available = !self.auto_compact_in_progress;
                                     let compact_btn = egui::Button::new(
                                         egui::RichText::new(format!(
                                             "Compact (zstd-{})",
@@ -230,11 +228,7 @@ impl TyphooNApp {
                                     );
                                     if ui
                                         .add_enabled(compact_available, compact_btn)
-                                        .on_disabled_hover_text(if self.auto_compact_in_progress {
-                                            "Compaction is already running."
-                                        } else {
-                                            "Broad market-data sync is active; wait until catch-up settles so compaction does not starve bar writes."
-                                        })
+                                        .on_disabled_hover_text("Compaction is already running.")
                                         .clicked()
                                     {
                                         let db_path = cache_db_path();
@@ -249,7 +243,7 @@ impl TyphooNApp {
                                             size_before as f64 / 1024.0 / 1024.0
                                         )));
                                     }
-                                    ui.label(egui::RichText::new("Recompress cold rows at max level; disabled during heavy sync.").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new("Recompress cold rows at max level. Manual runs are allowed during sync; they may temporarily compete with bar writes.").color(AXIS_TEXT).small());
                                 });
                                 ui.horizontal(|ui| {
                                     let job_running = self.storage_sanity_rx.is_some();
@@ -290,8 +284,8 @@ impl TyphooNApp {
                                 });
                                 self.render_sanity_report_panel(ui);
                                 // Auto-compact controls + readout (ADR-089). Manual compact
-                                // ignores the auto-enable setting but still respects the
-                                // in-progress/heavy-sync safety gates above.
+                                // ignores the auto-enable setting and the heavy-sync auto gate;
+                                // only double-launch is blocked.
                                 ui.horizontal(|ui| {
                                     let auto_label = format!(
                                         "Auto-compact ({})",
@@ -434,7 +428,6 @@ impl TyphooNApp {
                                     let maintenance_running = self.storage_maintenance_rx.is_some();
                                     let reclaim_available = self.cache.is_some()
                                         && !maintenance_running
-                                        && !self.heavy_sync_in_progress
                                         && !self.auto_compact_in_progress;
                                     if ui
                                         .add_enabled(
@@ -445,8 +438,6 @@ impl TyphooNApp {
                                         )
                                         .on_disabled_hover_text(if maintenance_running {
                                             "Storage maintenance is already running."
-                                        } else if self.heavy_sync_in_progress {
-                                            "Broad market-data sync is active; wait until catch-up settles so VACUUM does not starve bar writes or OOM."
                                         } else if self.auto_compact_in_progress {
                                             "Compaction is already running."
                                         } else {
@@ -480,7 +471,7 @@ impl TyphooNApp {
                                     }
                                     ui.label(
                                         egui::RichText::new(
-                                            "Run WAL checkpoint + VACUUM after prior deletes; disabled during heavy sync/compaction and runs off the UI thread.",
+                                            "Run WAL checkpoint + VACUUM after prior deletes. Manual runs are allowed during sync; disabled only while another maintenance/compaction job is running.",
                                         )
                                         .color(AXIS_TEXT)
                                         .small(),

@@ -96,13 +96,15 @@ impl TyphooNApp {
             }
             // Any newly-written bars supersede prior no-data tombstones.
             self.alpaca_no_data_drain(&symbol, &timeframe);
-            // Avoid a synchronous full SQLite storage-stat scan for every
-            // automated bar write. `note_cached_sync_success` keeps the
-            // scheduler O(1)-fresh; refresh the heavy Storage view only
-            // when a storage window is visible.
-            if self.show_storage || self.show_cache_stats {
-                self.refresh_storage_snapshot_after_action("alpaca_bars");
-            }
+            // Do not refresh Storage Manager stats on each automated bar write.
+            // With the Storage window open this was a full synchronous
+            // `stats() + detailed_stats_with_size()` SQLite scan on the egui
+            // thread for every `BarsFetched` message, which matches the runtime
+            // symptom: BrokerMsg::BarsFetched taking 600–1800ms and starving
+            // rendering while heavy sync is active. `note_cached_sync_success`
+            // keeps scheduler coverage O(1)-fresh; the normal background snapshot
+            // refresh updates Storage/Sync Status without blocking the broker
+            // drain path.
         }
         if count > 0 {
             self.unresolvable_drain(&source, &symbol, &timeframe);
