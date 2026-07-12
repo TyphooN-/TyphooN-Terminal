@@ -564,7 +564,7 @@ pub(super) fn select_alpaca_sync_workset(
         return selected;
     }
 
-    let mut foreground_symbols: Vec<&str> = focus_symbols.iter().map(String::as_str).collect();
+    let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
     foreground_symbols.sort();
     let foreground_budget = foreground_slots.min(batch_size);
     if foreground_budget > 0 && !foreground_symbols.is_empty() {
@@ -701,7 +701,9 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
             continue;
         };
 
-        let mut staged_selected = pending_fetches.clone();
+        // Track only this refill's candidates. Probe the potentially large
+        // in-flight set by reference instead of cloning it once per timeframe.
+        let mut staged_selected = HashSet::with_capacity(batch_size);
         let mut missing: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
         let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
         let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
@@ -721,6 +723,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
                     focus_symbols,
                     no_data_keys,
                     backfill_complete_pairs,
+                    pending_fetches,
                     &mut staged_selected,
                     now_s,
                     background_stale_periods,
@@ -745,6 +748,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
                     focus_symbols,
                     no_data_keys,
                     backfill_complete_pairs,
+                    pending_fetches,
                     &mut staged_selected,
                     now_s,
                     background_stale_periods,
@@ -821,7 +825,8 @@ pub(super) fn select_low_timeframe_sync_reserve_rotating(
     let symbol_start = *cursor % total_symbols;
 
     for tf in ordered_timeframes {
-        let mut staged_selected = pending_fetches.clone();
+        // Keep reserve-pass dedupe bounded to newly staged work.
+        let mut staged_selected = HashSet::with_capacity(batch_size);
         let mut missing: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
         let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
         let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
@@ -836,6 +841,7 @@ pub(super) fn select_low_timeframe_sync_reserve_rotating(
                 focus_symbols,
                 no_data_keys,
                 backfill_complete_pairs,
+                pending_fetches,
                 &mut staged_selected,
                 now_s,
                 background_stale_periods,
@@ -859,6 +865,7 @@ pub(super) fn select_low_timeframe_sync_reserve_rotating(
                     focus_symbols,
                     no_data_keys,
                     backfill_complete_pairs,
+                    pending_fetches,
                     &mut staged_selected,
                     now_s,
                     background_stale_periods,
@@ -898,6 +905,7 @@ fn collect_sync_candidate_for_timeframe(
     focus_symbols: &HashSet<String>,
     no_data_keys: &HashSet<String>,
     backfill_complete_pairs: &HashMap<String, AlpacaBackfillCompletePair>,
+    pending_fetches: &HashSet<String>,
     staged_selected: &mut HashSet<String>,
     now_s: i64,
     background_stale_periods: i64,
@@ -912,7 +920,10 @@ fn collect_sync_candidate_for_timeframe(
         return;
     }
     let fetch_key = alpaca_fetch_key(&symbol_key, tf);
-    if no_data_keys.contains(&fetch_key) || !staged_selected.insert(fetch_key.clone()) {
+    if no_data_keys.contains(&fetch_key)
+        || pending_fetches.contains(&fetch_key)
+        || !staged_selected.insert(fetch_key.clone())
+    {
         return;
     }
     let focus = focus_symbols.contains(&symbol_key);

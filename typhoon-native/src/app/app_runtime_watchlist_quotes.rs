@@ -237,18 +237,12 @@ impl TyphooNApp {
             }
         }
 
-        let mut held_position_keys: std::collections::HashSet<String> =
-            self.kr_positions_by_symbol.keys().cloned().collect();
-        held_position_keys.extend(self.kr_positions_by_symbol.values().map(|pos| {
-            normalize_quote_symbol(
-                pos.asset_id
-                    .rsplit(':')
-                    .next()
-                    .unwrap_or(pos.asset_id.as_str()),
-            )
-        }));
-        let watchlist_updates_position =
-            row_symbols.iter().any(|rs| held_position_keys.contains(rs));
+        // Reuse the maintained O(1) position indices instead of cloning all map
+        // keys and rebuilding normalized asset tails on every quote snapshot.
+        let watchlist_updates_position = row_symbols.iter().any(|symbol| {
+            self.kr_positions_by_symbol.contains_key(symbol)
+                || self.kr_position_asset_tails.contains(symbol)
+        });
         self.watchlist_rows = rows;
         self.rebuild_live_indices();
 

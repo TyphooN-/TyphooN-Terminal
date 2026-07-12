@@ -234,14 +234,6 @@ impl TyphooNApp {
                 self.watchlist_last_sorted_ascending = self.watchlist_sort.ascending;
             }
 
-            // Build a tiny vec of refs from the cached indices (cheap for typical watchlist size).
-            // Main win is skipping the sort every frame.
-            let sorted_wl: Vec<&WatchlistRow> = self
-                .watchlist_sorted_indices
-                .iter()
-                .map(|&i| &self.watchlist_rows[i])
-                .collect();
-
             if self.watchlist_rows.is_empty() && self.user_watchlist.is_empty() {
                 ui.label(
                     egui::RichText::new("Add symbols above.")
@@ -296,7 +288,10 @@ impl TyphooNApp {
                 // shown, Close (regular-session close) sits beside Last so close vs
                 // last is visible; the value columns compress to keep Vol off the
                 // "+"/"x" buttons.
-                let show_ext = sorted_wl.iter().any(|r| r.ext_change_pct.abs() > 0.001);
+                let show_ext = self
+                    .watchlist_sorted_indices
+                    .iter()
+                    .any(|&row_idx| self.watchlist_rows[row_idx].ext_change_pct.abs() > 0.001);
                 // Extended-hours adds Close + Ext%, so a narrow panel used to
                 // crush the symbol/Reg SHO badge into Last. Drop absolute Chg
                 // first and keep Chg% when the user manually collapses.
@@ -454,7 +449,8 @@ impl TyphooNApp {
                 );
 
                 // Data rows
-                for (idx, wl) in sorted_wl.iter().enumerate() {
+                for (idx, &row_idx) in self.watchlist_sorted_indices.iter().enumerate() {
+                    let wl = &self.watchlist_rows[row_idx];
                     let (row_rect, row_resp) =
                         ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
                     if !row_rect.intersects(ui.clip_rect()) {
