@@ -946,6 +946,7 @@ impl TyphooNApp {
             let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(source);
             if !symbol.is_empty()
                 && typhoon_engine::core::kraken_futures::is_futures_symbol(&symbol)
+                && !seen.contains(&symbol)
                 && seen.insert(symbol.clone())
             {
                 out.push(symbol);
@@ -2177,20 +2178,21 @@ impl TyphooNApp {
             &alpaca_dispatch_blocked,
         );
         if low_tf_reserve > 0 {
-            let mut staged_pending = self.pending_alpaca_fetches.clone();
-            staged_pending.extend(
-                candidates
-                    .iter()
-                    .map(|candidate| alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)),
-            );
-            candidates.extend(select_low_timeframe_sync_reserve_rotating(
+            // Avoid cloning the (potentially large) pending set. Build only a tiny
+            // set of fetch keys just chosen in the main pass, then filter the
+            // small reserve result against it. Uses real pending for in-flight skip.
+            let just_chosen: std::collections::HashSet<String> = candidates
+                .iter()
+                .map(|c| alpaca_fetch_key(&c.symbol, &c.timeframe))
+                .collect();
+            let reserve = select_low_timeframe_sync_reserve_rotating(
                 symbols,
                 &timeframes,
                 &self.cached_alpaca_sync_state,
                 &focus_symbols,
                 &no_data_keys,
                 &self.alpaca_backfill_complete_pairs,
-                &staged_pending,
+                &self.pending_alpaca_fetches,
                 low_tf_reserve,
                 scan_limit,
                 &mut cursor,
@@ -2198,7 +2200,12 @@ impl TyphooNApp {
                 24,
                 alpaca_sync_target_bars,
                 &alpaca_dispatch_blocked,
-            ));
+            );
+            candidates.extend(
+                reserve.into_iter().filter(|c| {
+                    !just_chosen.contains(&alpaca_fetch_key(&c.symbol, &c.timeframe))
+                }),
+            );
         }
         drop_background_candidates_when_paused(&mut candidates);
         self.alpaca_sync_cursor = cursor;
@@ -2300,20 +2307,21 @@ impl TyphooNApp {
             &kraken_dispatch_blocked,
         );
         if low_tf_reserve > 0 {
-            let mut staged_pending = self.pending_kraken_fetches.clone();
-            staged_pending.extend(
-                candidates
-                    .iter()
-                    .map(|candidate| alpaca_fetch_key(&candidate.symbol, &candidate.timeframe)),
-            );
-            candidates.extend(select_low_timeframe_sync_reserve_rotating(
+            // Avoid cloning the (potentially large) pending set. Build only a tiny
+            // set of fetch keys just chosen in the main pass, then filter the
+            // small reserve result against it. Uses real pending for in-flight skip.
+            let just_chosen: std::collections::HashSet<String> = candidates
+                .iter()
+                .map(|c| alpaca_fetch_key(&c.symbol, &c.timeframe))
+                .collect();
+            let reserve = select_low_timeframe_sync_reserve_rotating(
                 symbols,
                 &timeframes,
                 &self.cached_kraken_sync_state,
                 &focus_symbols,
                 no_data_keys,
                 &self.kraken_backfill_complete_pairs,
-                &staged_pending,
+                &self.pending_kraken_fetches,
                 low_tf_reserve,
                 scan_limit,
                 &mut cursor,
@@ -2321,7 +2329,12 @@ impl TyphooNApp {
                 24,
                 kraken_sync_target_bars,
                 &kraken_dispatch_blocked,
-            ));
+            );
+            candidates.extend(
+                reserve.into_iter().filter(|c| {
+                    !just_chosen.contains(&alpaca_fetch_key(&c.symbol, &c.timeframe))
+                }),
+            );
         }
         drop_background_candidates_when_paused(&mut candidates);
         self.kraken_spot_sync_cursors[cursor_idx] = cursor;
