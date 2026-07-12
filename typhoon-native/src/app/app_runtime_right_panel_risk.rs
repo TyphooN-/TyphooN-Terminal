@@ -147,9 +147,8 @@ impl TyphooNApp {
                     equity: if account.is_primary {
                         self.kraken_usd_equivalent_balance()
                     } else {
-                        self.kraken_account_roster
-                            .iter()
-                            .find(|roster| roster.id == account.account_id)
+                        self.kraken_roster_by_id
+                            .get(account.account_id.as_str())
                             .map(|roster| roster.equity)
                             .unwrap_or(0.0)
                     },
@@ -165,10 +164,7 @@ impl TyphooNApp {
         {
             return Vec::new();
         }
-        let primary = self
-            .kraken_account_roster
-            .iter()
-            .find(|account| account.is_primary);
+        let primary = self.kraken_primary_roster_entry.as_ref();
         vec![RiskAccountRow {
             broker: "Kraken",
             account_id: primary

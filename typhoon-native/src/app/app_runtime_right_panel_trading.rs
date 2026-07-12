@@ -359,12 +359,15 @@ impl TyphooNApp {
                     if let Some(chart) = self.charts.get(self.active_tab) {
                         if let Some(bar) = chart.bars.last() {
                             let close = bar.close;
-                            let chart_symbol = chart.symbol.split(':').last().unwrap_or("");
+                            let chart_symbol = bare_symbol_from_key(&chart.symbol)
+                                .replace('/', "")
+                                .trim_end_matches(".EQ")
+                                .trim_end_matches(".eq")
+                                .to_ascii_uppercase();
                             let active_pos = self
-                                .live_positions
-                                .iter()
-                                .chain(self.kr_positions.iter())
-                                .find(|pos| pos.symbol.contains(chart_symbol));
+                                .live_positions_by_symbol
+                                .get(&chart_symbol)
+                                .or_else(|| self.kr_positions_by_symbol.get(&chart_symbol));
                             // SL/TP/R:R info (trading-specific). Risk/equity summaries
                             // now live only inside the Risk & Account widget.
                             if let Some(pos) = active_pos {
