@@ -564,7 +564,7 @@ pub(super) fn select_alpaca_sync_workset(
         return selected;
     }
 
-    let mut foreground_symbols: Vec<String> = focus_symbols.iter().cloned().collect();
+    let mut foreground_symbols: Vec<&str> = focus_symbols.iter().map(String::as_str).collect();
     foreground_symbols.sort();
     let foreground_budget = foreground_slots.min(batch_size);
     if foreground_budget > 0 && !foreground_symbols.is_empty() {
