@@ -70,7 +70,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Safe byte casting for GPU buffer I/O (replaces unsafe custom Pod trait)
-bytemuck = { version = "1", features = ["derive"] }
+bytemuck = "1"
 
 # Prometheus metrics — text exposition only, so the default protobuf
 # encoder stays off. The /metrics endpoint is a minimal hand-rolled

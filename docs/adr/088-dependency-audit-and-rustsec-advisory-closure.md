@@ -247,6 +247,17 @@ comb-over across all six workspace packages.
 - Made minimal feature intent explicit for shared `serde`, `serde_json`,
   `thiserror`, `zeroize`, `sha2`, `pbkdf2`, `base64`, `rusqlite`, plus engine
   `crc32fast`, `rand`, and transpiler `pest`/`pest_derive`.
+- A final independent manifest review moved Tokio's capabilities out of the
+  workspace root and onto the members that call them: engine gets
+  `rt/sync/time/macros/net/io-util`, broker-runtime gets `rt/fs/sync/time`, and
+  native owns `rt-multi-thread` plus its metrics-server features. Likewise,
+  serde_json `raw_value` and byte-stable `preserve_order` are engine-only; a
+  cache round-trip regression test proves the latter is load-bearing.
+- Removed the redundant engine `keyring-core` dev declaration (the normal
+  dependency already serves unit tests) and TyphooN's unused `bytemuck/derive`
+  selector. `bytemuck_derive` remains upstream-owned by the egui/wgpu graph, so
+  this correctly narrows TyphooN's edge without pretending the resolved package
+  can disappear.
 
 The resolved lockfile shrank from **563 to 551 packages**. `cargo audit` exits
 clean with only the two documented build-time quick-xml acceptances in

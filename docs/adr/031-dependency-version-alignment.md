@@ -336,6 +336,13 @@ used by multiple TyphooN crates inherit one requirement and default-feature
 policy from `[workspace.dependencies]`; member manifests add only call-site
 features.
 
+The final independent manifest review enforced that rule for Tokio and
+serde_json rather than merely documenting it: the workspace roots now carry no
+Tokio capabilities and only serde_json `std`; engine, broker-runtime, and native
+select their own runtime/I/O capabilities, while only engine selects
+`raw_value` and byte-stable `preserve_order`. The review also removed a repeated
+`keyring-core` dev declaration and TyphooN's unused `bytemuck/derive` feature.
+
 Feature minimization removed twelve resolved packages overall (563 → 551):
 unused tracing attribute/log/ANSI support, serial-test async support,
 rusqlite's desktop-irrelevant WASM VFS, rfd's redundant direct Wayland client,
