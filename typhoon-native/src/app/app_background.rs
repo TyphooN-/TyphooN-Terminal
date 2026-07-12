@@ -1,14 +1,28 @@
 use super::*;
 
+const BG_SNAPSHOT_CHANNEL_CAPACITY: usize = 1;
+
+fn try_publish_bg_snapshot(
+    tx: &std::sync::mpsc::SyncSender<BgData>,
+    data: &BgData,
+) -> bool {
+    tx.try_send(data.clone()).is_ok()
+}
+
 pub(super) fn spawn_background_refresh(
     app: &mut TyphooNApp,
     shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
     importing_flag_bg: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     // Spawn the background data-refresh thread (SEC filings, fundamentals,
-    // cache/storage stats, insider trades). mpsc channel, capacity unbounded.
+    // cache/storage stats, insider trades). Keep exactly one unpublished full
+    // snapshot: BgData can be several GB during broad sync, so an unbounded
+    // channel retained a new clone every 3 seconds whenever egui stalled. That
+    // drove VmHWM above 45 GB and amplified allocator/UI stalls. A stale queued
+    // snapshot is sufficient; the next cycle republishes after the UI catches up.
     {
-        let (bg_tx, bg_rx) = std::sync::mpsc::channel::<BgData>();
+        let (bg_tx, bg_rx) =
+            std::sync::mpsc::sync_channel::<BgData>(BG_SNAPSHOT_CHANNEL_CAPACITY);
         app.bg_rx = bg_rx;
         let shared_cache_bg = shared_cache.clone();
         let _ = std::thread::Builder::new()
@@ -531,7 +545,7 @@ pub(super) fn spawn_background_refresh(
                             }
                         }
                         bg_cycle_count += 1;
-                        let _ = bg_tx.send(data.clone());
+                        let _ = try_publish_bg_snapshot(&bg_tx, &data);
                         continue;
                     }
 
@@ -561,8 +575,9 @@ pub(super) fn spawn_background_refresh(
                         FULL_REFRESH_INTERVAL.as_secs()
                     );
 
-                    // Send to UI thread (non-blocking — drops if channel full)
-                    let _ = bg_tx.send(data.clone());
+                    // Send without retaining a backlog of enormous snapshots when
+                    // rendering is temporarily delayed.
+                    let _ = try_publish_bg_snapshot(&bg_tx, &data);
                 }
             }
         });
@@ -630,5 +645,21 @@ impl TyphooNApp {
                 self.drop_bg_snapshot_off_ui(data);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_snapshot_channel_keeps_at_most_one_unpublished_clone() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(BG_SNAPSHOT_CHANNEL_CAPACITY);
+        let data = BgData::default();
+
+        assert!(try_publish_bg_snapshot(&tx, &data));
+        assert!(!try_publish_bg_snapshot(&tx, &data));
+        assert!(rx.try_recv().is_ok());
+        assert!(try_publish_bg_snapshot(&tx, &data));
     }
 }

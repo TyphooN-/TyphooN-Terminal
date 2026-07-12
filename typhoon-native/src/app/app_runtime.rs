@@ -569,14 +569,16 @@ impl eframe::App for TyphooNApp {
                 });
         }
 
-        // Auto-save session + keyring sync every 60 seconds — runs off UI thread
+        // Credential safety-net sync every 60 seconds. Session persistence is
+        // exclusively owned by `maybe_incremental_session_save`: the legacy path
+        // here rebuilt the full session JSON and synchronously wrote sync
+        // preferences before spawning its worker. With loaded MTF charts and a
+        // busy cache that blocked egui for 2-13 seconds almost exactly once per
+        // minute, despite the misleading "runs off UI thread" comment.
         if now_instant.duration_since(self.session_last_autosave)
             >= std::time::Duration::from_secs(60)
         {
             self.session_last_autosave = now_instant;
-            // Collect all state needed for save (cheap copies of strings + JSON)
-            let session_json = self.build_session_json();
-            self.sync_preferences_save();
             let creds: Vec<(String, String)> = [
                 (keyring::keys::ALPACA_API_KEY, &self.broker_api_key),
                 (keyring::keys::ALPACA_SECRET, &self.broker_secret),
@@ -591,10 +593,6 @@ impl eframe::App for TyphooNApp {
             let cache_clone = self.cache.clone();
             let rt_handle = self.rt_handle.clone();
             rt_handle.spawn_blocking(move || {
-                // Write session JSON to disk
-                let mut path = dirs_home();
-                path.push("session.json");
-                let _ = std::fs::write(&path, session_json);
                 // Sync credentials to keyring (only if changed)
                 for (key, val) in &creds {
                     if let Ok(Some(existing)) = keyring::load(key) {
