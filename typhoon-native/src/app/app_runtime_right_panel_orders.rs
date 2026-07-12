@@ -209,14 +209,34 @@ impl TyphooNApp {
                 .hidden_kraken_order_account_ids
                 .contains(&account.account_id)
         });
-        let alpaca_count = alpaca_order_groups
-            .iter()
-            .map(|account| account.orders.len())
-            .sum::<usize>();
-        let kr_count = kraken_order_groups
-            .iter()
-            .map(|account| account.orders.len())
-            .sum::<usize>();
+        // Cheap counts from source data for the header title (avoids extra pass over groups).
+        // Full groups still built for toggles/render inside expanded section.
+        let alpaca_count = if self.show_alpaca_orders {
+            if !self.alpaca_account_orders.is_empty() {
+                self.alpaca_account_orders
+                    .iter()
+                    .filter(|a| !self.hidden_alpaca_order_account_ids.contains(&a.account_id))
+                    .map(|a| a.orders.len())
+                    .sum::<usize>()
+            } else {
+                self.live_orders.len()
+            }
+        } else {
+            0
+        };
+        let kr_count = if self.show_kr_orders {
+            if !self.kraken_account_orders.is_empty() {
+                self.kraken_account_orders
+                    .iter()
+                    .filter(|a| !self.hidden_kraken_order_account_ids.contains(&a.account_id))
+                    .map(|a| a.orders.len())
+                    .sum::<usize>()
+            } else {
+                self.kraken_open_orders.len()
+            }
+        } else {
+            0
+        };
         let ord_count = alpaca_count + kr_count;
         if !alpaca_orders_available && !kr_orders_available && ord_count == 0 {
             return;
