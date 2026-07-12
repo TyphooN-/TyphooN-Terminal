@@ -2,7 +2,7 @@
 
 > **⚠️ Partially superseded (2026-06).** The phone / WASM-web order-entry portion was removed with the web client; the EasyLanguage / thinkScript compiler work remains in the `typhoon-transpiler` transpiler.
 
-**Status:** Implemented
+**Status:** Partially superseded — compiler frontends retained; phone/WASM order entry removed by ADR-111/115
 **Date:** 2026-04-09
 
 ## Context

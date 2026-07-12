@@ -1,6 +1,6 @@
 # ADR-112: Equities Bar-Sync — Demand-Depth vs Catalog-Breadth Provider Division
 
-**Status:** Accepted | **Date:** 2026-06-11
+**Status:** Accepted / revised for bounded full-universe native WS coverage | **Date:** 2026-06-11
 
 Revises the streaming-scope decision in **ADR-099** (Kraken WS full-universe
 streaming) and extends **ADR-102** (Kraken-equities gap-fill via Alpaca) and
@@ -84,9 +84,11 @@ lane**, and assign each provider the job it is actually good at.
    12k × years is ~10⁸+ bars / tens of GB, and Yahoo only serves ~7 days of
    1-minute. Alpaca already defaults M1/M5 to fresh-only (`alpaca_sync_target_bars`
    returns `None`). Deep intraday is reserved for the demand set.
-7. **Sync Status "Kraken Equities" rows are demand-scoped.** Native provider
-   rows count the demand set so they can converge to ~100%; the ~12k catalog's
-   breadth is reported by the **Merged** row, not the native provider row.
+7. **Sync Status separates native, assist, and merged coverage.** The native
+   full-universe denominator covers enabled native timeframes `1Min` through
+   `1Week`; native `1Month` is derived from daily data. iapi remains demand-only,
+   while bounded WS snapshot waves provide native catalog coverage. Assist and
+   Merged rows retain their own provider/full-catalog semantics.
 
 ## Regression guards (do-not list)
 
@@ -105,9 +107,10 @@ These are the specific footguns that caused the 2026-06 regressions. Do not:
 
 ## Consequences
 
-- Demand symbols (what you trade/watch) reach full depth on every timeframe in
-  ~a minute; the catalog converges MN1→M15 in ~tens of minutes via Alpaca +
-  Yahoo + the Kraken snapshot sweep.
+- Demand symbols (what you trade/watch) retain foreground priority and iapi
+  depth repair. Native full-universe WS work advances strict high-timeframe-first
+  from `1Week` through `1Min` in bounded waves; `1Month` is derived from daily.
+  Alpaca/Yahoo continue to provide deep assist and merged breadth.
 - WS reconnect churn and the multi-second SQLite-contention UI stalls are
   removed (the 12k permanent-live subscription is gone).
 - Kraken-native catalog coverage is delivered by the snapshot sweep instead of
@@ -117,10 +120,12 @@ These are the specific footguns that caused the 2026-06 regressions. Do not:
 
 ## Status of implementation (2026-06-11)
 
-- **Done:** demand-scope WS live + iapi depth-repair; demand-scope the native
-  Sync Status rows (`kraken_ohlc_ws.rs`, `market_data_sync.rs`).
+- **Done:** demand-scoped persistent WS live subscriptions + iapi depth repair;
+  full-universe native timeframe coverage is supplied by bounded WS snapshot
+  waves and reported separately from assist/merged rows.
 - **Done:** Kraken WS OHLC snapshot sweep (rule 3). The app now schedules one
-  bounded xStocks catalog batch at a time, high-timeframe-first, requests
+  bounded xStocks catalog batch at a time across enabled native timeframes,
+  high-timeframe-first, requests
   `snapshot=true`, drains through the existing bounded writer, unsubscribes, and
   advances a persistent in-session sweep cursor.
 - **Done:** Alpaca/Yahoo catalog breadth lanes are right-sized for full-tilt

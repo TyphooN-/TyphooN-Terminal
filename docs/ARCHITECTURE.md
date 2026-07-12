@@ -39,19 +39,23 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  - Research (research + indicator parity surfaces)    │
 │  - Notifications (Discord, Pushover, ntfy,      │
 │    Matrix)                                      │
+├─────────────────────────────────────────────────┤
+│  Broker Runtime (typhoon-broker-runtime)        │
+│  - Async broker command processor and handlers  │
+│  - Account/order/data/news/research operations  │
 └─────────────────────────────────────────────────┘
 ```
 
-## Data Flow (Zero Serialization)
+## Chart Data Flow
 
 ```
-SQLite cache → zstd decompress → Vec<(i64,f64,f64,f64,f64,f64)>
-  → Bar structs (zero-copy reinterpret)
+SQLite cache → zstd decompress → packed TTBR decode
+  → owned Bar structs
     → Indicator computation (pure Rust on &[f64] slices)
       → egui Painter draws directly to wgpu surface
 ```
 
-No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
+The native render path has no browser IPC or garbage collector. Provider ingestion and cache merge paths may use JSON at API boundaries; cached chart reads use TTBR binary records and owned Rust data.
 
 ## Data Sources
 
@@ -62,7 +66,7 @@ Recent market data work (ADR-129/109): Strong L1 (ticker/quotes/trades with size
 | Tier | Source | Coverage |
 |------|--------|----------|
 | Trusted | Kraken Spot | Crypto trading (full Spot REST order surface + private WS ownTrades/openOrders), recent REST OHLCV, and full-catalog public OHLC WebSocket forward freshness under `kraken:SYMBOL:TF`. Spot public pacing/cooldown per ADR-095 and WS write-path controls per ADR-099. |
-| Trusted | Kraken Securities / xStocks | Tokenized-equity bars under `kraken-equities:SYMBOL:TF` via iapi AIMD (ADR-101). Native high timeframes full-catalog; native intraday demand/focus scoped (ADR-112). Kraken sources xStock bars from Alpaca's backend, so it is not self-corroborating (ADR-113). |
+| Trusted | Kraken Securities / xStocks | Tokenized-equity bars under `kraken-equities:SYMBOL:TF`. iapi AIMD is demand-depth repair across enabled timeframes; bounded WS snapshot work plus assist/merged lanes provide catalog breadth (ADR-101/112). Kraken sources xStock bars from Alpaca's backend, so it is not self-corroborating (ADR-113). |
 | Trusted | Kraken Futures | Public futures instrument discovery and full chart-candle sync under `kraken-futures:SYMBOL:TF` using explicit from/to ranges. |
 | Trusted | Alpaca | US equities + crypto, free IEX or paid SIP. Tier-autotuned sync (ADR-087); catalog-breadth lane for equities (ADR-112). |
 | Corroborator | Yahoo Chart | Independent equity history + freshness assist under `yahoo-chart:SYMBOL:TF` (15Min/30Min/1Hour/1Day/1Week/1Month — no native 4-hour). Back-adjusted + scale-validated before splicing; the only independent reference for the Kraken/Alpaca trusted tier (ADR-113). |
@@ -81,7 +85,7 @@ cache namespaces stay separate, and visible symbol equality is only a candidate
 match — wrappers, CFDs, ADRs, quote currencies, suffixes, data delays, and session
 calendars require explicit mapping before histories can be combined.
 
-News is a separate research cache, not a market-data universe mirror. Sync Status totals count `(symbol, timeframe)` bar-cache entries, while news scrapes count deduped symbols, so the numbers will not match one-for-one. Kraken equities Sync Status uses an explicit denominator: native `1Day`/`1Week`/`1Month` rows are full-catalog (`kraken_equity_universe_symbols`), native intraday rows remain demand-scoped unless iapi throughput proves broader native intraday safe, and fallback/merged rows can use full-catalog `15Min`+ coverage when an enabled provider supports that timeframe. Fallback rows (`Alpaca`, `Yahoo`) report provider assist coverage, not Kraken coverage; Yahoo 404/empty-result responses are normal no-data tombstones for symbols Yahoo cannot resolve, especially SPAC/unit-style Kraken Securities symbols. The News & Research window fetches the active symbol, currently visible MTF Grid symbols, or the configured source bulk news universe; Kraken bulk news candidates are derived from cached `kraken:*`, `kraken-equities:*`, and `kraken-futures:*` market-data keys when Kraken is enabled. `news/SYM: 0 articles fetched` means the enabled news providers returned no rows for that selected symbol, not that Kraken equities bar sync skipped the rest of the catalog. See ADR-078 and ADR-102.
+News is a separate research cache, not a market-data universe mirror. Sync Status totals count `(symbol, timeframe)` bar-cache entries, while news scrapes count deduped symbols, so the numbers will not match one-for-one. Kraken equities status separates the catalog/control-plane denominator from demand-scoped iapi depth and from full-catalog assist/merged coverage. Fallback rows (`Alpaca`, `Yahoo`) report provider-assist coverage, not Kraken-native coverage; Yahoo 404/empty-result responses are normal no-data tombstones for symbols Yahoo cannot resolve. The News & Research window fetches the active symbol, visible MTF Grid symbols, or an explicitly requested source universe. `news/SYM: 0 articles fetched` describes that selected symbol, not bar-sync coverage. See ADR-078, ADR-102, and ADR-112.
 
 The `SYM` / `SYMBOLS` command opens Symbol Explorer. It is the catalog-facing way to inspect large universes instead of inferring coverage from runtime logs: cached rows are grouped by source/timeframe, broker-universe rows are grouped by rough asset category, the filter matches symbol/name text, and rows can load a chart or add to watchlist. It currently shows catalog/cache presence and fundamentals-derived names/sectors when available; it is not yet a full sortable market scanner with last price, extended-hours change, or provider-health columns.
 
@@ -125,7 +129,7 @@ TyphooN-Terminal/
 │   │   ├── lib.rs          # Crate root
 │   │   ├── core/
 │   │   │   ├── cache.rs       # SQLite + zstd bar cache
-│   │   │   ├── research.rs    # research + indicator parity surfaces
+│   │   │   ├── research/      # modular research storage, models, fetch, analytics
 │   │   │   ├── fundamentals.rs # 21 data-source fundamentals
 │   │   │   ├── risk.rs        # Lot sizing (4 order modes)
 │   │   │   ├── margin.rs      # TRIM, PROTECT, margin math
@@ -148,7 +152,7 @@ TyphooN-Terminal/
 ├── typhoon-research-ui/            # Research snapshot renderers (render/ segment modules, ADR-108) + packet formatter + window shell + packet section tree (ADR-125 Target 1)
 ├── typhoon-transpiler/             # Multi-language indicator transpiler + WASM/WGSL codegen
 └── docs/
-    ├── adr/                # Architecture Decision Records (109)
+    ├── adr/                # Architecture Decision Records (110; numbering has gaps)
     ├── API_KEYS.md
     ├── INDICATORS.md
     ├── PERFORMANCE.md
@@ -158,14 +162,7 @@ TyphooN-Terminal/
 
 ## Performance Characteristics
 
-| Metric | Native GPU |
-|--------|------------|
-| Startup to interactive | < 2s |
-| 10K bar chart render | < 5ms |
-| Indicator computation (46+ indicators) | < 15ms |
-| Memory (single chart) | ~50-80MB |
-| Memory (MTF 4-cell grid) | ~100-150MB |
-| Binary size (release) | ~25MB |
+The renderer uses viewport-bounded primitive generation, cached indicator state, and phase-attributed stall telemetry. Fixed timing and memory claims are intentionally not repeated here: actual cost depends on cache depth, active MTF cells, overlays, display resolution, provider traffic, and background synchronization. See `PERFORMANCE.md` and ADR-098 for the enforceable design invariants.
 
 ## Additional Features
 
@@ -173,13 +170,13 @@ TyphooN-Terminal/
 
 The `STORAGE` command opens a cache storage manager with:
 - View and delete data by symbol/source (color-coded by prefix: Alpaca, Kraken, Kraken Securities, Kraken Futures, Yahoo)
-- **Base bar zstd:** Runtime/persisted Storage Manager control for normal Rust bar-cache write compression (default 3, range 1-22). Kraken WS hot writes stay at zstd-3 for responsiveness.
+- **Base zstd:** Runtime/persisted Storage Manager control (default 3, range 1-22). Normal, WS-fast, and current KV write paths honor the configured policy; compact promotes older/lower-level rows to the archival target.
 - **Compact / Auto-compact (zstd-22):** Manual and scheduled promotion path for configured-base, legacy/raw/imported, and WS-written bar_cache entries below the archival target. Auto-compact exposes cadence, weekday/hour window, min-row threshold, last-run, next-window, skip-reason, and running-state readout
 - **Purge All Bar Data:** Delete all bar_cache + bar_track entries (with red confirmation prompt)
 
 ### SQLite Multi-Connection Architecture
 
-`SqliteCache` uses multiple connection types under WAL mode: `conn` (write Mutex), `read_conn` (a **read-connection pool**, `ReadConnPool`, so UI reads no longer serialize on one exclusive mutex), BG thread (own connection, reopened each cycle), and scoped sync threads (each opens its own connection). WAL allows unlimited concurrent readers. BG thread reopens its connection every 3s for WAL freshness. `maybe_decompress()` transparently handles both raw TTBR and zstd-compressed bar blobs. Cold per-chart loads run off the render thread through the deferred chart loader, and bulk cache compaction streams by key cursor with `incremental_vacuum` (never load-all + full VACUUM), keeping the render thread clear of write contention. Note `SqliteCache::try_connection` is non-reentrant — nesting it silently no-ops the inner caller; pass `&Connection` down or use `open_bg_read_connection`.
+`SqliteCache` uses multiple connection types under WAL mode: `conn` (write Mutex), `read_conn` (a read-connection pool), a BG thread connection reopened each cycle, and scoped sync-thread connections. `maybe_decompress()` handles raw TTBR and zstd-compressed bar blobs. Cold per-chart loads run through the deferred loader, and bulk compaction streams by key cursor with `incremental_vacuum`. Background `BgData` publication uses a capacity-one nonblocking channel, so a stalled render loop cannot accumulate full snapshot clones. Note `SqliteCache::try_connection` is non-reentrant — pass `&Connection` down or use `open_bg_read_connection`.
 
 ### Multi-Window Support
 

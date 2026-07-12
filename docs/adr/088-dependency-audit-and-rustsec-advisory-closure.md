@@ -3,7 +3,7 @@
 **Date:** 2026-04-25
 **Updated:** 2026-07-07
 **Status:** Implemented
-**Related:** `Cargo.toml`, `typhoon-engine/Cargo.toml`, `cli/Cargo.toml`, `typhoon-transpiler/Cargo.toml`, `typhoon-native/Cargo.toml`, `vendor/thirtyfour/Cargo.toml`, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit)
+**Related:** active workspace `Cargo.toml` files, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit). Historical CLI/vendor manifests referenced by the original audit are no longer on active master.
 
 ## Context
 

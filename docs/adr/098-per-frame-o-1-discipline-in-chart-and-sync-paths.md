@@ -4,14 +4,14 @@
 
 **Date:** 2026-05-22
 **Status:** Accepted
-**Last updated:** 2026-07-08 (iterative O(1) sweeps + low-memory broad-sync backpressure)
+**Last updated:** 2026-07-12 (iterative O(1) sweeps + UI-thread/backlog backpressure)
 **Related:** ADR-032 (background data + render decoupling),
 `typhoon-native/src/app/technical_analysis.rs`,
 `typhoon-native/src/app/app_runtime.rs`,
 `typhoon-native/src/app/app_runtime_errors.rs`,
 `typhoon-native/src/app/chart_ops.rs`,
 `typhoon-native/src/app/market_data_sync.rs`,
-`typhoon-native/src/app/session_persistence.rs`,
+`typhoon-native/src/app/session_persistence/`,
 `typhoon-native/src/app/trade_ops.rs`
 
 ## Context
@@ -181,11 +181,12 @@ tick) traced to three distinct render-thread costs, now fixed:
   (12k normalize+sort) and `alpaca_equity_rotation_symbols` (11k uppercase+dedup+sort)
   were re-materialized every minute; now length-signature-memoized. (commit `182d5cd6`)
 
-Still open on the render thread: the `build_bar_sync_inputs` snapshot
+Still open on the render thread at that date: the `build_bar_sync_inputs` snapshot
 (`detailed_stats.clone()`, O(rows)) at the sync-status cadence — dominated by the
-clone, would need Arc-sharing to remove — and the mandatory 60s session-JSON
-serialize + `sync_preferences_save` `put_kv` (small at idle, can spike under SQLite
-write contention). The full-universe WS snapshot-sweep cost noted above is now also
+clone, which would need Arc-sharing to remove. The legacy mandatory 60s session-JSON
+serialize + synchronous `sync_preferences_save` path was removed on 2026-07-12;
+incremental session persistence is now the sole owner and skips snapshot construction
+during heavy sync before handing writes to a blocking worker. The full-universe WS snapshot-sweep cost noted above is now also
 mitigated separately by the sweep failure-backoff.
 
 
@@ -245,3 +246,9 @@ The full-universe sync path now includes proactive memory-scale controls instead
 - Expected provider no-data and rate-limit failures no longer spam user-facing error/order-result logs; no-data becomes tombstone bookkeeping and rate limits become retry/backoff state. The UI exposes the active Alpaca pause in Sync Status.
 
 The performance contract is unchanged: do not shrink the Kraken Spot/Securities/xStocks universe to active-only for memory relief. Use bounded queueing, memory-scaled concurrency, retry ownership, and clear diagnostics instead.
+
+### Update (2026-07-12): broker-drain, autosave, and background-snapshot backpressure
+
+- A broker receive-loop time budget does not bound work performed after the loop. Coalesced broad refill is now skipped while heavy sync is saturated (`pending > 200`) and left to the periodic scheduler until capacity is genuinely available.
+- The duplicate 60-second session autosave was rebuilding session JSON and synchronously writing sync preferences before spawning credential work. It produced 2–13 second `render_residual_ms` stalls at a one-minute cadence and has been reduced to credential-only maintenance; `maybe_incremental_session_save` is the single session-persistence path.
+- `BgData` publication is again `sync_channel(1)` + `try_send`. The accidental unbounded channel retained multi-GB snapshot clones whenever egui stalled and drove measured `VmHWM` above 45 GB. Superseded snapshot destruction remains off the UI thread.

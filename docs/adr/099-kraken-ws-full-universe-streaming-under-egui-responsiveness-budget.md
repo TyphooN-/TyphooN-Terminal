@@ -6,6 +6,8 @@ comes from a paced, rotating WS OHLC *snapshot sweep*, not a 12k permanent
 subscription (which caused connection-reset churn and multi-second egui stalls,
 and backfilled no history when subscribed `snapshot=false`). The egui
 responsiveness analysis below remains valid; the streaming *scope* does not.
+ADR-089 was also revised: `merge_bars_fast` now honors the configured zstd
+level instead of forcing zstd-3.
 **Date:** 2026-05-24
 **Related:** ADR-089 (zstd compression policy), ADR-032 (performance architecture), ADR-094 (Kraken async bar sync), ADR-098 (per-frame O(1) discipline), `typhoon-native/src/app/kraken_ohlc_ws.rs`, `typhoon-native/src/app/app_runtime.rs`, `typhoon-native/src/app/app_runtime_kraken_ws.rs`, `typhoon-engine/src/broker/kraken/ohlc_ws.rs`, `typhoon-engine/src/core/cache.rs::merge_bars_fast`
 
@@ -62,25 +64,13 @@ close, which is exactly when the staleness check cares.
 is unit-tested in the same module for the snapshot and steady-state
 cases.
 
-### 2. Lighter compression on the hot write path
+### 2. Configured compression on the hot write path
 
-Even with bar-close gating, the initial snapshot storm is the worst case:
-≈12k cache entries to re-pack inside the first flush window. At a high
-base bar zstd level such as 22 (encoder ~5–10 MB/s) that pegs cores for
-tens of seconds; the persisted base level is user-selectable now, but the
-WS hot path still needs a fixed low-latency carve-out.
-
-`typhoon-engine/src/core/cache.rs::merge_bars_fast` is the WS-only variant that
-calls `put_bars_with_level(.., 3)`. zstd-3 cuts encode time ~10–20× at
-the cost of ~15–20% larger blobs **until the next compaction pass**.
-
-The promotion is automatic: `compact_storage` at
-`typhoon-engine/src/core/cache.rs:2390` filters `WHERE zstd_level < target`, so
-the next scheduled `auto_compact` run (or the manual `Compact (zstd-22)`
-button in Storage Manager) picks the WS-written rows up and rewrites
-them at zstd-22. ADR-089 §5 captures the formal carve-out. Operators do
-not need to do anything; users who want immediate reclamation can run
-the manual button.
+`merge_bars_fast` keeps nonblocking lock behavior and bounded/coalesced writer
+semantics, but it records and honors `bar_zstd_level()` like normal cache
+writes. The Storage Manager setting is the operator's explicit CPU/disk policy;
+tests cover both normal and fast-write metadata. Compaction still promotes any
+rows below the archival target.
 
 ### 3. All cache work behind `spawn_blocking`
 
@@ -139,13 +129,12 @@ open-orders refresh) drifts back onto the egui frame.
 - Cache stays correct: every bar that lands is persisted; freshness
   anchor (`kraken_ws_fresh_until`) is updated on close so REST skips
   refetches that WS already covered.
-- No new operator burden: zstd-3 rows are picked up by existing auto-
-  compact, and the existing manual `Compact (zstd-22)` button is the
-  same recovery handle.
+- One compression policy applies to normal, fast, and current KV writes; the
+  existing manual/automatic compact path remains the archival promotion handle.
 
 **Cons / Tradeoffs**
-- Until the next compaction, WS-written rows take ~15–20% more disk
-  than equivalent REST rows. Auto-compact closes the gap.
+- Raising the configured live-write level increases WS encode CPU as an explicit
+  operator tradeoff; the default remains level 3.
 - An open 1Min bar can lag the WS feed by up to `WS_BAR_FLUSH_INTERVAL`
   (1s) before the close-value reaches the cache. Live trade-prints and
   ownTrades are not affected — they go through a separate ticker path.

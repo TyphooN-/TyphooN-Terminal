@@ -2,13 +2,13 @@
 
 ## Core Principles
 
-### 1. Zero Overhead Data Path
+### 1. Native Binary Chart Path
 
-Every byte from SQLite cache to GPU pixels traverses zero serialization layers. No JSON, no IPC, no JavaScript objects, no garbage collection. Rust types from storage to render.
+Cached chart bars use zstd-compressed TTBR records decoded into owned Rust types, then flow through native indicator and egui/wgpu rendering without browser IPC, JavaScript objects, or garbage collection. Provider/API boundaries can use JSON; the claim is a native cache-to-render path, not literally zero serialization everywhere.
 
 ### 2. Independent Risk Analytics
 
-The terminal computes its own risk verification — VaR, CVaR, correlation, exposure, streaks, hourly P&L, drawdown — from cached bars and live broker positions, without relying on any broker's own dashboards. See `risk.rs`, `var.rs`, `margin.rs`, and the research surfaces in `research.rs`.
+The terminal computes its own risk verification — VaR, CVaR, correlation, exposure, streaks, hourly P&L, drawdown — from cached bars and live broker positions, without relying on any broker's own dashboards. See `risk.rs`, `var.rs`, `margin.rs`, and the modular research surfaces in `core/research/`.
 
 ### 3. Trusted Data + Independent Corroboration
 

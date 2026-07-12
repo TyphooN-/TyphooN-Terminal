@@ -19,7 +19,10 @@ Remove the `cli` crate from the active `master` workspace and delete the active 
 The active workspace remains focused on:
 
 - `typhoon-engine`
+- `typhoon-broker-runtime`
+- `typhoon-chart-ui`
 - `typhoon-native`
+- `typhoon-research-ui`
 - `typhoon-transpiler`
 
 ## Consequences

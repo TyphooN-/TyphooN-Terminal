@@ -72,18 +72,16 @@ No existing number or test semantics changed. The tombstone snapshot
 (`no_data_keys_by_source`) mirrors the scheduler's view: the per-broker
 unresolvable index plus the persisted Alpaca no-data set folded into `alpaca`.
 
-### Lever 3 — the WS-tokenized lane is already at its safe ceiling (no change)
+### Lever 3 — bounded full-universe WS waves replace permanent catalog subscriptions
 
-Leaning harder on the Kraken WS OHLC lane was considered and **rejected**.
-Full-catalog WS subscription was already tried and caused connection churn
+Permanent full-catalog WS subscription was tried and rejected because it caused connection churn
 ("reset without closing handshake") plus multi-second snapshot-write stalls on the
-render thread. The lane is therefore intentionally bounded: persistent
-subscriptions cover only the **demand set** (held / open-chart / watchlist
-xStocks), and a paced snapshot sweep covers the tokenized catalog at **M1/M5 only**
-(higher xStock intervals return no bars). It reaches ~159 tokenized xStocks; the
-remaining ~12k equities are non-WS and must come from the REST lanes. Pushing past
-this re-creates the instability it was tuned to avoid, so the ceiling stands and is
-documented here so it is not "re-discovered" and re-broken.
+render thread. Current native WS planning is bounded rather than demand-only:
+persistent live subscriptions prioritize the demand set, while rotating snapshot
+waves cover the WS-tokenized catalog across enabled native timeframes from `1Week`
+through `1Min`, strict high-timeframe-first. `1Month` is derived from daily. Queue,
+subscription, and writer bounds—not catalog exclusion—are the safety mechanism.
+Non-tokenized equities still depend on iapi demand repair and assist/merged lanes.
 
 ## Consequences
 

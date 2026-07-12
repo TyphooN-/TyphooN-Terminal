@@ -1,6 +1,6 @@
 # ADR-110: Market Session Status Display (xStocks 24/5 + US Equities)
 
-**Status:** Accepted / partially implemented | **Date:** 2026-06-08
+**Status:** Implemented with documented limitations | **Date:** 2026-06-08
 
 ## Context
 

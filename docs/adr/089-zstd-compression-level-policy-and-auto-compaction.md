@@ -1,8 +1,8 @@
 # ADR-089: ZSTD Compression Level Policy and Auto-Compaction
 
 **Status:** Updated / Implemented
-**Date:** 2026-04-28 (original decision), 2026-04-29 (auto-compact wired), 2026-05-03 (Storage Manager schedule controls), 2026-05-20 (bar-cache writes moved to zstd-22), 2026-05-24 (WS hot-path carve-out at zstd-3, see ADR-099), 2026-06-03 (user-selectable base write level)
-**Related:** ADR-003 (SQLite + zstd cache), ADR-032 (performance architecture), ADR-099 (Kraken WS full-universe responsiveness), `typhoon-engine/src/core/cache.rs`, `typhoon-native/src/app/auto_compact.rs`, `typhoon-native/src/app.rs::BrokerCmd::CompactStorage`
+**Date:** 2026-04-28 (original decision), updated through 2026-07-12 (one configured live-write policy)
+**Related:** ADR-003 (SQLite + zstd cache), ADR-032 (performance architecture), ADR-099 (Kraken WS full-universe responsiveness), `typhoon-engine/src/core/cache.rs`, `typhoon-native/src/app/auto_compact.rs`
 
 ## Context
 
@@ -13,8 +13,8 @@ The important distinction is bar data vs hot mutable KV data:
 | Class | Level | Examples |
 |---|---:|---|
 | Bar cache writes (REST / imports / normal merges) | User-selected base level, default 3 (1-22) | `put_bars`, `merge_bars`, broker backfill, new bar-cache rows; persisted in sync preferences and exposed in Storage Manager |
-| **Bar cache hot writes (WS bar-close)** | **3** | `merge_bars_fast` from Kraken WS OHLC writer (`typhoon-native/src/app/kraken_ohlc_ws.rs`) keeps the latency carve-out regardless of the base setting |
-| KV / metadata hot writes | 3 | AI sessions, broker queues, fundamentals metadata, LAN metadata |
+| Bar cache fast/WS writes | User-selected base level | `merge_bars_fast` honors `bar_zstd_level()` like normal writes |
+| KV / metadata writes | User-selected base level | Current `put_kv` uses the same configured compression policy |
 | Backup / export | 22 | compressed SQLite snapshot exports |
 | Manual / auto compact | 22 | legacy rows, raw imported rows, any entries still marked below 22 — promotes WS-written rows back to 22 once the streamer settles |
 
@@ -32,13 +32,9 @@ Rationale:
 - Operators should be able to choose the CPU-vs-disk tradeoff without recompiling: fast level during catch-up, higher level when disk pressure matters.
 - The archival target is still zstd-22; manual/auto compaction promotes rows below that target when the machine is idle.
 
-### 2. Keep hot mutable KV at zstd-3
+### 2. Apply the configured level consistently
 
-Do not blindly use zstd-22 for every blob.
-
-KV/session/metadata paths are small, frequently rewritten, and closer to user-visible interaction loops. They remain level 3 unless a specific path is proven cold and worth promoting.
-
-This is not a retreat from max compression for market data; it separates foreground write throughput, hot mutable metadata, and idle archival compaction.
+Normal bar writes, `merge_bars_fast`, and current KV writes all honor `bar_zstd_level()`. The Storage Manager setting is policy, not a hint. A fast default remains appropriate during broad catch-up; operators who choose a higher level accept the corresponding encode cost. Idle/manual compaction promotes older rows below the archival target.
 
 ### 3. Compression does not replace O(1) render discipline
 
@@ -55,18 +51,13 @@ Auto-compact and manual Compact stay, but their role changes:
 - Existing databases may contain zstd-3 rows from the old policy.
 - MT5/BarCacheWriter/raw LAN rows may arrive without level-22 metadata.
 - Restored backups may contain older rows.
-- **Kraken WS OHLC writes (`merge_bars_fast`) intentionally store at zstd-3** so the snapshot storm on first subscribe (≈12k keys × ≈720 closed bars) does not saturate CPU and stall egui. Compactor promotes those rows back to zstd-22 on its next pass.
+- Rows written under an earlier/lower configured level remain eligible for archival compaction.
 
 The compactor keeps the `zstd_level < target` filter at `typhoon-engine/src/core/cache.rs::compact_storage`, so anything below 22 — configured-base writes, legacy rows, WS hot writes, raw LAN rows — is naturally promoted on the next scheduled or manual run. The auto-compact gate + `Compact (zstd-22)` button in Storage Manager close the loop without making every foreground write pay max-compression CPU.
 
-### 5. Carve-out: WS bar-close writer uses zstd-3
+### 5. WS fast path preserves the configured policy
 
-The Kraken WS OHLC writer is the only `put_bars_*` path that intentionally bypasses level 22 on first write. Justification:
-
-- The WS pipeline writes one merge per (symbol, timeframe) per bar-close (~25 closes/sec at steady state with the full Spot universe), but the load-bearing event is the initial **snapshot storm**: every freshly subscribed (pair, interval) hands back the last ≈720 closed bars in one batch. With ≈1500 pairs × 8 intervals that is ~12k cache entries to re-pack inside the first flush window. At zstd-22 (encoder ~5–10 MB/s) that work pegs every core for tens of seconds and is exactly the workload that visibly stalls the UI.
-- zstd-3 (encoder ~150–200 MB/s) cuts that to a few seconds of background work behind `spawn_blocking`, keeping the egui thread idle.
-- Storage cost of the carve-out is ≤20% per affected blob until the next compaction. With the bar cache typically a few hundred MB total and compaction running automatically, that is a transient overhead the user does not see.
-- Read path is unchanged: `get_bars` decompresses whatever level the row was written at; chart loads pay the same TTBR unpack regardless.
+`merge_bars_fast` is fast because it uses nonblocking cache-lock behavior and the bounded/coalesced WS pipeline, not because it silently overrides the operator's compression setting. Regression tests assert that normal and fast writes record the selected level.
 
 See ADR-099 for the broader UI-responsiveness work this carve-out enables.
 
@@ -86,9 +77,9 @@ See ADR-099 for the broader UI-responsiveness work this carve-out enables.
 
 ## Implementation pointers
 
-- Bar compression controls: `typhoon-engine/src/core/cache.rs` (`DEFAULT_BAR_ZSTD_LEVEL = 3`, `set_bar_zstd_level`, `bar_zstd_level`, `BACKUP_ZSTD_LEVEL = 22`, `KV_ZSTD_LEVEL = 3`).
+- Compression controls: `typhoon-engine/src/core/cache.rs` (`DEFAULT_BAR_ZSTD_LEVEL = 3`, `set_bar_zstd_level`, `bar_zstd_level`, `BACKUP_ZSTD_LEVEL = 22`); `put_kv` reads `bar_zstd_level()` too.
 - Bar writes (default): `put_bars`, `merge_bars`, and bar batch metadata use the configured base level and record it in `bar_cache.zstd_level`.
-- Bar writes (WS hot path): `merge_bars_fast` → `put_bars_with_level(.., 3)` (`typhoon-engine/src/core/cache.rs`).
+- Bar writes (WS fast path): `merge_bars_fast` uses `bar_zstd_level()` (`typhoon-engine/src/core/cache.rs`).
 - Merge O(1)-discipline cleanup: `merge_bars_with_level` parses RFC3339 timestamps once into keyed bars before sort/dedup.
 - Compact gate / promotion: `compact_storage` at `typhoon-engine/src/core/cache.rs:2390` filters `WHERE zstd_level < target` so WS-written rows are picked up automatically.
 - Compact scheduling: `typhoon-native/src/app/auto_compact.rs` runs the scheduled job; the manual `Compact (zstd-22)` button in Storage Manager invokes the same path. Storage Manager also owns the base-level slider/presets and persists the selected base level.

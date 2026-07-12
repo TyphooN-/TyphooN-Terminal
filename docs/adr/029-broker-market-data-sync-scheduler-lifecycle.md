@@ -8,7 +8,7 @@ Date: 2026-05-20
 
 ## Context
 
-TyphooN Terminal can sync large broker universes: Alpaca equities, Kraken Spot, Kraken Futures, and tastytrade. A naïve scheduler pass that scans every symbol/timeframe or releases queue slots on the first cache-write notification does not scale well:
+TyphooN Terminal can sync large active broker universes: Alpaca equities, Kraken Spot, Kraken Securities/xStocks, and Kraken Futures. A naïve scheduler pass that scans every symbol/timeframe or releases queue slots on the first cache-write notification does not scale well:
 
 - Kraken Spot's public AssetPairs universe is intentionally complete, including fiat-quoted crypto, crypto crosses, xStocks, and spot FX.
 - Each logical broker fetch can emit multiple runtime messages: a cache-write `BarsFetched`, optional classification messages such as backfill-complete/no-data, then a terminal `FetchSettled` message.
@@ -17,14 +17,17 @@ TyphooN Terminal can sync large broker universes: Alpaca equities, Kraken Spot, 
 
 ## Decision
 
-The broker sync scheduler is cursor-limited and high-timeframe-first for all broad automated broker rotations, including Alpaca, Kraken Spot sectors, Kraken Futures sectors, and tastytrade.
+The broker sync scheduler is rotating-window and high-timeframe-first for broad automated Kraken and Alpaca work.
 
 1. Build candidate work from a bounded flattened ring of `(timeframe, symbol)` slots:
    - `1Month` across all symbols,
    - then `1Week`,
    - then `1Day`,
    - continuing down to `1Min`.
-2. Keep the scan budget fixed per refill, independent of total universe size.
+2. Candidate construction uses bounded rotating scan windows and normalized
+   pending/tombstone indexes. Strict broad equity coverage may advance through
+   successive windows to locate actionable work at the highest incomplete
+   timeframe, while returned batch size and in-flight work remain bounded.
 3. Select work by bucket in this order: `Missing`, `Stale`, `Backfill`.
 4. Skip any `(symbol, timeframe)` whose normalized pending key already exists.
 5. Alpaca retry-queue entries are also scheduler exclusions. Retry dispatch owns
@@ -32,7 +35,7 @@ The broker sync scheduler is cursor-limited and high-timeframe-first for all bro
    results from being immediately requeued by the broad scheduler.
 6. Use persisted no-data and backfill-complete markers to avoid repeating known unproductive backfills.
    Alpaca has app-side persisted no-data tombstones; Kraken, Kraken Futures,
-   and tastytrade primarily use generic broker-unresolvable markers plus
+   and Kraken lanes primarily use generic broker-unresolvable markers plus
    persisted backfill-complete markers. Backfill-complete markers are stored
    under `{broker}:backfill_complete_pairs` and suppress repeat `Backfill`
    scheduling while still allowing Missing/Stale freshness sync.
@@ -44,11 +47,13 @@ The broker sync scheduler is cursor-limited and high-timeframe-first for all bro
    - Alpaca: `AlpacaFetchSettled`
    - Kraken Spot: `KrakenFetchSettled`
    - Kraken Futures: `KrakenFuturesFetchSettled`
-   - tastytrade: `TastytradeFetchSettled`
 8. `BarsFetched` remains an intermediate UI/cache refresh signal for those brokers; it must not own scheduler release.
-9. Settlement handlers release provider-specific pending keys and refill sync
-   slots. Alpaca failure/rate-limit settlements do not immediately refill; the
-   retry queue or the next normal scheduler tick controls the next attempt.
+9. Settlement handlers release provider-specific pending keys and coalesce refill
+   requests at the end of the broker-message drain. During saturated heavy sync
+   (`pending > 200`), event-driven broad refill is deferred to the existing periodic
+   full-tilt scheduler; settlement-driven refill resumes below that high-water mark.
+   Alpaca failure/rate-limit settlements do not immediately refill; the retry queue
+   or the next normal scheduler tick controls the next attempt.
 
 ## Consequences
 
@@ -77,19 +82,6 @@ Then run:
 cargo fmt --all
 cargo check -p typhoon-native
 ```
-
-
-## Tiered Priority Model (2026-06-10 update)
-
-To balance full-universe coverage with UI responsiveness, the scheduler now classifies symbols into three tiers:
-
-- **Tier 1 (MTF Grid / Foreground)**: Open or focused symbols in the MTF Grid + the currently visible single-chart symbol.
-- **Tier 2 (Active)**: Watchlist symbols + current positions/holdings.
-- **Tier 3 (Background)**: Everything else in the Kraken + Alpaca universe.
-
-Within each tier, timeframes are still processed high-to-low (`1Month → 1Week → 1Day → ... → 1Min`).
-
-This ensures that research packets, outlier scans, and MTF Grid charts get fresh data first while the broad universe continues to converge in the background.
 
 
 ## Tiered Priority Model (2026-06-10)

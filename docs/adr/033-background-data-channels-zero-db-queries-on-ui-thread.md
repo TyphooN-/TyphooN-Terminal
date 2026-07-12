@@ -1,7 +1,7 @@
 # ADR-033: Background Data Channels (Zero DB Queries on UI Thread)
 
 **Status:** Implemented
-**Date:** 2026-03-25 | **Updated:** 2026-04-05
+**Date:** 2026-03-25 | **Updated:** 2026-07-12
 
 ## Context
 
@@ -30,9 +30,10 @@ Replace `Arc<Mutex<BgDarwinData>>` with `mpsc::sync_channel(1)` — a bounded ch
 
 ```
 ┌──────────────────────────┐     sync_channel(1)     ┌──────────────────────────┐
-│   Background Thread      │ ─── BgDarwinData ────── │    UI Thread (egui)      │
+│   Background Thread      │ ───── BgData ─────────── │    UI Thread (egui)      │
 │                          │                          │                          │
-│  Every 5 seconds:        │                          │  Every frame:            │
+│  3s lightweight /        │                          │  Every frame:            │
+│  5m full refresh:        │                          │                          │
 │  1. Open SQLite conn     │                          │  1. Drain bg_rx channel  │
 │  2. Run ALL queries      │                          │  2. Store as self.bg     │
 │  3. Compute analytics    │                          │  3. Render from self.bg  │
@@ -54,9 +55,9 @@ Replace `Arc<Mutex<BgDarwinData>>` with `mpsc::sync_channel(1)` — a bounded ch
 
 ### Channel Design
 
-- **`sync_channel(1)`**: Bounded capacity of 1. If the UI hasn't consumed the last snapshot, `try_send()` silently drops the new one (no accumulation, always fresh).
-- **UI drain pattern**: `while let Ok(data) = self.bg_rx.try_recv() { self.bg = data; }` — non-blocking, takes the latest available snapshot.
-- **Data freshness**: Worst case 5s stale. Acceptable for analytics that update on DARWIN import, not real-time. Broker data (positions, orders, quotes) still uses the existing tokio mpsc channel with sub-second latency.
+- **`sync_channel(1)`**: Bounded capacity of 1. If the UI has not consumed the queued snapshot, `try_send()` drops the publication. This invariant was restored on 2026-07-12 after the implementation had drifted to an unbounded channel; runtime evidence showed `VmHWM` above 45 GB while full `BgData` clones accumulated behind UI stalls.
+- **UI drain pattern**: nonblocking `try_recv`; superseded snapshots are dropped on a blocking worker so destruction of large vectors does not stall egui.
+- **Data freshness**: lightweight publication runs on a 3-second cycle and full refresh on a 5-minute cadence. Broker positions, orders, and quotes use the separate broker channel.
 
 ### What Moved Off the UI Thread
 
@@ -104,15 +105,15 @@ User-initiated one-shot actions that need immediate DB access:
 - Simple mental model: UI reads `self.bg.*`, background writes `self.bg` via channel
 
 ### Negative
-- Data can be up to 5 seconds stale (acceptable for analytics, not for trading)
+- Background analytics can be stale by their configured lightweight/full-refresh cadence (acceptable for non-trading tables)
 - Background thread does more work per cycle (80+ queries vs 15), taking ~2-5s per cycle
-- `BgDarwinData` struct is large (~80 fields) — but it's only cloned once per 5s cycle
+- `BgData` can own very large SEC/news/storage collections; only one unpublished clone may be retained
 - Per-account details scale with number of DARWIN accounts (currently 6, each adds ~25 queries)
 
 ### Neutral
 - Broker real-time data (positions, orders, quotes) continues using the separate tokio mpsc channel — unaffected
 - Chart rendering (candlesticks, indicators) continues using direct `&[Bar]` slice access — unaffected
-- Session persistence, keyring access — unaffected
+- Session persistence follows its own coalesced off-thread writer; credential/keyring maintenance is independent of `BgData` publication
 
 ## Pattern Reuse
 

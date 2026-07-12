@@ -1,7 +1,7 @@
 # ADR-036: Data Pipelines & Rendering Architecture
 
 **Status:** Implemented
-**Date:** 2026-03-26 | **Updated:** 2026-04-05
+**Date:** 2026-03-26 | **Updated:** 2026-07-12
 
 > **Note (2026-06):** the **MT5 BarCacheWriter** and **Darwinex XLSX/FTP** data sources described below were removed in the **Kraken + Alpaca** scope reduction — see [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md). Current bar pipelines are Kraken (Spot REST/WS, Securities iapi, Futures) + Alpaca with a Yahoo corroborator — see [ADR-112](112-equities-bar-sync-demand-depth-vs-catalog-breadth.md) and [ADR-113](113-cross-source-equity-bar-merge-data-integrity.md). The threading model, render-decoupling, and contention-avoidance architecture documented here still apply.
 
@@ -90,8 +90,8 @@ Kraken Public API → reqwest HTTP → cache.put_bars()
 ┌─────────────────────────────────────────────────────────────────┐
 │ UI Thread (egui render loop)                                    │
 │                                                                 │
-│ update() called 2-10× per second                               │
-│ ├─ Drain bg_rx channel → self.bg (BgDarwinData)               │
+│ update() called at the active native repaint cadence           │
+│ ├─ Drain bg_rx channel → self.bg (BgData)                      │
 │ ├─ Drain broker_rx channel → positions, orders, log            │
 │ ├─ Render charts (egui Painter, zero DB calls)                 │
 │ ├─ Render floating windows (read from self.bg, zero DB calls)  │
@@ -102,12 +102,12 @@ Kraken Public API → reqwest HTTP → cache.put_bars()
 │       Uses cache.try_get_bars_raw() for chart loading.          │
 │       All rendering reads from self.bg.* cached data.           │
 └─────────────────────────────────────────────────────────────────┘
-        ↑ bg_rx (mpsc::channel, unbounded)
+        ↑ bg_rx (sync_channel(1), nonblocking publication)
         ↑ broker_rx (tokio mpsc::unbounded_channel)
 ┌─────────────────────────────────────────────────────────────────┐
 │ Background Data Thread (std::thread)                            │
 │                                                                 │
-│ Loops every 3-5 seconds:                                        │
+│ Lightweight cycle every 3s; full refresh every 5m:              │
 │ ├─ Phase 1a: list_darwin_accounts (0ms) → send snapshot        │
 │ ├─ Phase 1b: SEC filings + table creation (1.3s) → send       │
 │ ├─ Phase 1b: portfolio_summary (300ms) + daily_returns → send  │

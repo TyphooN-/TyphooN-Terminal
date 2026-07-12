@@ -8,10 +8,8 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 
 | Metric | Value |
 |---|---|
-| **GUI Binary** | ~25MB native (egui + wgpu) |
-| **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
-| **Startup Time** | < 2 seconds |
-| **Lines of Code** | ~165K GUI (native + chart-ui + research-ui) + ~140K engine/broker-runtime + ~11K transpiler (pure Rust) |
+| **Build** | Native Rust workspace; binary size, memory, and startup time are build/workload dependent |
+| **Codebase** | Six active crates: engine, broker runtime, native shell, chart UI, research UI, and transpiler |
 | **Indicators** | 46+ chart indicators plus ~375 TA-Lib/Godel research surfaces |
 | **Commands** | Research-only command palette (auto from COMMANDS registry) plus AI/research aliases; charting, drawing, indicator, timeframe, and screenshot controls are graphical UI only (ADR-133) |
 | **Drawing Tools** | 89 drawing and annotation types |
@@ -30,7 +28,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Risk Management** | 4 order modes: Standard (% risk), Fixed lots, Dynamic (min-balance scaling), VaR (percent/notional) |
 | **Order Placement** | Draggable SL/TP lines, 6 order types (market/bracket/limit/stop/stop-limit/trailing), auto lot calculation |
 | **Order Management** | Open positions panel with live P/L, trade history, cancel pending orders, smart partial close |
-| **Price Alerts** | Set alerts at any price, browser notifications, persistent across sessions |
+| **Price Alerts** | Persistent price/indicator alerts with in-app state and configured Discord/Pushover/ntfy delivery |
 | **Backtester** | 5 strategies (SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev), equity curve, trade reports (Sharpe, drawdown, profit factor) |
 | **WebSocket Streaming** | Real-time trades/quotes via Alpaca WebSocket, Time & Sales |
 | **Options Chain** | Full Greeks, strike/expiry/bid/ask via Alpaca options API |
@@ -83,7 +81,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Sector Rotation** | S&P 500 sector ETF heatmap with daily/weekly % (~ →SECTORS) |
 | **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (~ →OPTSTRAT) |
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
-| **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
+| **Broker Abstraction** | Typed protocol/capability model for adapters that reuse normalized chart, watchlist, depth, account, and execution surfaces |
 | **Multi-Account** | 4 uniform Alpaca slots (Paper/Live each, pooled ~4× bar-sync fan-out) + Kraken trading identities, account-primary cycling, opt-in TradeCopy (`TRADECOPY`), OS-native keyring storage saved on edit |
 | **Indicators** | 46+ chart indicators: NNFX system, standard overlays/oscillators, Ehlers DSP, MTF overlays, volume/supply-demand, and GPU/CPU parity paths |
 | **Security** | 21-pass audit (97 findings): OS-native keyring credentials, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
@@ -237,7 +235,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [033](docs/adr/033-background-data-channels-zero-db-queries-on-ui-thread.md) | Background Data Channels (Zero DB Queries on UI Thread) |
 | [034](docs/adr/034-fundamentals-engine-enterprise-value-earnings-dividends.md) | Fundamentals Engine (Enterprise Value, Earnings, Dividends) |
 | [036](docs/adr/036-data-pipelines-and-rendering-architecture.md) | Data Pipelines & Rendering Architecture |
-| [037](docs/adr/037-symbol-specs-tracking-and-radar-export.md) | Symbol Specs Tracking & Radar Export |
+| [037](docs/adr/037-symbol-specs-tracking-and-radar-export.md) | Symbol Specs Tracking & Radar Export _(removed with MT5 by ADR-111)_ |
 | [038](docs/adr/038-gpu-strategy-optimizer-and-mql5-export-pipeline.md) | GPU Strategy Optimizer & MQL5 Export Pipeline |
 | [039](docs/adr/039-security-by-design-credential-and-data-protection.md) | Security by Design — Credential & Data Protection |
 | [040](docs/adr/040-typhoon-transpiler-pipeline-source-to-gpu-cpu-execution.md) | TyphooN Transpiler Pipeline — Source to GPU/CPU Execution |
@@ -258,10 +256,10 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [063](docs/adr/063-event-calendar-and-targeted-outlier-scanners.md) | Event Calendar & Targeted Outlier Scanners |
 | [064](docs/adr/064-broker-scope-filter-forexfactory-calendar-perf-pass-unwrap-cleanup.md) | Broker Scope Filter, ForexFactory Calendar, Perf Pass, Unwrap Cleanup |
 | [065](docs/adr/065-ux-pass-calendar-ui-staleness-alerts-help-order-entry-function-renames.md) | UX Pass: Calendar UI, Staleness, Alerts, Help, Order Entry, Function Renames |
-| [066](docs/adr/066-easylanguage-thinkscript-compilers-phone-order-entry.md) | EasyLanguage + thinkScript Compilers, Phone Order Entry |
+| [066](docs/adr/066-easylanguage-thinkscript-compilers-phone-order-entry.md) | EasyLanguage + thinkScript Compilers; Phone Order Entry _(phone portion removed)_ |
 | [067](docs/adr/067-multi-frontend-expansion-cross-language-transpiler.md) | Multi-Frontend Expansion + Cross-Language Transpiler |
 | [068](docs/adr/068-transpiler-phase-2-full-cross-language-matrix.md) | Transpiler Phase 2: Full Cross-Language Matrix _(→ merged into ADR-067)_ |
-| [069](docs/adr/069-ux-improvements-gpu-compute-expansion-and-client-parity.md) | UX Improvements, GPU Compute Expansion, and Client Parity |
+| [069](docs/adr/069-ux-improvements-gpu-compute-expansion-and-client-parity.md) | UX/GPU Expansion; Client Parity _(partially superseded)_ |
 | [071](docs/adr/071-gpu-parity-for-all-indicators-analytics-ux-overhaul.md) | GPU Parity for All Indicators + Analytics UX Overhaul _(→ merged into ADR-030)_ |
 | [072](docs/adr/072-o-1-hot-path-optimizations-scope-regression-fix.md) | O(1) Hot-Path Optimizations + Scope Regression Fix _(→ merged into ADR-098)_ |
 | [073](docs/adr/073-sec-filing-database-expansion.md) | SEC Filing Database Expansion |
@@ -284,7 +282,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [094](docs/adr/094-kraken-async-bar-sync-acceleration.md) | Kraken Async Bar Sync Acceleration |
 | [095](docs/adr/095-kraken-rate-limit-pacing-and-cooldown.md) | Kraken Rate-Limit Pacing and Cooldown |
 | [096](docs/adr/096-ai-return-path-auto-ingest.md) | AI Return Path Auto-Ingest |
-| [098](docs/adr/098-per-frame-o-1-discipline-in-chart-and-sync-paths.md) | Per-Frame O(1) Discipline in Chart and Sync Paths |
+| [098](docs/adr/098-per-frame-o-1-discipline-in-chart-and-sync-paths.md) | Performance & O(1) Optimization Program |
 | [099](docs/adr/099-kraken-ws-full-universe-streaming-under-egui-responsiveness-budget.md) | Kraken WS Full-Universe Streaming Under egui Responsiveness Budget |
 | [100](docs/adr/100-news-article-rendering-dom-aware-extractor-hero-images-commonmark-viewer.md) | News Article Rendering: DOM-aware extractor, hero images, CommonMark viewer; NO HTML/JS renderer |
 | [101](docs/adr/101-kraken-iapi-aimd-rate-discovery-and-persistence.md) | Kraken iapi AIMD Rate Discovery and Persistence |
@@ -316,7 +314,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [128](docs/adr/128-sync-coverage-levers.md) | Sync Coverage Levers (Market-Closed Gate + Reachable %) |
 | [129](docs/adr/129-l1-l2-l3-market-data-support.md) | L1 / L2 / L3 Market Data Support (Broker-Modular) |
 | [130](docs/adr/130-multi-account-broker-support.md) | Multi-Account Broker Support (Pooled Sync Fan-Out, Account-Primary Cycling, TradeCopy) |
-| [131](docs/adr/131-sma-outfit-intelligence.md) | SMA Outfit Intelligence Window (Unfair Market SMA Outfits Concept) |
+| [131](docs/adr/131-sma-outfit-intelligence.md) | SMA Outfit Intelligence Window _(partial foundation; correlation ranking deferred)_ |
 | [132](docs/adr/132-sl-tp-lines-active-chart-scope.md) | SL/TP Trade Lines Are Active-Chart-Scoped (Exact-Geometry Dragging) |
 | [133](docs/adr/133-command-palette-research-only.md) | Command Palette Is Research-Only |
 
@@ -367,7 +365,7 @@ The standalone `typhoon-cli` / Ratatui interface has been removed from the activ
 
 ## Brokers
 
-TyphooN-Terminal trades **Alpaca + Kraken**. The historical **MT5/Darwinex** (DARWIN portfolio + BarCacheWriter EA bridge), **tastytrade**, and **CryptoCompare** (deep crypto history) integrations have been deprecated and removed from the active codebase — see [ADR-111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md). The standalone **CLI/TUI** has also been removed from active `master` and archived on `deprecated/cli-tui` — see [ADR-115](docs/adr/115-deprecate-cli-tui.md). Their full code is preserved on the relevant `deprecated/*` branches for possible future restoration; they are not built or maintained in the interim. (The MQL5/PineScript→WASM compiler is a separate language tool and is retained.)
+TyphooN-Terminal trades **Alpaca + Kraken**. The historical **MT5/Darwinex** (DARWIN portfolio + BarCacheWriter EA bridge), **tastytrade**, and **CryptoCompare** (deep crypto history) integrations have been deprecated and removed from the active codebase — see [ADR-111](docs/adr/111-broker-scope-reduction-kraken-alpaca-only.md). The standalone **CLI/TUI** has also been removed from active `master` and archived on `deprecated/cli-tui` — see [ADR-115](docs/adr/115-deprecate-cli-tui.md). Their full code is preserved on the relevant `deprecated/*` branches for possible future restoration; they are not built or maintained in the interim. The retained `typhoon-transpiler` is separate language tooling with ten source-language frontends and WASM/WGSL backends.
 
 **Alpaca Markets** — stocks, ETFs, options, and crypto via REST market/account/trading APIs. IEX (free) or SIP (paid) market data.
 

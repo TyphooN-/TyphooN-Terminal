@@ -1,7 +1,12 @@
 # ADR-069: UX Improvements, GPU Compute Expansion, and Client Parity
 
-**Status:** Implemented
+**Status:** Partially superseded by ADR-111, ADR-115, and ADR-133
 **Date:** 2026-04-10
+
+> Web/WASM, LAN-protocol, and TUI client work below was removed from active
+> master. The contextual chart-command palette direction was superseded by
+> ADR-133's research-only palette. Retained native/GPU portions are historical
+> implementation context, not a current client-parity roadmap.
 
 ## Context
 

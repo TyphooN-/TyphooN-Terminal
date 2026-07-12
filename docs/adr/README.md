@@ -13,12 +13,14 @@ Current count: 110 ADRs (removed-feature ADRs were deleted 2026-06; numbers are 
 
 **2026-06 consolidation:** execution-log passes were merged into durable parents and replaced with short redirect stubs (so cross-references keep resolving, numbers stay permanent): perf/O(1) passes (060, 072, 074, 075, 076, 105) → **ADR-098** (now "Performance & O(1) Optimization Program"); GPU parity passes (041, 071) → **ADR-030**; transpiler phase 2 (068) → **ADR-067**. Full pre-merge detail remains in git history.
 
-Thematic groups for onboarding:
+Selected thematic groups for onboarding (the root README contains the exhaustive numbered index):
 
 - **Chart/rendering UX:** ADR-001, 002, 004, 005, 007, 016, 017, 027, 030, 048, 098, 119, 123.
 - **Broker/data sync:** ADR-003, 008, 009, 029, 036, 050, 051, 087, 094, 095, 099, 101, 102, 103, 107, 109, 110, 111, 112, 113, 122, 124, 126, 128, 129, 130.
 - **Research/news/fundamentals:** ADR-011, 020, 034, 056, 057, 062, 063, 073, 078, 080, 096, 100, 116, 117, 120, 121, 131, 133.
 - **Performance/security/maintenance:** ADR-006, 031, 032, 033, 039, 044, 059, 061, 077, 088, 089, 091, 098, 108, 118, 125, 127.
 - **Trading/workflow/AI:** ADR-013, 014, 015, 053, 082, 083, 084, 114, 115, 132.
+- **Language/transpiler:** ADR-038, 040, 066, 067, 086, 118, 125.
+- **Deprecated/superseded history:** ADR-037 (MT5 symbol specs), ADR-066 (phone portion), ADR-069 (web/TUI/client parity), ADR-111, ADR-114, ADR-115.
 
 See the root README ADR Index for the numbered list.

@@ -370,10 +370,10 @@ Historical implementation items that remain relevant as regression checks:
 5. Tests should cover mapping, merge precedence, provider tombstones, and the
    high-TF catalog vs intraday demand denominator rule.
 
-## Update 2026-06-08: Native iapi Sweeps the Full Catalog (as a slow depth-filler)
+## Historical update 2026-06-08: full-catalog iapi experiment (reversed by ADR-112)
 
-The earlier invariant — "native Kraken intraday stays demand-scoped; native
-catalog only for durable high timeframes" — has been relaxed.
+This section records a short-lived experiment, not current policy. The earlier
+invariant was temporarily relaxed:
 `kraken_equity_native_history_symbols` now returns the full catalog
 (catalog-first, demand-fallback before the catalog has loaded), so native iapi
 history sweeps every enabled timeframe, not just high-TF. The merged three-source
@@ -389,7 +389,10 @@ timeframes first (the workset selector is high-TF-first) and only reaches broad
 native intraday after hours. **Alpaca and Yahoo remain the primary
 breadth/intraday lanes** because they are not iapi-bound — they carry most of the
 ~12.7k universe, and the `Merged` column stays chart-usable without native iapi
-ever being complete.
+ever being complete. Sustained traffic then proved this architecture ineffective
+and hazardous; ADR-112 restored `kraken_equity_native_history_symbols` to the
+demand set across all enabled timeframes. Alpaca/Yahoo plus bounded WS snapshot
+work own catalog breadth.
 
 Regression checks added here:
 

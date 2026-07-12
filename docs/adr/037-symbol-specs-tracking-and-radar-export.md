@@ -1,7 +1,11 @@
 # ADR-037: Symbol Specs Tracking & Radar Export
 
-**Status:** Implemented (via BarCacheWriter v1.420 __SPECS__ export)
+**Status:** Deprecated / removed from active master by ADR-111
 **Date:** 2026-03-26
+
+> Historical decision only. The MT5 BarCacheWriter, `MT5SYNC`, symbol-spec
+> schema, and radar-export path were removed from active master with ADR-111.
+> Their implementation remains on `deprecated/mt5` and is not maintained.
 
 ## Context
 

@@ -96,10 +96,10 @@ inside an active Cloudflare backoff does not immediately hammer iapi again.
 
 ## Update 2026-06-08: Measured iapi Ceiling (~6 req/s) and Concurrent-429 Coalescing
 
-When native iapi history was widened to sweep the full ~12.7k xStocks catalog
-(ADR-102), it drove the first *sustained* iapi load instead of the prior
-demand-only trickle. That measurement corrected two earlier assumptions baked
-into this ADR:
+When native iapi history was temporarily widened to sweep the full ~12.7k
+xStocks catalog (ADR-102), it drove the first sustained iapi load instead of the
+prior demand-only trickle. ADR-112 subsequently reversed that scope and restored
+iapi to demand-depth repair; the measured limiter findings remain valid:
 
 - **The real Cloudflare ceiling for equity-history iapi is ~6–7 req/s, not "5+
   and probe higher."** An earlier session appeared to "ramp clean to 40 req/s,"

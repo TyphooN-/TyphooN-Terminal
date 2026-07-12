@@ -1,6 +1,6 @@
 # ADR-131: SMA Outfit Intelligence Window
 
-**Status:** Implemented
+**Status:** Partially implemented — deterministic outfit analysis shipped; correlation/ranking deferred
 **Date:** 2026-07-03
 **Related:** ADR-125 (chart-ui crate owns indicator math), ADR-133 (research-only
 command palette), SMA Outfits research (https://github.com/unfairmarket/SMA-outfits), `typhoon-chart-ui/src/sma_outfits.rs`,

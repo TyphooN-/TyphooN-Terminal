@@ -1,6 +1,6 @@
 # UI Responsiveness & Sync — Implementation Status
 
-_Last updated: 2026-07-03_
+_Last updated: 2026-07-12_
 
 > **Historical (2026-06):** the MT5 `BarCacheWriter` external writer referenced below was removed with the broker rip-out (ADR-111). The SQLite write-contention insight still applies — the contending writers are now the Rust bulk bar-sync tasks, not the MT5 EA.
 
@@ -8,7 +8,7 @@ Investigation + fixes for the reported symptoms: UI lag / stalls, `ask/bid/last`
 decoupling, and "improve data sync." This doc records what shipped, the root
 cause, and the pros/cons of pushing further.
 
-## Root cause
+## Historical root cause
 
 The native UI's "UI frame stall detail" logs were dominated by `session_save_ms`
 — regularly **4.4s**, spiking to **18–23s**, firing every ~6s. `session.json` is
@@ -34,18 +34,19 @@ stale vs. last), and it steals the write lock from the sync pipeline.
 
 | # | Change | Files | Effect |
 |---|--------|-------|--------|
-| **P0** | Off-thread session autosave | `session_persistence.rs`, `state.rs`, `app.rs` | Per-frame autosave builds the ~6 KB JSON on the UI thread, then does the disk write + `put_kv` via `spawn_blocking`. Coalesced (`session_save_in_flight`) + sequence-gated (`session_write_gate`) so a late background write can't clobber a synchronous `save_session`. **Removes the 4.4s/18–23s render-thread stalls.** |
+| **P0** | Single-owner off-thread session autosave | `session_persistence/`, `state.rs`, `app_runtime.rs` | Incremental autosave skips heavy sync, coalesces writes, and persists on a blocking worker. The duplicate 60-second path that rebuilt session JSON and synchronously wrote preferences was removed; that timer now checks credentials only. |
 | **P2** | Floating-window render timing | `floating_windows/mod.rs` | `timed_window!` macro logs `slow floating window: <name> took <ms>` when any single window render >500ms. Diagnostic to attribute the rare 12–16s `floating_windows_ms` spikes (cause not yet identified statically). |
 | **A** | Startup DB-walk off render thread | `sync_status.rs`, `app_runtime.rs` | Removed the synchronous `refresh_storage_snapshot_from_cache` fallback (full ~86k-row `bar_cache` scan) from the per-frame `refresh_bar_sync_rows_if_stale`. The BG thread populates `cache_stats`/`detailed_stats` from its own connection; `show_sync_status` added to the BG-snapshot allowlist so the window stays fed during heavy sync. |
 | **C** | Stale bid/ask guard | `chart.rs`, `app_runtime.rs`, `technical_analysis.rs` | `ChartState.live_quote_at` stamps quote receipt; the spread lines are hidden once the quote is **>30s stale**, so a frozen bid/ask isn't drawn as "live" next to a moving candle. Addresses the decoupling display. |
+| **D** | Saturated broker-refill backpressure | `app_runtime_broker_messages.rs` | Heavy-sync settlement batches do not immediately rerun broad catalog selection while pending work is above 200; the periodic scheduler owns refill until the queue drains. |
+| **E** | Bounded background snapshots | `app_background.rs` | `BgData` publication is capacity-one `sync_channel` + `try_send`; UI stalls cannot accumulate multi-GB clones. Superseded snapshots are destroyed off the render thread. |
 
 ### How to verify
 Run a release build and watch the logs / chart:
 - `session_save_ms` should be ~0 every frame; the multi-second `session_save`
   stall lines gone.
 - Stale bid/ask spread lines disappear instead of freezing far from `last`.
-- If a 12–16s spike recurs, the new `slow floating window: <name>` line names
-  the culprit window → targeted fix (virtualization / off-thread query).
+- Use phase attribution rather than assuming one cause: high `pre_broker_ms` means startup/snapshot/scheduler work; high `broker_drain_ms` means message handling or post-drain refill; high chrome/floating timings name a UI surface; minute-aligned `render_residual_ms` previously identified the duplicate autosave.
 
 ## Pushing further — pros/cons
 

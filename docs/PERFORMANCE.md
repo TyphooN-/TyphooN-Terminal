@@ -2,20 +2,11 @@
 
 ## Native GPU Renderer
 
-The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScript, no IPC overhead. Native builds request continuous repaint and let wgpu/eframe VSync/adaptive sync cap presentation at the display refresh rate; `TYPHOON_IDLE_FPS` is an opt-in profiling/problem-display cap, not the default. Periodic broker/sync/metrics maintenance is wall-clock gated rather than `frame_count` gated, so moving from idle repaint to 60/144/240Hz native refresh does not accidentally multiply backend/UI maintenance work. Tokio broker/feed workers scale to available CPU on AC/desktop while reserving one logical core for egui/wgpu; `TYPHOON_TOKIO_WORKERS` remains the explicit override.
+The terminal uses egui + wgpu for direct GPU rendering. No WebView or JavaScript is involved. Native builds request continuous repaint when normal and use a 16 ms repaint interval while heavy sync is active; `TYPHOON_IDLE_FPS` is an opt-in profiling/problem-display override. Periodic broker/sync/metrics maintenance is wall-clock gated rather than `frame_count` gated, so moving between repaint rates does not multiply maintenance work. Tokio broker/feed workers scale to available CPU on AC/desktop while reserving one logical core for egui/wgpu; `TYPHOON_TOKIO_WORKERS` remains the explicit override.
 
-### Benchmarks
+### Performance targets and telemetry
 
-| Metric | Value |
-|--------|-------|
-| Startup to interactive | < 2s (including SQLite cache load) |
-| 10K bar chart render | < 5ms |
-| 46+ indicators on 10K bars | < 15ms total |
-| MTF grid (4 cells x 5K bars) | < 50ms |
-| Chart zoom/pan | 60fps, zero frame drops |
-| Memory (single chart + indicators) | ~50-80MB |
-| Memory (MTF 4-cell grid) | ~100-150MB |
-| Binary size (release) | ~25MB |
+The repository does not currently enforce the old fixed `<2s`/`<5ms` benchmark table. Those numbers were misleading for a 31+ GB cache, full-catalog sync, large restored MTF sessions, and high-resolution multi-monitor rendering. Current performance is verified with phase-attributed runtime telemetry: `pre_broker_ms`, `broker_drain_ms`, `render_after_broker_ms`, chrome/floating-window subphases, `session_save_ms`, pending fetches, RSS, and system memory. A release workload is healthy when foreground frames remain responsive while bounded background queues continue to converge; absolute timings depend on cache depth, viewport size, enabled overlays, and provider payloads.
 
 ### Chart Rendering
 
@@ -27,13 +18,7 @@ WebSocket trade streams build 1-minute OHLCV bars in-process. Completed bars use
 
 ### Data Pipeline
 
-| Step | Time |
-|------|------|
-| SQLite read + zstd decompress | < 1ms |
-| Bar struct construction | < 0.5ms |
-| Indicator computation (all 46+) | < 15ms |
-| egui Painter → wgpu surface | < 2ms |
-| **Total: cache → pixels** | **< 20ms** |
+Cache-to-pixels timing is workload-dependent. Slow merged-cache loads are explicitly logged with symbol, timeframe, bar count, elapsed time, and RSS before/after; frame stalls are split by phase rather than hidden behind a single aspirational total.
 
 ### Why It's Fast
 
@@ -66,11 +51,13 @@ Auto-compact uses the same compaction path for leftovers, but only runs when the
 
 Kraken has three separate public bar lanes with different performance contracts:
 
-- **Spot REST + WS:** Spot uses the full public `AssetPairs` catalog subject to the global crypto/fiat quote filters. New sessions default to USD and USD stablecoin quotes (`USD`, `USDT`, `USDC`, `USDG`) instead of scraping every fiat-quoted crypto market. REST OHLC remains the cold-start/recent-window source and is paced at the engine boundary to Kraken's documented public level: about one request per second process-wide and per pair, with 5s -> 60s cooldown on rate-limit responses. The optional/recommended Spot OHLC WebSocket lane streams the full WS-mappable Spot catalog on every WS-served interval; it is not narrowed to open charts/watchlist/positions. WS writes are coalesced until bar close, flushed off the egui frame thread, written through the fast zstd-3 merge path, and later promoted by normal zstd-22 compaction. See ADR-099.
-- **Kraken Securities / xStocks iapi:** Securities bars use the separate `kraken-equities:*` namespace and the Kraken iapi AIMD limiter. Native high timeframes (`1Day`, `1Week`, `1Month`) target the loaded Kraken equities catalog. Native intraday remains demand/focus scoped unless iapi throughput proves broad native intraday safe. Provider-assist rows (`alpaca:*`, `yahoo-chart:*`) are separate cache namespaces and can supply broad `15Min`+ chart-usable fallback coverage when enabled. Open-position quotes are not broad sync: they are a foreground safety lane with a hard sub-minute target, preferably updated by an enabled quote WebSocket and otherwise by the freshest bounded REST/iapi fallback available. See ADR-101, ADR-102, and ADR-103.
+- **Spot REST + WS:** Spot uses the full public `AssetPairs` catalog subject to the global crypto/fiat quote filters. New sessions default to USD and USD stablecoin quotes (`USD`, `USDT`, `USDC`, `USDG`) instead of scraping every fiat-quoted crypto market. REST OHLC remains the cold-start/recent-window source and is paced at the engine boundary to Kraken's documented public level: about one request per second process-wide and per pair, with 5s -> 60s cooldown on rate-limit responses. The optional/recommended Spot OHLC WebSocket lane streams the full WS-mappable Spot catalog on every WS-served interval; it is not narrowed to open charts/watchlist/positions. WS writes are coalesced until bar close, flushed off the egui frame thread, and persisted through `merge_bars_fast` at the configured zstd level. See ADR-089 and ADR-099.
+- **Kraken Securities / xStocks iapi:** Securities bars use the separate `kraken-equities:*` namespace and the Kraken iapi AIMD limiter. iapi is a demand-depth repair lane for held, watched, and open-chart symbols across enabled timeframes; it does not sweep the ~13k catalog. Catalog breadth is supplied by bounded Kraken WS snapshot work plus Alpaca/Yahoo assist lanes and merged coverage. Provider-assist rows (`alpaca:*`, `yahoo-chart:*`) remain separate cache namespaces. Open-position quotes are a foreground safety lane, preferably updated by an enabled quote WebSocket and otherwise by the freshest bounded REST/iapi fallback. See ADR-101, ADR-102, ADR-103, and ADR-112.
 - **Kraken Futures:** Futures uses public instrument discovery and explicit `from`/`to` chart ranges under `kraken-futures:*`; first sync starts at the Futures historical floor, chunks forward until current, then marks backfill complete.
 
 Direct Kraken requests spawn per-timeframe tasks where applicable, while the broad schedulers keep queue windows bounded with normalized pending/unresolvable/backfill-complete keys. SQLite/zstd cache merge and write work is offloaded with `spawn_blocking`, so network tasks stay responsive and active charts can reload on `BarsFetched` before the terminal `FetchSettled` releases scheduler slots.
+
+Broker-message draining is bounded by both message count and elapsed budget. Expensive broad refill work is coalesced after a drain, and saturated heavy-sync queues defer event-driven refill to the existing periodic scheduler until pending work drops below the high-water mark. The background analytics/cache snapshot channel is capacity one and published with `try_send`; a stalled UI cannot retain a new multi-GB `BgData` clone every refresh cycle. Session persistence has one owner: the incremental saver snapshots on the UI thread only when heavy sync is inactive, then writes session JSON and sync preferences on a blocking worker. The separate 60-second credential safety-net does not rebuild session state.
 
 Broad sync is memory-aware without changing universe semantics. The runtime reads installed RAM from `/proc/meminfo` and scales broad queue windows, batch sizes, Alpaca full-tilt capacity, and Yahoo/Kraken HTTP semaphore permits on smaller machines (35% at <=24 GB, 50% at <=40 GB, 75% at <=64 GB, with foreground-safe floors). Process RSS and system available/total memory are included in UI-stall diagnostics. Memory pressure pauses background expansion before it starves the foreground, but it does not collapse Kraken Spot/Securities/xStocks from full-catalog coverage to active-only.
 

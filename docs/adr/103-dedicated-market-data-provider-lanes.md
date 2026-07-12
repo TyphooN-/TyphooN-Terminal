@@ -2,6 +2,10 @@
 
 **Status:** Accepted / roadmap (WS robustness + O(1) dispatch + feed caps advanced 2026-07; see related ADRs 087/102/109) | **Date:** 2026-05-28
 
+> Current active broker/source scope is Kraken + Alpaca with Yahoo Chart
+> corroboration (ADR-111/129). Removed providers below are historical examples or
+> possible future adapter lanes, not current implementations.
+
 ## Context
 
 Kraken Securities / xStocks native bars are authoritative for Kraken wrapper-market
@@ -31,7 +35,8 @@ Provider plans change. Treat this as implementation guidance, not a contract.
 Use a layered provider model:
 
 1. **Native broker/source lane**
-   - Kraken equities, Kraken Spot, MT5/Darwinex, Alpaca, tastytrade, etc.
+   - Current: Kraken equities, Kraken Spot/Futures, and Alpaca.
+   - Historical/future examples: MT5/Darwinex, tastytrade, and other adapters.
    - Authoritative for execution source, account state, native quotes, fills,
      positions, and source-specific health.
 
@@ -105,7 +110,7 @@ high-priority quote set:
    and news jobs.
 3. Use WebSockets when an enabled provider has a quote stream for the normalized
    underlying equity symbol. Existing examples are Alpaca market-data streaming
-   and tastytrade DXLink; those are quote overlays/proxy market-data lanes, not
+   and a possible future tastytrade DXLink adapter; those are quote overlays/proxy market-data lanes, not
    Kraken execution-state replacements.
 4. Use Kraken private WebSocket for Kraken order/fill state where available. It
    can reduce position/order-state latency after executions, but it does not solve

@@ -90,7 +90,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Drawdown Analytics (combined + per-DARWIN dashboard, best/worst days)
 - [x] Divergence Index (signal vs quote return divergence)
 - [x] CAGR, Recovery Factor, Drawdown Duration
-- [x] LAN Sync (export/import cache data between machines)
+- [x] ~~LAN Sync (export/import cache data between machines)~~ *(removed 2026-06; historical implementation only)*
 - [x] Storage Manager (view, delete, compact zstd-22 per symbol/source, configurable idle auto-compact)
 - [x] Multi-window support (NEW_WINDOW/POPOUT for multi-monitor)
 - [x] Collapsible right panel sections
@@ -140,8 +140,8 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - Deferred: hot-reload custom indicators from file and an indicator marketplace/import UI remain outside the current native implementation target.
 
 ### Phase 13: Kraken Broker
-- [x] Public OHLCV ingest: Spot REST recent-window bars, Spot full-catalog OHLC WebSocket forward freshness, Securities/xStocks iapi high-timeframe catalog sync, and Futures explicit range sync
-- [x] Async Kraken bar sync acceleration: bounded public task queue, documented Spot OHLC pacing/cooldown, full-catalog Spot WS write-path controls, iapi AIMD rate discovery, background CryptoCompare + Kraken union work, non-blocking cache writes (ADR-094, ADR-095, ADR-099, ADR-101)
+- [x] Public OHLCV ingest: Spot REST recent-window bars, Spot full-catalog OHLC WebSocket forward freshness, Securities/xStocks demand-scoped iapi depth plus catalog assist/merged coverage, and Futures explicit range sync
+- [x] Async Kraken bar sync acceleration: bounded public task queue, documented Spot OHLC pacing/cooldown, full-catalog Spot WS write-path controls, iapi AIMD rate discovery, bounded xStocks snapshot/assist lanes, and off-thread cache writes (ADR-094, ADR-095, ADR-099, ADR-101, ADR-112)
 - [x] HMAC-SHA512 signed REST trading (ADR-051)
 - [x] Full Spot REST AddOrder parameters: stop/take-profit/trailing variants, price2, displayvol iceberg, settle-position, margin/reduce-only, flags, TIF, client IDs, STP, validate-only, conditional close
 - [x] Batch orders, order amend/edit, batch cancel, cancel-all, dead-man cancel
@@ -193,6 +193,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Documented Kraken Spot public/private rate-limit pacing, cache-depth-aware window sizing
 - [x] No-data symbol skip set
 - [x] Dependency audit + RustSec advisory closure (ADR-088)
+- [x] Six-crate workspace extraction: broker runtime, chart UI, and research UI separated from the native shell (ADR-125/127)
 
 ### Phase 21: Multi-Account, Session & Data-Integrity Follow-Through (2026-07)
 - [x] Multi-account broker pools: 4 uniform Alpaca slots (Key/Secret/Paper|Live each, all in the bar-sync rotation) + Kraken trading identities, account-primary cycling (ADR-130)

@@ -23,21 +23,23 @@ with real-time news, prices, and sentiment when the question calls for it.
 
 ## Triggers
 
-Three console commands build a research packet and dispatch it. All three
-share the same argument parser (`parse_ask_args`) and the same packet builder
-(`investigate_symbols`) — they only differ in how the built packet is
-delivered to the model.
+The packet builder is shared by hosted AI, Claude, Antigravity, Codex, Grok,
+Hermes, and file-export command paths. They share `parse_ask_args` and
+`investigate_symbols`; only transport differs.
 
 | Command | Transport | Destination |
 |---|---|---|
 | `ASKAI SYM[,SYM] [question]` | HTTP `POST` via `BrokerCmd::AiChat` | Currently-selected AI provider (AI Assistant window) |
 | `ASKCLAUDE SYM[,SYM] [question]` | `claude --print` subprocess | Anthropic's `claude` CLI (must be on `$PATH`) |
 | `ASKANTIGRAVITY SYM[,SYM] [question]` | `agy`/`antigravity`/`gemini --prompt` subprocess | Google's Antigravity CLI preferred (`agy` binary first), Gemini fallback (must be on `$PATH`) |
+| `ASKCODEX SYM[,SYM] [question]` | Codex subprocess | OpenAI Codex CLI |
+| `ASKGROK SYM[,SYM] [question]` | Grok Build subprocess | Grok Build CLI |
+| `ASKHERMES SYM[,SYM] [question]` | Hermes subprocess | Hermes Agent CLI |
 
 Argument parsing contract: the first whitespace-separated token is the
 comma-separated symbol list; everything after the first whitespace is the
 question, preserved verbatim. Aliases: `ASK_AI`, `ASK_CLAUDE`, `ASK_GEMINI`,
-`ASK_ANTIGRAVITY`,
+`ASK_ANTIGRAVITY`, `ASK_CODEX`, `ASK_GROK`, `ASK_HERMES`,
 and `INVESTIGATE` (for ASKAI).
 
 Examples:
@@ -128,9 +130,8 @@ in `FX_MAJORS_UNIVERSE`. Populated by running the `WCR` command.
 ### 3. Per-symbol section
 
 Each symbol is preceded by `---` and an `## {SYMBOL}` heading. Sections are
-emitted in the order the user specified them. A section is composed of up to
-**two hundred and twenty-eight sub-blocks**, each of which is skipped silently when its data
-source is empty.
+emitted in the order the user specified them. A section is composed of a large
+set of optional sub-blocks, each skipped silently when its data source is empty.
 
 #### 2.1 Company header + description
 
