@@ -22,10 +22,19 @@ impl TyphooNApp {
         // Cap drain per frame so a flood of messages can't stall the render thread.
         // Anything left over waits for next frame; we repaint immediately in that case.
         let mut msgs_drained = 0usize;
-        let broker_drain_max = 48;
+        let broker_drain_max = if self.heavy_sync_in_progress {
+            // Tighter cap during broad catch-up: hundreds of BarsFetched arriving
+            // while 12k+ symbols are syncing. Even small per-msg work * 48 easily
+            // burns 200-600ms of frame time and starves rendering. Leave headroom.
+            if self.total_pending_market_data_fetches() > 200 { 16 } else { 24 }
+        } else {
+            48
+        };
         let broker_drain_started = std::time::Instant::now();
         let broker_drain_budget = if self.heavy_sync_in_progress {
-            std::time::Duration::from_millis(4)
+            // 3ms budget when heavy; still makes forward progress on the queue
+            // but protects the UI thread and chrome panels from long drains.
+            std::time::Duration::from_millis(3)
         } else {
             std::time::Duration::from_millis(8)
         };

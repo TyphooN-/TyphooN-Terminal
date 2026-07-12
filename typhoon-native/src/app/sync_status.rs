@@ -46,11 +46,19 @@ impl TyphooNApp {
     #[inline]
     pub(super) fn refresh_bar_sync_rows_if_stale(&mut self) {
         let now = std::time::Instant::now();
-        let refresh_interval = bar_sync_stats_refresh_interval_for_broad_symbol_count(
-            self.heavy_sync_in_progress,
-            self.show_sync_status,
-            self.kraken_equity_catalog_symbol_count(),
-        );
+        // Force the long heavy-sync interval even if the Sync Status window is open.
+        // During broad catch-up the full matrix scan is expensive and the % only
+        // changes slowly; the user benefits more from smooth rendering than
+        // perfectly fresh numbers on 12k symbols.
+        let refresh_interval = if self.heavy_sync_in_progress {
+            BAR_SYNC_STATS_HEAVY_REFRESH
+        } else {
+            bar_sync_stats_refresh_interval_for_broad_symbol_count(
+                false,
+                self.show_sync_status,
+                self.kraken_equity_catalog_symbol_count(),
+            )
+        };
         if self.bar_sync_compute_rx.is_some() {
             // A snapshot compute is already running on a worker — don't stack another.
             return;

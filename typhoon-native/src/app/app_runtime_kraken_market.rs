@@ -234,6 +234,16 @@ impl TyphooNApp {
     }
 
     pub(super) fn tick_kraken_universe_schedulers(&mut self, now_instant: std::time::Instant) {
+        // During heavy broad sync we are already driving full-tilt fetch pressure
+        // via the pending queue and schedulers. Re-evaluating the full Kraken
+        // equity/futures universe catalog every sync_interval adds measurable
+        // pre_broker cost (catalog filtering, state rebuilds, cursor scans)
+        // for little value while 10k+ symbols are catching up. Skip the heavy
+        // universe scheduling work; WS OHLC and focused demand paths continue.
+        if self.heavy_sync_in_progress {
+            return;
+        }
+
         if now_instant.duration_since(self.kraken_universe_last_schedule)
             >= self.market_data_sync_interval()
             && self.cache_loaded
