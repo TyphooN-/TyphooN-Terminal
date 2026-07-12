@@ -59,6 +59,15 @@ Direct Kraken requests spawn per-timeframe tasks where applicable, while the bro
 
 Broker-message draining is bounded by both message count and elapsed budget. Expensive broad refill work is coalesced after a drain, and saturated heavy-sync queues defer event-driven refill to the existing periodic scheduler until pending work drops below the high-water mark. The background analytics/cache snapshot channel is capacity one and published with `try_send`; a stalled UI cannot retain a new multi-GB `BgData` clone every refresh cycle. Session persistence has one owner: the incremental saver snapshots on the UI thread only when heavy sync is inactive, then writes session JSON and sync preferences on a blocking worker. The separate 60-second credential safety-net does not rebuild session state.
 
+Alpaca multi-account sync scales at the dispatch boundary, not by duplicating
+scheduler work. Each single-symbol request or complete batch is assigned
+round-robin to one successfully connected account with its own limiter; all
+results merge into the same canonical cache keys. Aggregate RPM and scheduler
+capacity use the connected rotation count. Primary selection controls trading
+and account state only. A failed request settles/retries normally; a later retry
+re-enters round-robin and may use another account rather than migrating the
+already-running request.
+
 Broad sync is memory-aware without changing universe semantics. The runtime reads installed RAM from `/proc/meminfo` and scales broad queue windows, batch sizes, Alpaca full-tilt capacity, and Yahoo/Kraken HTTP semaphore permits on smaller machines (35% at <=24 GB, 50% at <=40 GB, 75% at <=64 GB, with foreground-safe floors). Process RSS and system available/total memory are included in UI-stall diagnostics. Memory pressure pauses background expansion before it starves the foreground, but it does not collapse Kraken Spot/Securities/xStocks from full-catalog coverage to active-only.
 
 ### Broker Full-History Sync

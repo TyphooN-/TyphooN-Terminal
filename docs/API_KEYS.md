@@ -13,9 +13,14 @@ Optional API keys and broker credentials that unlock additional features.
 - **Rate limit:** 200 requests/minute (free plan), enforced **per account key**
 - **Multiple accounts (ADR-130):** the free tier allows 1 live + 3 paper
   accounts. Settings → API Keys exposes 4 identical Alpaca slots — Key,
-  Secret, and a Paper/Live mode each. Every configured slot joins the
-  historical bar-sync rotation (4 accounts ≈ 4× sync throughput) and can
-  trade. Slot 1 uses the legacy `alpaca_api_key`/`alpaca_secret` keyring
+  Secret, and a Paper/Live mode each. Every **successfully connected** slot
+  joins the historical bar-sync rotation and can trade; invalid/disconnected
+  slots are excluded. Four connected accounts can provide roughly 4× aggregate
+  historical request capacity because each key has its own limiter. Rotation is
+  per dispatched request/batch, independent of the selected Primary account;
+  all accounts write the same canonical `alpaca:SYM:TF` cache namespace rather
+  than fetching duplicate copies. Slot 1 uses the legacy
+  `alpaca_api_key`/`alpaca_secret` keyring
   entries; slots 2–4 store under `alpaca_api_key_N`/`alpaca_secret_N`.
   Credentials save to the keyring as soon as the field is edited — no
   Connect click needed. The top-bar `Primary:` chip cycles accounts; the

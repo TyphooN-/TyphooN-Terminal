@@ -73,6 +73,14 @@ Recent market data work (ADR-129/109): Strong L1 (ticker/quotes/trades with size
 
 Trade execution currently flows through **Alpaca and Kraken** with shared net-position EA semantics (partial close, close-all, cancel-exits-before-close). Alpaca auto-connects on startup if credentials are saved in the system keyring. Kraken supports public-OHLCV-only mode and authenticated Spot REST trading with full AddOrder parameters, batch orders, amend/edit, dead-man cancel, cancel-all, balances, orders, trades, ledgers, positions, and private WebSocket `ownTrades`/`openOrders` with reconnect/resubscribe (ADR-051). Kraken public bar sync is fully async at the task level: direct Spot/Futures fetches spawn per-timeframe tasks, and all Kraken HTTP work runs under bounded queue/semaphore control (ADR-094). Spot OHLC HTTP calls are paced to Kraken's documented public limit with cooldown on throttles (ADR-095), while the Spot OHLC WebSocket lane streams the full WS-mappable Spot catalog and persists only closed/coalesced bars through the fast off-thread merge path (ADR-099). Kraken Securities/iapi uses a separate persisted AIMD limiter that starts conservatively, ramps on clean traffic, halves on congestion/rate-limit responses, and defaults to a 5 req/s ceiling; power users can raise only that ceiling with `TYPHOON_KRAKEN_IAPI_AIMD_MAX_RATE`, but the discovered-ceiling/backoff logic remains active. Securities/xStocks fallback providers (`Alpaca`, `Yahoo Chart`) remain separate source namespaces and are merged only for chart/research usability when enabled. See ADR-113 for the cross-source merge/priority hierarchy; chart source order includes the implementation-specific `kraken-equities` and `default` fallbacks around the table above.
 
+Alpaca account pooling separates control-plane ownership from data-plane
+capacity. Primary owns trading/account state and private streams. Historical bar
+requests and whole batches rotate across successfully connected Alpaca accounts,
+each with an independent limiter, while all results share canonical
+`alpaca:SYMBOL:TF` keys. Failed/disconnected slots do not count toward aggregate
+RPM or scheduler capacity. Extra Kraken identities do not add market-data
+capacity because Kraken market data and iapi pressure are public/process-level.
+
 ### Cross-broker history assist and broker-module expansion
 
 Kraken equities fallback is the first implementation of a broader rule: enabled

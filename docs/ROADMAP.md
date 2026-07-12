@@ -196,7 +196,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Six-crate workspace extraction: broker runtime, chart UI, and research UI separated from the native shell (ADR-125/127)
 
 ### Phase 21: Multi-Account, Session & Data-Integrity Follow-Through (2026-07)
-- [x] Multi-account broker pools: 4 uniform Alpaca slots (Key/Secret/Paper|Live each, all in the bar-sync rotation) + Kraken trading identities, account-primary cycling (ADR-130)
+- [x] Multi-account broker pools: 4 uniform Alpaca slots (Key/Secret/Paper|Live each); successfully connected slots round-robin historical requests/batches independently of Primary, share canonical cache keys, and scale aggregate capacity + Kraken trading identities and account-primary cycling (ADR-130)
 - [x] Credentials persist to keyring on field edit (no Connect click required); SQLite `cred:` fallback
 - [x] TradeCopy via `TRADECOPY` console command; live order mirroring strictly opt-in per target account, never persisted
 - [x] Holiday-aware Kraken xStocks session status (rule-based NYSE holiday calendar, ADR-110)

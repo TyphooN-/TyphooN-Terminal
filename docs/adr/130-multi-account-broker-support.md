@@ -64,9 +64,32 @@ and after every primary switch.
   decide *which key executes it*, so there is no duplicate-write hazard — all
   accounts feed the same `alpaca:SYM:TF` cache keys.
 
+#### Bar-sync behavior at a glance
+
+- A configured slot joins the runtime rotation only after that account connects
+  successfully. Invalid, unavailable, or disconnected slots are excluded. If
+  the persisted primary cannot connect, the first connected account becomes
+  primary.
+- Rotation happens at dispatch time. One single-symbol request or one complete
+  multi-symbol batch is assigned to one account; a batch is not split across
+  account keys. The next dispatched request/batch advances the atomic cursor.
+- Primary-account selection is independent of historical sync routing. Changing
+  Primary changes trading/account-data/private-stream ownership, but does not
+  pin bars to that account or remove other connected accounts from rotation.
+- There is one scheduler work item and one canonical cache key per
+  `(symbol,timeframe)`. Multiple accounts increase execution capacity; they do
+  not create parallel duplicate copies of the same requested work.
+- A failed or rate-limited in-flight request is settled through the normal retry
+  queue. It is not migrated mid-request. When the retry is dispatched later it
+  calls `next_data_broker()` again and may therefore execute on the next account.
+- With no eligible data account, the pool falls back to a connected primary. If
+  no Alpaca account connected, the request settles as failed and the UI reports
+  that Alpaca is not connected.
+
 ### 2. Aggregate capacity scaling (native scheduler)
 
-- `alpaca_aggregate_historical_rpm()` = per-account RPM × data-account count.
+- `alpaca_aggregate_historical_rpm()` = per-account RPM × **successfully
+  connected** data-account count.
 - `alpaca_sync_capacity()` tiers `queue_window`/`batch_size` by the aggregate
   RPM and multiplies `fetch_permits` by the pool size (capped at 48); each
   in-flight worker is still paced by its own account's limiter, so no account
@@ -188,8 +211,10 @@ Requested alongside this change; findings (no scheduler rewrite needed):
 
 ## Consequences
 
-- Free-tier Alpaca setups can roughly **4×** broad historical sync throughput
-  (1 live + 3 paper), directly shrinking the Merged-universe catch-up window.
+- Free-tier Alpaca setups can reach roughly **4×** broad historical sync
+  throughput when all four accounts connect and expose independent per-key
+  budgets. This is aggregate capacity, not a guarantee that every workload or
+  provider response completes exactly four times faster.
 - The primary switch is now account-granular; ADR-126 semantics (primary
   broker = routing default + trusted merge lane) are unchanged at the broker
   level.
@@ -209,7 +234,8 @@ User-driven comb-over of the multi-account settings surface:
 - **Uniform Alpaca slots.** Slots 1–4 render identically (Key / Secret /
   Paper|Live). The per-slot Label, Trade, and Data controls were removed;
   `ExtraAccountConfig` shrank to `{api_key, secret, paper}` and specs always
-  ship `trade_enabled = data_sync_enabled = true`. Four accounts total —
+  ship `trade_enabled = data_sync_enabled = true`; runtime participation still
+  requires successful connection. Four accounts total —
   slot 1 (legacy keyring names) plus slots 2–4.
 - **Keyring persistence bug fixed.** Slot credentials were only stored inside
   the "Connect Alpaca" click handler, which is a no-op while already

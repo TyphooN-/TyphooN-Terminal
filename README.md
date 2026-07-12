@@ -82,7 +82,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (~ →OPTSTRAT) |
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | Typed protocol/capability model for adapters that reuse normalized chart, watchlist, depth, account, and execution surfaces |
-| **Multi-Account** | 4 uniform Alpaca slots (Paper/Live each, pooled ~4× bar-sync fan-out) + Kraken trading identities, account-primary cycling, opt-in TradeCopy (`TRADECOPY`), OS-native keyring storage saved on edit |
+| **Multi-Account** | 4 uniform Alpaca slots; successfully connected accounts round-robin historical requests/batches into one shared cache namespace (up to ~4× aggregate key budget, independent of Primary) + Kraken trading identities, account-primary cycling, opt-in TradeCopy (`TRADECOPY`) |
 | **Indicators** | 46+ chart indicators: NNFX system, standard overlays/oscillators, Ehlers DSP, MTF overlays, volume/supply-demand, and GPU/CPU parity paths |
 | **Security** | 21-pass audit (97 findings): OS-native keyring credentials, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
 | **Analyst Ratings** | Finnhub consensus: stacked buy/hold/sell chart + price targets (~ →ANR) |
