@@ -174,45 +174,73 @@ impl TyphooNApp {
             });
             ui.add_space(2.0);
 
-            // Sort watchlist rows
-            let mut sorted_wl: Vec<&WatchlistRow> = self.watchlist_rows.iter().collect();
-            match self.watchlist_sort.column {
-                0 => sorted_wl.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
-                1 => sorted_wl.sort_by(|a, b| {
-                    a.last
-                        .partial_cmp(&b.last)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }),
-                2 => sorted_wl.sort_by(|a, b| {
-                    a.change
-                        .partial_cmp(&b.change)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }),
-                3 => sorted_wl.sort_by(|a, b| {
-                    a.change_pct
-                        .partial_cmp(&b.change_pct)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }),
-                4 => sorted_wl.sort_by(|a, b| {
-                    a.volume
-                        .partial_cmp(&b.volume)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }),
-                5 => sorted_wl.sort_by(|a, b| {
-                    a.ext_change_pct
-                        .partial_cmp(&b.ext_change_pct)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }),
-                6 => sorted_wl.sort_by(|a, b| {
-                    a.regular_close
-                        .partial_cmp(&b.regular_close)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }),
-                _ => {}
+            // Sort watchlist rows — cached indices so we pay the sort cost only when
+            // the row set changes or the user clicks a different column/direction.
+            // Invalidation via rebuild_live_indices on structural mutations.
+            if self.watchlist_sorted_indices.len() != self.watchlist_rows.len()
+                || self.watchlist_last_sorted_column != self.watchlist_sort.column
+                || self.watchlist_last_sorted_ascending != self.watchlist_sort.ascending
+            {
+                let mut indices: Vec<usize> = (0..self.watchlist_rows.len()).collect();
+                match self.watchlist_sort.column {
+                    0 => indices.sort_by(|&ia, &ib| {
+                        self.watchlist_rows[ia]
+                            .symbol
+                            .cmp(&self.watchlist_rows[ib].symbol)
+                    }),
+                    1 => indices.sort_by(|&ia, &ib| {
+                        self.watchlist_rows[ia]
+                            .last
+                            .partial_cmp(&self.watchlist_rows[ib].last)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    2 => indices.sort_by(|&ia, &ib| {
+                        self.watchlist_rows[ia]
+                            .change
+                            .partial_cmp(&self.watchlist_rows[ib].change)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    3 => indices.sort_by(|&ia, &ib| {
+                        self.watchlist_rows[ia]
+                            .change_pct
+                            .partial_cmp(&self.watchlist_rows[ib].change_pct)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    4 => indices.sort_by(|&ia, &ib| {
+                        self.watchlist_rows[ia]
+                            .volume
+                            .partial_cmp(&self.watchlist_rows[ib].volume)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    5 => indices.sort_by(|&ia, &ib| {
+                        self.watchlist_rows[ia]
+                            .ext_change_pct
+                            .partial_cmp(&self.watchlist_rows[ib].ext_change_pct)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    6 => indices.sort_by(|&ia, &ib| {
+                        self.watchlist_rows[ia]
+                            .regular_close
+                            .partial_cmp(&self.watchlist_rows[ib].regular_close)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    _ => {}
+                }
+                if !self.watchlist_sort.ascending {
+                    indices.reverse();
+                }
+                self.watchlist_sorted_indices = indices;
+                self.watchlist_last_sorted_column = self.watchlist_sort.column;
+                self.watchlist_last_sorted_ascending = self.watchlist_sort.ascending;
             }
-            if !self.watchlist_sort.ascending {
-                sorted_wl.reverse();
-            }
+
+            // Build a tiny vec of refs from the cached indices (cheap for typical watchlist size).
+            // Main win is skipping the sort every frame.
+            let sorted_wl: Vec<&WatchlistRow> = self
+                .watchlist_sorted_indices
+                .iter()
+                .map(|&i| &self.watchlist_rows[i])
+                .collect();
 
             if self.watchlist_rows.is_empty() && self.user_watchlist.is_empty() {
                 ui.label(

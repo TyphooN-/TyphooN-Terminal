@@ -373,5 +373,9 @@ impl TyphooNApp {
                 self.watchlist_by_bare.insert(bare, i);
             }
         }
+
+        // Invalidate watchlist sort cache — structural change to rows order/len
+        // means display sort order must be recomputed on next render.
+        self.watchlist_sorted_indices.clear();
     }
 }
