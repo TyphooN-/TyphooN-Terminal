@@ -28,7 +28,7 @@ zeroize = { workspace = true }
 aes-gcm = { workspace = true }
 # Reuse the platform trust store already selected by reqwest/rustls. This avoids
 # compiling the legacy webpki-roots 0.26 compatibility wrapper beside v1.
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-native-roots"] }
 # Declared minimal: StreamExt (std) + SinkExt (sink) for the WS lanes.
 # `sink` was previously only enabled transitively by tokio-tungstenite's own
 # futures-util dep — declare what we call so a tungstenite feature change
@@ -36,9 +36,9 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["c
 futures-util = { workspace = true, features = ["std", "sink"] }
 # Alpaca's streaming APIs frame payloads as MessagePack; decode binary frames
 # into serde_json::Value so the existing JSON parsers can consume them.
-rmp-serde = "1"
-crc32fast = { version = "1.5.0", default-features = false, features = ["std"] }
-async-trait = "0.1"
+rmp-serde = { workspace = true }
+crc32fast = { workspace = true }
+async-trait = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled", "cache"] }
 # System keyring for credential storage (keyring 4.x split crates).
 # The sample test store rides in dev-dependencies only — the shipped
@@ -52,7 +52,7 @@ base64 = { workspace = true }
 # DOM-aware article body extractor: picks the publisher's main content node
 # (article/main/.caas-body/.article-body/etc.) and drops nav/header/footer/aside
 # chrome before returning text. See news::extract_article_text.
-scraper = { version = "0.27", default-features = false }
+scraper = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }

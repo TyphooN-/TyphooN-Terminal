@@ -22,9 +22,9 @@ typhoon-broker-runtime = { workspace = true }
 typhoon-transpiler = { workspace = true }
 
 # Native GPU UI — latest stable egui ecosystem (2026-03-27)
-eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wayland", "wgpu_no_default_features", "x11"] }
+eframe = { workspace = true, features = ["default_fonts", "wayland", "wgpu_no_default_features", "x11"] }
 egui = { workspace = true, features = ["default_fonts"] }
-egui_plot = "0.36"
+egui_plot = { workspace = true }
 # News article rendering: markdown viewer (paragraphs/links/headings/inline images)
 # plus the egui_extras image loader so hero images and inline <img>s decode from URL.
 # Deliberately NOT a full HTML/JS renderer (no webview, no wry/tao) — see ADR for the
@@ -32,13 +32,13 @@ egui_plot = "0.36"
 # Loaders kept minimal: image (png/jpeg via the image crate below) + webp +
 # http (ehttp URL fetch). svg (resvg/usvg/tiny-skia) and gif are off — finance
 # news imagery is raster; re-enable a loader only with a concrete need.
-egui_extras = { version = "0.35", default-features = false, features = ["image", "webp", "http"] }
-egui_commonmark = { version = "0.24", default-features = false, features = ["load-images"] }
+egui_extras = { workspace = true, features = ["image", "webp", "http"] }
+egui_commonmark = { workspace = true, features = ["load-images"] }
 # eframe's `wgpu_no_default_features` deliberately avoids selecting a backend;
 # TyphooN is a desktop app, so enable only the native Linux renderer surface we
 # need here. Code still imports wgpu types through `eframe::wgpu` to keep the
 # API version paired with egui-wgpu.
-wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Must match egui-wgpu (eframe 0.35 pins wgpu 29)
+wgpu = { workspace = true, features = ["std", "parking_lot", "vulkan", "wgsl"] }  # Must match egui-wgpu (eframe 0.35 pins wgpu 29)
 
 # Async runtime (shared with engine). net + io-util serve the hand-rolled
 # /metrics HTTP responder (metrics.rs) that replaced axum. No tokio::fs use
@@ -48,14 +48,14 @@ tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macr
 # Regex filter for the News window — lets the user search article headlines
 # with /pattern/ syntax in addition to the keyword and comma-separated
 # multi-symbol modes. Already transitively in the build via tracing-subscriber.
-regex = "1"
+regex = { workspace = true }
 
 # HTTP client (for Kraken API in broker task — matches engine)
 reqwest = { workspace = true, features = ["json", "rustls"] }
 # Select one process-wide rustls crypto provider explicitly. reqwest pulls
 # aws-lc-rs while egui_extras/ehttp/ureq pulls ring, so rustls cannot infer a
 # unique provider at runtime unless the binary installs one before TLS use.
-rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+rustls = { workspace = true, features = ["std", "aws_lc_rs"] }
 
 # Date/time formatting (for chart time axis labels)
 chrono = { workspace = true }
@@ -63,32 +63,32 @@ chrono = { workspace = true }
 # Native file dialog
 # Synchronous dialogs use the desktop portal. No parent window handle is passed,
 # so rfd's direct Wayland client backend is unnecessary.
-rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+rfd = { workspace = true, features = ["xdg-portal"] }
 
 # Serialization for session persistence
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Safe byte casting for GPU buffer I/O (replaces unsafe custom Pod trait)
-bytemuck = "1"
+bytemuck = { workspace = true }
 
 # Prometheus metrics — text exposition only, so the default protobuf
 # encoder stays off. The /metrics endpoint is a minimal hand-rolled
 # HTTP responder in metrics.rs (axum and its tower/matchit subtree were
 # removed; the framework served exactly one GET route).
-prometheus = { version = "0.14", default-features = false }
+prometheus = { workspace = true }
 
 # Image encoding (lossless WebP screenshot export + news article hero images
 # loaded via egui_extras → needs png/jpeg decode too).
-image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg"] }
+image = { workspace = true, features = ["webp", "png", "jpeg"] }
 
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 
 # Custom allocator — mimalloc is 5-15% faster than system malloc on small alloc heavy workloads
-mimalloc = { version = "0.1", default-features = false }
+mimalloc = { workspace = true }
 
 # Windows AC-power probe for ADR-205 idle auto-compact gate
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Power"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Power"] }

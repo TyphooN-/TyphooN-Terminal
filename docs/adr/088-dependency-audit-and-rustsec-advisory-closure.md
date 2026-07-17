@@ -281,3 +281,23 @@ by current upstream ecosystems:
 
 Do not patch or fork these merely to force a cosmetically single-version tree;
 retest them when their owning upstream stack releases a unifying version.
+
+## Follow-up audit (2026-07-17)
+
+Security-first comb-over: centralized remaining direct dep pins into
+[workspace.dependencies] for version unification + minimal features.
+
+- Updated workspace root to declare latest versions (tokio 1.53, plus 20
+  others now centralized: async-trait through wgpu/windows-sys with
+  default-features=false and only the features actually exercised by members).
+- Refactored typhoon-engine, typhoon-native, typhoon-transpiler manifests to
+  inherit from workspace (no local version strings for centralized crates).
+- This eliminates any risk of future drift on these crates and makes "update
+  to latest" a one-place operation.
+- cargo check --workspace succeeded; lockfile updated with tokio 1.53.0.
+- No new RustSec issues; duplicates unchanged (upstream only, as before).
+- Feature minimality preserved from prior audits and explicit in the
+  centralized declarations + per-use overrides.
+
+See ADR-031 for the parallel entry. All direct TyphooN deps now route
+through the single workspace table for common versions.

@@ -365,3 +365,36 @@ clipboard Smithay generations, and independent GPU/SQLite/HTML/TLS support
 stacks. Removing them locally would require dropping supported behavior or
 forking upstream. See ADR-088's 2026-07-12 audit for the exact update and feature
 inventory.
+
+## Follow-up alignment (2026-07-17)
+
+Security-first workspace centralization + latest compatible refresh (per the
+initiative documented across ADR-031 and ADR-088).
+
+- Bumped direct workspace pin: `tokio 1.52 → 1.53` (pulls 1.53.0 on resolution).
+- Centralized ~20 additional direct-dependency version pins + their minimal
+  feature sets into `[workspace.dependencies]`:
+  `async-trait`, `bytemuck`, `crc32fast`, `eframe`, `egui_commonmark`,
+  `egui_extras`, `egui_plot`, `image`, `mimalloc`, `pest`/`pest_derive`,
+  `prometheus`, `regex`, `rfd`, `rmp-serde`, `rustls`, `scraper`,
+  `tokio-tungstenite`, `wasm-encoder`, `wgpu`, `windows-sys`.
+- All consuming member manifests (`typhoon-engine`, `typhoon-native`,
+  `typhoon-transpiler`) now inherit the common version and declare only the
+  additional per-crate features they actually exercise. No repeated `version =`
+  strings for these crates anywhere in the workspace.
+- Feature surface remains the previously-audited minimal sets (documented in
+  call-site comments and prior ADR sections): e.g. engine-only `serde_json`
+  extras, native-only `egui_extras` loaders, tokio capability splits by crate,
+  rustls `aws_lc_rs` selector, etc.
+- Result: single source of truth for versions, guaranteed common version for
+  any crate used by >1 member, easier future "latest" sweeps, no change to
+  resolved duplicate families (still only upstream-owned).
+- Validation: `cargo check --workspace` clean (resolved and pulled tokio 1.53),
+  `cargo tree -d --workspace` shows no new direct-version drift, `cargo update
+  --workspace --dry-run --verbose` lists only the known intentional blockers
+  (wgpu 29 vs 30, generic-array 0.14.7, plus some patch-level behinds).
+- `cargo audit` expectations unchanged (quick-xml acceptances in
+  `.cargo/audit.toml`).
+
+This pass keeps the policy: latest stable, minimal direct features, no
+workspace version splits, document blockers.
