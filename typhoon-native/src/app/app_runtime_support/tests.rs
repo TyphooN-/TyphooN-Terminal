@@ -408,3 +408,19 @@ fn xstocks_weekend_closed_spans_friday_8pm_to_sunday_8pm_et() {
         "2026-06-10T15:00:00Z"
     ))); // Wed 11:00 ET — open
 }
+
+#[test]
+fn bg_snapshot_apply_gate_bounds_heavy_sync_staleness() {
+    let s = std::time::Duration::from_secs;
+    // Outside heavy sync every snapshot applies.
+    assert!(should_apply_bg_snapshot(false, false, false, s(0)));
+    // Heavy sync suppresses applies while the snapshot is still fresh...
+    assert!(!should_apply_bg_snapshot(true, false, false, s(3)));
+    assert!(!should_apply_bg_snapshot(true, false, false, s(29)));
+    // ...but a data window, the first ready snapshot, or the 30s staleness
+    // bound force it through — a whole catch-up can no longer run on a
+    // frozen scheduler/coverage view.
+    assert!(should_apply_bg_snapshot(true, true, false, s(0)));
+    assert!(should_apply_bg_snapshot(true, false, true, s(0)));
+    assert!(should_apply_bg_snapshot(true, false, false, s(30)));
+}

@@ -27,21 +27,40 @@ pub(super) const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 384;
 /// avoid the per-tick `pre_broker` stalls.
 pub(super) const FULL_TILT_SYNC_INTERVAL_SECS: u64 = 1;
 pub(super) const BALANCED_SYNC_INTERVAL_SECS: u64 = 60;
+
+/// Broad heavy scheduler lanes serviced by `run_broad_dispatch_slice`:
+/// Kraken spot/equities universe, Kraken futures, Alpaca rotation. Visible
+/// passes run at most one lane per frame; hidden passes run every due lane.
+pub(super) const BROAD_DISPATCH_LANES: u8 = 3;
+/// Floor between refill-driven runs of the same lane. Settlement-triggered
+/// refills matter mostly in balanced mode (the periodic interval is 60s
+/// there); under full-tilt the 1s periodic cadence dominates, and this floor
+/// keeps a continuous settlement stream from turning every frame into a
+/// catalog scan.
+pub(super) const BROAD_DISPATCH_REFILL_MIN_SPACING: std::time::Duration =
+    std::time::Duration::from_millis(250);
+
 pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 256;
 pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 200;
 pub(super) const ALPACA_FULL_TILT_FETCH_PERMITS: usize = 8;
-pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 4_096;
+// Full-tilt background scan limits (rows examined per scheduler run, NOT
+// dispatch budgets): these scans run on the render thread, so each lane must
+// fit a frame. At ~15-20µs per examined row the previous 2048-4096 limits put
+// the Kraken universe lane at 130-160ms and the Alpaca rotation at ~110ms
+// every full-tilt second — the constant 250ms+ frame stalls in the live log.
+// Small slices don't cost throughput: the rotating cursor sweeps the full
+// catalog across ticks, and during catch-up nearly every scanned row is a
+// candidate, so slots fill long before the scan limit binds. The limit only
+// binds when mostly caught up — exactly when scanning is pure discovery and a
+// ~2min full-sweep latency is fine.
+pub(super) const ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1_024;
 pub(super) const ALPACA_FULL_TILT_LOW_TF_RESERVE_BATCH: usize = 24;
 pub(super) const KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW: usize = 384;
-pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
+pub(super) const KRAKEN_SPOT_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 768;
 pub(super) const KRAKEN_SPOT_FULL_TILT_LOW_TF_RESERVE_BATCH: usize = 16;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_QUEUE_WINDOW: usize = 768;
 pub(super) const KRAKEN_EQUITIES_FULL_TILT_BATCH_SIZE: usize = 320;
-// Full-tilt still rotates through the full xStocks catalog, but scanning 8k+
-// candidates on the egui thread every 1s showed up as recurring 180-650ms
-// `pre_broker_ms` stalls during startup catch-up. Keep each scheduler tick
-// bounded and let the cursor advance across ticks instead of stealing frames.
-pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
+pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 768;
 // Kraken Securities/iapi permit limits live behind the broker-runtime resource
 // seam now so the broker processor can move without depending on native.
 // Per-call iapi spacing (was KRAKEN_EQUITIES_HISTORY_MIN_INTERVAL_MS) and the
@@ -54,13 +73,13 @@ pub(super) const KRAKEN_EQUITIES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2048;
 /// primary feed.
 pub(super) const KRAKEN_TRADES_REST_REFRESH_SECS: u64 = 600;
 pub(super) const KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW: usize = 576;
-pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 1024;
+pub(super) const KRAKEN_FUTURES_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 512;
 
 pub(super) const YAHOO_CHART_QUEUE_WINDOW: usize = 12;
 pub(super) const YAHOO_CHART_BATCH_SIZE: usize = 1;
 pub(super) const YAHOO_CHART_FULL_TILT_QUEUE_WINDOW: usize = 120;
 pub(super) const YAHOO_CHART_FULL_TILT_BATCH_SIZE: usize = 12;
-pub(super) const YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 2_048;
+pub(super) const YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT: usize = 768;
 
 /// Kraken Spot public OHLC is a provider-window API, not a traversal API. Kraken
 /// documents the endpoint as returning the most recent ~720 candles per interval
@@ -116,7 +135,9 @@ mod tests {
         assert!(ALPACA_FULL_TILT_FETCH_PERMITS >= 8);
         assert!(YAHOO_CHART_FULL_TILT_QUEUE_WINDOW >= 72);
         assert!(YAHOO_CHART_FULL_TILT_BATCH_SIZE >= 6);
-        assert!(YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT >= 2_048);
+        // Scan limits are render-thread frame budgets, deliberately small;
+        // assert the floor that still sweeps the catalog in a few minutes.
+        assert!(YAHOO_CHART_FULL_TILT_BACKGROUND_SCAN_LIMIT >= 512);
         assert!(KRAKEN_SPOT_FULL_TILT_QUEUE_WINDOW > KRAKEN_SPOT_QUEUE_WINDOW);
         assert!(KRAKEN_FUTURES_FULL_TILT_QUEUE_WINDOW > KRAKEN_FUTURES_QUEUE_WINDOW);
         assert_eq!(KRAKEN_PUBLIC_FETCH_PERMITS, 24);

@@ -614,7 +614,16 @@ impl TyphooNApp {
             // news_loading holds heavy_sync would leave them gated (and the
             // scheduler blind) indefinitely.
             let first_ready_snapshot = data.sync_state_ready && !self.bg.sync_state_ready;
-            if !self.heavy_sync_in_progress || bg_window_visible || first_ready_snapshot {
+            // Heavy sync suppresses applies to protect the render thread, but a
+            // catch-up can hold the flag for hours — the staleness bound keeps
+            // the schedulers and coverage %/auto-full-tilt fed on a slow cadence
+            // instead of freezing them for the whole run.
+            if app_runtime_support::should_apply_bg_snapshot(
+                self.heavy_sync_in_progress,
+                bg_window_visible,
+                first_ready_snapshot,
+                self.bg_snapshot_last_applied.elapsed(),
+            ) {
                 self.replace_bg_snapshot_off_ui_drop(data);
                 if first_ready_snapshot {
                     // The broad bar schedulers are intentionally gated until the

@@ -566,6 +566,27 @@ pub(super) fn ui_heavy_sync_active(
         || auto_compact_in_progress
 }
 
+/// Maximum BG-snapshot staleness tolerated while heavy sync suppresses
+/// applies. A full catch-up holds `heavy_sync` for hours; without this bound
+/// the scheduler state maps, coverage %, and the auto-full-tilt hysteresis all
+/// ran on a frozen snapshot the whole time (unless a data window happened to
+/// be open). Applies are cheap now — header moves, off-thread drop, O(1)
+/// sync-state map takes — so a 30s cadence during heavy sync costs less than
+/// the normal 3s cadence outside it.
+const BG_SNAPSHOT_HEAVY_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub(super) fn should_apply_bg_snapshot(
+    heavy_sync: bool,
+    bg_window_visible: bool,
+    first_ready_snapshot: bool,
+    since_last_apply: std::time::Duration,
+) -> bool {
+    !heavy_sync
+        || bg_window_visible
+        || first_ready_snapshot
+        || since_last_apply >= BG_SNAPSHOT_HEAVY_MAX_AGE
+}
+
 impl TyphooNApp {
     #[inline]
     pub(super) fn drop_bg_snapshot_off_ui(&self, data: BgData) {
@@ -582,6 +603,7 @@ impl TyphooNApp {
         let old = std::mem::replace(&mut self.bg, data);
         self.drop_bg_snapshot_off_ui(old);
         self.bg_rev = self.bg_rev.wrapping_add(1);
+        self.bg_snapshot_last_applied = std::time::Instant::now();
     }
 
     pub(super) fn clear_stale_ui_busy_flags(&mut self, now: std::time::Instant) {

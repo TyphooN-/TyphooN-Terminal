@@ -30,7 +30,14 @@ impl TyphooNApp {
         // Cap drain per frame so a flood of messages can't stall the render thread.
         // Anything left over waits for next frame; we repaint immediately in that case.
         let mut msgs_drained = 0usize;
-        let broker_drain_max = if self.heavy_sync_in_progress {
+        let broker_drain_max = if self.pump_hidden {
+            // Window hidden: there is no frame pacing to protect, only the
+            // event-loop thread's responsiveness. Drain aggressively so the
+            // queue can't build an overnight backlog (the vendored-eframe
+            // background ticks run at most every 250ms, so worst case this is
+            // ~200ms of drain per second while a backlog exists).
+            512
+        } else if self.heavy_sync_in_progress {
             // Tighter cap during broad catch-up: hundreds of BarsFetched arriving
             // while 12k+ symbols are syncing. Even small per-msg work * 48 easily
             // burns 200-600ms of frame time and starves rendering. Leave headroom.
@@ -39,7 +46,9 @@ impl TyphooNApp {
             48
         };
         let broker_drain_started = std::time::Instant::now();
-        let broker_drain_budget = if self.heavy_sync_in_progress {
+        let broker_drain_budget = if self.pump_hidden {
+            std::time::Duration::from_millis(50)
+        } else if self.heavy_sync_in_progress {
             // 3ms budget when heavy; still makes forward progress on the queue
             // but protects the UI thread and chrome panels from long drains.
             std::time::Duration::from_millis(3)
@@ -1058,18 +1067,23 @@ impl TyphooNApp {
             }
         }
         // A refill walks the broad provider worksets (up to the full 13k xStocks
-        // catalog). Doing that after every settlement batch while the queue is
-        // already saturated made the nominal 3ms broker budget meaningless: the
-        // post-drain refill alone consumed 180-800ms on the egui thread. Let the
-        // existing one-second full-tilt scheduler refill a saturated queue; resume
-        // settlement-driven refills once it has drained enough to need capacity.
+        // catalog) — running it inline here cost 180-800ms of "broker_drain_ms"
+        // on the egui thread even after the saturation gate (the live log showed
+        // 250ms+ drains with msgs_drained=3-4, all refill). Keep only the cheap
+        // focus-first lane inline (bounded queue probes, chart/watchlist rows
+        // get lowest latency) and hand the heavy catalog lanes to the post-drain
+        // dispatcher, which services one lane per visible pass — every due lane
+        // when hidden. See `run_broad_dispatch_slice`.
         let pending_fetches = self.total_pending_market_data_fetches();
-        if should_refill_after_broker_drain(
-            market_data_refill_requested,
-            self.heavy_sync_in_progress,
-            pending_fetches,
-        ) {
-            self.refill_market_data_sync_slots();
+        if self.cache_loaded
+            && should_refill_after_broker_drain(
+                market_data_refill_requested,
+                self.heavy_sync_in_progress,
+                pending_fetches,
+            )
+        {
+            let _ = self.schedule_light_market_data_targets();
+            self.request_broad_refill();
         }
         perf_broker_drain_ms = broker_drain_started.elapsed().as_secs_f64() * 1000.0;
         perf_after_broker_started = std::time::Instant::now();

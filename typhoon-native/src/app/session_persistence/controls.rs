@@ -94,7 +94,7 @@ impl TyphooNApp {
         }
         if self.broker_connected && self.alpaca_full_bar_sync_enabled {
             self.maybe_request_alpaca_asset_universe();
-            let equity_syms = self.alpaca_equity_rotation_symbols();
+            let equity_syms = self.alpaca_equity_rotation_symbols_cached();
             let _ = self.schedule_alpaca_pairs(&equity_syms);
         }
     }

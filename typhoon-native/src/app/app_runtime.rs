@@ -41,31 +41,33 @@ impl eframe::App for TyphooNApp {
         }
     }
 
-    // eframe 0.35 removed App::update; the whole frame body lives in ui().
-    // Deliberately NOT split into logic()+ui(): eframe 0.34 already gated
-    // update() behind is_visible, so a hidden window pausing the data pump is
-    // the long-standing shipped behavior, and keeping one body preserves it
-    // exactly. Chrome panels render through the root `ui`; floating
-    // egui::Window/Area code keeps using `ctx`.
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = &ui.ctx().clone();
-        self.frame_count += 1;
+    // The frame body is split along eframe 0.35's App contract: `logic()` is
+    // the data pump (bar-sync scheduling, broker-message drain, dispatch,
+    // persistence) and `ui()` is rendering only. eframe runs logic() before
+    // every ui() pass, and — via the vendored redraw-starvation watchdog —
+    // keeps running logic() alone while the compositor withholds redraws
+    // (window on another Wayland workspace, occluded, minimized). Nothing
+    // sync-critical may live in ui(): before this split, a hidden window froze
+    // dispatch + ingest overnight (results queued unbounded, pending counts
+    // wedged, burst catch-up on refocus).
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now_instant = std::time::Instant::now();
-        let perf_pre_broker_ms;
-        let perf_broker_drain_ms;
-        let perf_after_broker_started;
-        let msgs_drained;
-        let perf_post_broker_setup_ms;
-        let perf_chrome_panels_ms;
-        let perf_menu_bar_ms;
-        let perf_toolbar_ms;
-        let perf_autocomplete_ms;
-        let perf_tab_bar_ms;
-        let perf_bottom_panels_ms;
-        let perf_right_panel_ms;
-        let perf_floating_windows_ms;
+        self.pump_started = now_instant;
+        // Hidden-window detection: ui() stamps last_ui_frame_at every rendered
+        // frame. When rendering stops, the gap grows past the vendored-eframe
+        // starvation threshold (1s); 2s adds margin against ordinary slow
+        // frames so a heavy visible frame is never misclassified as hidden.
+        let hidden = now_instant.duration_since(self.last_ui_frame_at)
+            >= std::time::Duration::from_secs(2);
+        if hidden && !self.pump_hidden {
+            self.hidden_pump_last_heartbeat = now_instant;
+            tracing::info!(
+                "window hidden — background pump continues (bar sync, WS ingest, dispatch)"
+            );
+        }
+        self.pump_hidden = hidden;
         // Track user activity for the auto-compact idle gate. Any input event in
-        // the frame counts as activity. Cheap — `events` is always queried below.
+        // the frame counts as activity. Hidden logic-only passes carry no events.
         if ctx.input(|i| !i.events.is_empty()) {
             self.auto_compact_last_input_at = std::time::Instant::now();
         }
@@ -189,10 +191,6 @@ impl eframe::App for TyphooNApp {
         );
         timed_tick!("ssr_scan", self.tick_ssr_scan());
         timed_tick!(
-            "kraken_universe_schedulers",
-            self.tick_kraken_universe_schedulers(now_instant)
-        );
-        timed_tick!(
             "kraken_ws_scheduling",
             self.tick_kraken_ws_scheduling(now_instant)
         );
@@ -200,8 +198,277 @@ impl eframe::App for TyphooNApp {
             "news_body_hydrator",
             self.tick_news_body_hydrator(now_instant)
         );
-        timed_tick!("screenshot_capture", self.tick_screenshot_capture(ctx));
         timed_tick!("cache_startup", self.tick_cache_startup());
+
+        timed_tick!(
+            "background_snapshot_drain",
+            self.tick_background_snapshot_drain()
+        );
+        // Apply a completed off-thread Kraken universe digest here — AFTER the bg
+        // snapshot drain — so its `self.bg.regulatory_alerts_by_symbol` write isn't
+        // clobbered by a same-frame snapshot replace (the old synchronous handler
+        // ran post-drain for the same reason).
+        timed_tick!("kraken_universe_digest", self.tick_kraken_universe_digest());
+        timed_tick!(
+            "deferred_chart_loads",
+            self.tick_deferred_chart_loads(ctx, now_instant)
+        );
+        timed_tick!(
+            "dirty_indicator_recompute",
+            self.tick_dirty_indicator_recompute()
+        );
+        timed_tick!(
+            "chart_background_results",
+            self.tick_chart_background_results()
+        );
+        report_slow_pre_broker_ticks(&pre_broker_ticks);
+
+        let (perf_pre_broker_ms, perf_broker_drain_ms, _perf_after_broker_started, msgs_drained) =
+            self.tick_broker_messages(ctx, now_instant);
+
+        // Credential safety-net sync every 60 seconds. Session persistence is
+        // exclusively owned by `maybe_incremental_session_save`: the legacy path
+        // here rebuilt the full session JSON and synchronously wrote sync
+        // preferences before spawning its worker. With loaded MTF charts and a
+        // busy cache that blocked egui for 2-13 seconds almost exactly once per
+        // minute, despite the misleading "runs off UI thread" comment.
+        if now_instant.duration_since(self.session_last_autosave)
+            >= std::time::Duration::from_secs(60)
+        {
+            self.session_last_autosave = now_instant;
+            let creds: Vec<(String, String)> = [
+                (keyring::keys::ALPACA_API_KEY, &self.broker_api_key),
+                (keyring::keys::ALPACA_SECRET, &self.broker_secret),
+                (keyring::keys::FINNHUB_KEY, &self.finnhub_key),
+                (keyring::keys::FRED_KEY, &self.fred_key),
+                (keyring::keys::CRYPTOPANIC_KEY, &self.cryptopanic_key),
+            ]
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+            let cache_clone = self.cache.clone();
+            let rt_handle = self.rt_handle.clone();
+            rt_handle.spawn_blocking(move || {
+                // Sync credentials to keyring (only if changed)
+                for (key, val) in &creds {
+                    if let Ok(Some(existing)) = keyring::load(key) {
+                        if &existing == val {
+                            continue;
+                        }
+                    }
+                    let _ = keyring::store(key, val);
+                    // Also write to cache fallback
+                    if let Some(ref cache) = cache_clone {
+                        let _ = cache.put_kv(&format!("cred:{}", key), val);
+                    }
+                }
+            });
+        }
+
+        // Update Prometheus metrics every ~5 seconds. Keep this wall-clock gated;
+        // frame_count-based throttles become pathological under 144/240Hz repaint.
+        if now_instant.duration_since(self.metrics_last_update) >= std::time::Duration::from_secs(5)
+        {
+            self.metrics_last_update = now_instant;
+            if let Some(ref reg) = self.metrics_registry {
+                let mut snap = crate::metrics::MetricsSnapshot::default();
+
+                // Uptime
+                snap.uptime_seconds = self.metrics_start.elapsed().as_secs_f64();
+
+                // Broker connection
+                snap.broker_connected.push((
+                    "alpaca".to_string(),
+                    if self.broker_connected { 1.0 } else { 0.0 },
+                ));
+
+                // Account equity from live account
+                if let Some(ref acct) = self.live_account {
+                    snap.account_equity
+                        .push(("alpaca".to_string(), acct.equity));
+                }
+
+                // Open positions count
+                snap.positions_open
+                    .push(("alpaca".to_string(), self.live_positions.len() as f64));
+
+                // Price alerts
+                snap.alerts_active = self.alerts.len() as f64 + self.indicator_alerts.len() as f64;
+
+                // Cache stats: (rows, kv_entries, size_bytes)
+                if let Some((rows, _kv, size)) = self.bg.cache_stats {
+                    snap.cache_size_bytes = size as f64;
+                    snap.cache_symbols_total = rows as f64;
+                }
+
+                // Detailed stats: bar counts per symbol/TF (skip metadata keys)
+                for (key, count, _size) in &self.bg.detailed_stats {
+                    // Cache metadata rows all follow `<prefix>:__<NAME>__[…]`
+                    // (SYMBOLS, SPECS, SERVER, HEARTBEAT, …). Matching the `:__` segment
+                    // covers any new metadata name without a hardcoded allow-list.
+                    if key.contains(":__") {
+                        continue;
+                    }
+                    // Skip 0-count entries to reduce cardinality
+                    if *count == 0 {
+                        continue;
+                    }
+                    // key format: "source:SYMBOL:TF" or "SYMBOL:TF"
+                    let parts: Vec<&str> = key.rsplitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        snap.bars
+                            .push((parts[1].to_string(), parts[0].to_string(), *count as f64));
+                    }
+                }
+
+                reg.update(&snap);
+            }
+        }
+
+        // ── Data sync ───────────────────────────────────────────────────────
+        // No API calls or data operations before cache is loaded.
+        if self.cache_loaded {
+            // Weekend crypto sync via Kraken. Runs every ~60s, one symbol per cycle.
+            // Symbols come from a hardcoded floor plus any crypto in chart tabs
+            // or the user watchlist so user-added coins (incl. XMR/ZEC/DASH
+            // which Alpaca doesn't list) still get weekend refresh coverage.
+            if now_instant.duration_since(self.weekend_crypto_last_sync)
+                >= std::time::Duration::from_secs(60)
+            {
+                self.weekend_crypto_last_sync = now_instant;
+                let now_utc = chrono::Utc::now();
+                let eastern = now_utc.with_timezone(
+                    &chrono::FixedOffset::west_opt(5 * 3600)
+                        .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap()),
+                );
+                use chrono::Datelike;
+                let is_weekend = matches!(
+                    eastern.weekday(),
+                    chrono::Weekday::Sat | chrono::Weekday::Sun
+                );
+                if is_weekend {
+                    let mut crypto_syms: Vec<String> = [
+                        "BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD",
+                        "LINKUSD", "AVAXUSD", "DOTUSD",
+                    ]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                    let mut crypto_set: std::collections::HashSet<String> =
+                        crypto_syms.iter().cloned().collect();
+                    for chart in &self.charts {
+                        let bare = bare_symbol_from_key(&chart.symbol).to_uppercase();
+                        if Self::demand_is_crypto(&bare) && !crypto_set.contains(&bare) {
+                            crypto_syms.push(bare.clone());
+                            crypto_set.insert(bare);
+                        }
+                    }
+                    for wl in &self.user_watchlist {
+                        let wlu = wl.to_uppercase();
+                        if Self::demand_is_crypto(&wlu) && !crypto_set.contains(&wlu) {
+                            crypto_syms.push(wlu.clone());
+                            crypto_set.insert(wlu);
+                        }
+                    }
+                    if !crypto_syms.is_empty() {
+                        // Round-robin cursor advanced once per 60s tick — the old
+                        // frame_count/240 index stopped advancing entirely when
+                        // rendering stopped (hidden window), pinning one symbol.
+                        let sym_idx = self.weekend_crypto_rotation_idx % crypto_syms.len();
+                        self.weekend_crypto_rotation_idx =
+                            self.weekend_crypto_rotation_idx.wrapping_add(1);
+                        let sym = crypto_syms[sym_idx].clone();
+                        let db_path = cache_db_path();
+                        let kraken_tfs = self.filtered_sync_timeframes([
+                            "1Day", "1Hour", "4Hour", "15Min", "30Min", "5Min",
+                        ]);
+                        if !kraken_tfs.is_empty() && self.kraken_spot_symbol_scrape_enabled(&sym) {
+                            let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
+                                symbol: sym,
+                                timeframes: kraken_tfs,
+                                db_path,
+                                backfill_complete: false,
+                            });
+                        }
+                    }
+                }
+            }
+
+        }
+
+        // Broad catalog schedulers (Kraken universe/futures sector budgets and
+        // the Alpaca full us_equity rotation) — staggered to at most one heavy
+        // lane per visible pass, every due lane when hidden. Runs after the
+        // broker drain so queue capacity freed by this pass's settlements is
+        // visible to the slot math. See `run_broad_dispatch_slice`.
+        let dispatch_started = std::time::Instant::now();
+        self.run_broad_dispatch_slice(now_instant);
+        self.pump_dispatch_ms = dispatch_started.elapsed().as_secs_f64() * 1000.0;
+
+        let session_save_started = std::time::Instant::now();
+        self.maybe_incremental_session_save(ctx);
+        self.pump_session_save_ms = session_save_started.elapsed().as_secs_f64() * 1000.0;
+
+        // Stash pump-side perf for the same-pass ui() stall telemetry.
+        self.pump_pre_broker_ms = perf_pre_broker_ms;
+        self.pump_broker_drain_ms = perf_broker_drain_ms;
+        self.pump_msgs_drained = msgs_drained;
+
+        if hidden {
+            self.hidden_pump_passes += 1;
+            self.hidden_pump_msgs = self.hidden_pump_msgs.saturating_add(msgs_drained as u64);
+            if now_instant.duration_since(self.hidden_pump_last_heartbeat)
+                >= std::time::Duration::from_secs(300)
+            {
+                self.hidden_pump_last_heartbeat = now_instant;
+                tracing::info!(
+                    "background pump heartbeat (window hidden): {} passes / {} broker msgs since hidden — pending_fetches={} heavy_sync={} rss_mb={}",
+                    self.hidden_pump_passes,
+                    self.hidden_pump_msgs,
+                    self.total_pending_market_data_fetches(),
+                    self.heavy_sync_in_progress,
+                    crate::app::market_data_sync::current_process_rss_mb(),
+                );
+            }
+        }
+        // Keep the pump alive regardless of rendering: eframe re-runs logic()
+        // for a redraw-starved window only when a repaint is requested, so
+        // every pass arms a 1s floor. Visible frames re-arm faster in ui();
+        // egui keeps the soonest request, so this never slows rendering.
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+    }
+
+    // Rendering only. Runs after logic() on passes where the window is
+    // actually visible; a hidden window renders nothing while the pump in
+    // logic() keeps sync, ingest, and dispatch alive.
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
+        self.frame_count += 1;
+        self.last_ui_frame_at = std::time::Instant::now();
+        if self.hidden_pump_passes > 0 {
+            tracing::info!(
+                "window visible again — background pump kept sync alive while hidden: {} passes / {} broker msgs",
+                self.hidden_pump_passes,
+                self.hidden_pump_msgs,
+            );
+            self.hidden_pump_passes = 0;
+            self.hidden_pump_msgs = 0;
+            self.pump_hidden = false;
+        }
+        // Timing base shared with the pump: logic() ran immediately before us
+        // in this same pass, so update_ms below spans logic + ui like the old
+        // single-body frame did.
+        let now_instant = self.pump_started;
+        let perf_post_broker_setup_ms;
+        let perf_chrome_panels_ms;
+        let perf_menu_bar_ms;
+        let perf_toolbar_ms;
+        let perf_autocomplete_ms;
+        let perf_tab_bar_ms;
+        let perf_bottom_panels_ms;
+        let perf_right_panel_ms;
+        let perf_floating_windows_ms;
 
         // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
         if self.frame_count == 1 {
@@ -259,36 +526,10 @@ impl eframe::App for TyphooNApp {
             ctx.set_global_style(style);
         }
 
-        timed_tick!(
-            "background_snapshot_drain",
-            self.tick_background_snapshot_drain()
-        );
-        // Apply a completed off-thread Kraken universe digest here — AFTER the bg
-        // snapshot drain — so its `self.bg.regulatory_alerts_by_symbol` write isn't
-        // clobbered by a same-frame snapshot replace (the old synchronous handler
-        // ran post-drain for the same reason).
-        timed_tick!("kraken_universe_digest", self.tick_kraken_universe_digest());
-        timed_tick!(
-            "deferred_chart_loads",
-            self.tick_deferred_chart_loads(ctx, now_instant)
-        );
-        timed_tick!(
-            "dirty_indicator_recompute",
-            self.tick_dirty_indicator_recompute()
-        );
-        timed_tick!(
-            "chart_background_results",
-            self.tick_chart_background_results()
-        );
-        report_slow_pre_broker_ticks(&pre_broker_ticks);
+        // Screenshot capture needs painted frames — ui()-only by design.
+        self.tick_screenshot_capture(ctx);
 
-        (
-            perf_pre_broker_ms,
-            perf_broker_drain_ms,
-            perf_after_broker_started,
-            msgs_drained,
-        ) = self.tick_broker_messages(ctx, now_instant);
-
+        let ui_render_started = std::time::Instant::now();
         let post_broker_setup_started = std::time::Instant::now();
         self.sync_cross_timeframe_drawings();
         perf_post_broker_setup_ms = post_broker_setup_started.elapsed().as_secs_f64() * 1000.0;
@@ -569,188 +810,6 @@ impl eframe::App for TyphooNApp {
                 });
         }
 
-        // Credential safety-net sync every 60 seconds. Session persistence is
-        // exclusively owned by `maybe_incremental_session_save`: the legacy path
-        // here rebuilt the full session JSON and synchronously wrote sync
-        // preferences before spawning its worker. With loaded MTF charts and a
-        // busy cache that blocked egui for 2-13 seconds almost exactly once per
-        // minute, despite the misleading "runs off UI thread" comment.
-        if now_instant.duration_since(self.session_last_autosave)
-            >= std::time::Duration::from_secs(60)
-        {
-            self.session_last_autosave = now_instant;
-            let creds: Vec<(String, String)> = [
-                (keyring::keys::ALPACA_API_KEY, &self.broker_api_key),
-                (keyring::keys::ALPACA_SECRET, &self.broker_secret),
-                (keyring::keys::FINNHUB_KEY, &self.finnhub_key),
-                (keyring::keys::FRED_KEY, &self.fred_key),
-                (keyring::keys::CRYPTOPANIC_KEY, &self.cryptopanic_key),
-            ]
-            .iter()
-            .filter(|(_, v)| !v.is_empty())
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-            let cache_clone = self.cache.clone();
-            let rt_handle = self.rt_handle.clone();
-            rt_handle.spawn_blocking(move || {
-                // Sync credentials to keyring (only if changed)
-                for (key, val) in &creds {
-                    if let Ok(Some(existing)) = keyring::load(key) {
-                        if &existing == val {
-                            continue;
-                        }
-                    }
-                    let _ = keyring::store(key, val);
-                    // Also write to cache fallback
-                    if let Some(ref cache) = cache_clone {
-                        let _ = cache.put_kv(&format!("cred:{}", key), val);
-                    }
-                }
-            });
-        }
-
-        // Update Prometheus metrics every ~5 seconds. Keep this wall-clock gated;
-        // frame_count-based throttles become pathological under 144/240Hz repaint.
-        if now_instant.duration_since(self.metrics_last_update) >= std::time::Duration::from_secs(5)
-        {
-            self.metrics_last_update = now_instant;
-            if let Some(ref reg) = self.metrics_registry {
-                let mut snap = crate::metrics::MetricsSnapshot::default();
-
-                // Uptime
-                snap.uptime_seconds = self.metrics_start.elapsed().as_secs_f64();
-
-                // Broker connection
-                snap.broker_connected.push((
-                    "alpaca".to_string(),
-                    if self.broker_connected { 1.0 } else { 0.0 },
-                ));
-
-                // Account equity from live account
-                if let Some(ref acct) = self.live_account {
-                    snap.account_equity
-                        .push(("alpaca".to_string(), acct.equity));
-                }
-
-                // Open positions count
-                snap.positions_open
-                    .push(("alpaca".to_string(), self.live_positions.len() as f64));
-
-                // Price alerts
-                snap.alerts_active = self.alerts.len() as f64 + self.indicator_alerts.len() as f64;
-
-                // Cache stats: (rows, kv_entries, size_bytes)
-                if let Some((rows, _kv, size)) = self.bg.cache_stats {
-                    snap.cache_size_bytes = size as f64;
-                    snap.cache_symbols_total = rows as f64;
-                }
-
-                // Detailed stats: bar counts per symbol/TF (skip metadata keys)
-                for (key, count, _size) in &self.bg.detailed_stats {
-                    // Cache metadata rows all follow `<prefix>:__<NAME>__[…]`
-                    // (SYMBOLS, SPECS, SERVER, HEARTBEAT, …). Matching the `:__` segment
-                    // covers any new metadata name without a hardcoded allow-list.
-                    if key.contains(":__") {
-                        continue;
-                    }
-                    // Skip 0-count entries to reduce cardinality
-                    if *count == 0 {
-                        continue;
-                    }
-                    // key format: "source:SYMBOL:TF" or "SYMBOL:TF"
-                    let parts: Vec<&str> = key.rsplitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        snap.bars
-                            .push((parts[1].to_string(), parts[0].to_string(), *count as f64));
-                    }
-                }
-
-                reg.update(&snap);
-            }
-        }
-
-        // ── Data sync ───────────────────────────────────────────────────────
-        // No API calls or data operations before cache is loaded.
-        if self.cache_loaded {
-            // Weekend crypto sync via Kraken. Runs every ~60s, one symbol per cycle.
-            // Symbols come from a hardcoded floor plus any crypto in chart tabs
-            // or the user watchlist so user-added coins (incl. XMR/ZEC/DASH
-            // which Alpaca doesn't list) still get weekend refresh coverage.
-            if now_instant.duration_since(self.weekend_crypto_last_sync)
-                >= std::time::Duration::from_secs(60)
-            {
-                self.weekend_crypto_last_sync = now_instant;
-                let now_utc = chrono::Utc::now();
-                let eastern = now_utc.with_timezone(
-                    &chrono::FixedOffset::west_opt(5 * 3600)
-                        .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap()),
-                );
-                use chrono::Datelike;
-                let is_weekend = matches!(
-                    eastern.weekday(),
-                    chrono::Weekday::Sat | chrono::Weekday::Sun
-                );
-                if is_weekend {
-                    let mut crypto_syms: Vec<String> = [
-                        "BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD",
-                        "LINKUSD", "AVAXUSD", "DOTUSD",
-                    ]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                    let mut crypto_set: std::collections::HashSet<String> =
-                        crypto_syms.iter().cloned().collect();
-                    for chart in &self.charts {
-                        let bare = bare_symbol_from_key(&chart.symbol).to_uppercase();
-                        if Self::demand_is_crypto(&bare) && !crypto_set.contains(&bare) {
-                            crypto_syms.push(bare.clone());
-                            crypto_set.insert(bare);
-                        }
-                    }
-                    for wl in &self.user_watchlist {
-                        let wlu = wl.to_uppercase();
-                        if Self::demand_is_crypto(&wlu) && !crypto_set.contains(&wlu) {
-                            crypto_syms.push(wlu.clone());
-                            crypto_set.insert(wlu);
-                        }
-                    }
-                    if !crypto_syms.is_empty() {
-                        let sym_idx = ((self.frame_count / 240) as usize) % crypto_syms.len();
-                        let sym = crypto_syms[sym_idx].clone();
-                        let db_path = cache_db_path();
-                        let kraken_tfs = self.filtered_sync_timeframes([
-                            "1Day", "1Hour", "4Hour", "15Min", "30Min", "5Min",
-                        ]);
-                        if !kraken_tfs.is_empty() && self.kraken_spot_symbol_scrape_enabled(&sym) {
-                            let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                                symbol: sym,
-                                timeframes: kraken_tfs,
-                                db_path,
-                                backfill_complete: false,
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Alpaca equity rotation — iterate Alpaca's full us_equity tradable
-            // universe (~11000 symbols), plus a chart/watchlist floor that holds
-            // even before the asset-list fetch completes. Runs 7 days/week —
-            // stocks don't trade on weekends but the historical backfill can
-            // still progress.
-            if now_instant.duration_since(self.alpaca_rotation_last_sync)
-                >= self.market_data_sync_interval()
-            {
-                self.alpaca_rotation_last_sync = now_instant;
-                if self.alpaca_enabled {
-                    self.maybe_request_alpaca_asset_universe();
-                    self.push_alpaca_sync_runtime_config();
-                    let equity_syms = self.alpaca_equity_rotation_symbols_cached();
-                    self.schedule_alpaca_pairs(&equity_syms);
-                }
-            }
-        }
-
         // Repaint strategy:
         // - Trading terminals should not idle at 4-10 FPS while prices, cursor
         //   overlays, live bars, and background sync state are moving.
@@ -760,13 +819,11 @@ impl eframe::App for TyphooNApp {
         // - TYPHOON_IDLE_FPS can force an explicit refresh-rate cap for
         //   profiling/problem displays; unset/0 means native-refresh continuous
         //   repaint through vsync/GSYNC/FreeSync.
-        let session_save_started = std::time::Instant::now();
-        let render_after_broker_ms = session_save_started
-            .saturating_duration_since(perf_after_broker_started)
-            .as_secs_f64()
-            * 1000.0;
-        self.maybe_incremental_session_save(ctx);
-        let session_save_ms = session_save_started.elapsed().as_secs_f64() * 1000.0;
+        // Session save + the periodic dispatch/metrics blocks live in logic()
+        // now (they must run with the window hidden); session_save_ms below
+        // reports the pump-side measurement.
+        let render_after_broker_ms = ui_render_started.elapsed().as_secs_f64() * 1000.0;
+        let session_save_ms = self.pump_session_save_ms;
 
         let update_ms = now_instant.elapsed().as_secs_f64() * 1000.0;
         // Sampled once per frame and shared by both perf-stall logs below (the
@@ -783,10 +840,10 @@ impl eframe::App for TyphooNApp {
                 - perf_floating_windows_ms)
                 .max(0.0);
             tracing::warn!(
-                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} chrome_breakdown=menu:{:.2} toolbar:{:.2} ac:{:.2} tabs:{:.2} bottom:{:.2} right:{:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={} mem_available_mb={} mem_total_mb={}",
+                "UI frame stall detail: update_ms={:.2} pre_broker_ms={:.2} broker_drain_ms={:.2} render_after_broker_ms={:.2} post_broker_setup_ms={:.2} chrome_panels_ms={:.2} chrome_breakdown=menu:{:.2} toolbar:{:.2} ac:{:.2} tabs:{:.2} bottom:{:.2} right:{:.2} floating_windows_ms={:.2} render_residual_ms={:.2} session_save_ms={:.2} dispatch_ms={:.2} msgs_drained={} pending_fetches={} heavy_sync={} news_loading={} fund_scrape={} sec_scrape={} compact={} rss_mb={} mem_available_mb={} mem_total_mb={}",
                 update_ms,
-                perf_pre_broker_ms,
-                perf_broker_drain_ms,
+                self.pump_pre_broker_ms,
+                self.pump_broker_drain_ms,
                 render_after_broker_ms,
                 perf_post_broker_setup_ms,
                 perf_chrome_panels_ms,
@@ -799,7 +856,8 @@ impl eframe::App for TyphooNApp {
                 perf_floating_windows_ms,
                 render_residual_ms,
                 session_save_ms,
-                msgs_drained,
+                self.pump_dispatch_ms,
+                self.pump_msgs_drained,
                 self.total_pending_market_data_fetches(),
                 self.heavy_sync_in_progress,
                 self.news_loading,
@@ -817,7 +875,7 @@ impl eframe::App for TyphooNApp {
         self.perf_max_update_ms = self.perf_max_update_ms.max(update_ms);
         self.perf_broker_msgs_drained = self
             .perf_broker_msgs_drained
-            .saturating_add(msgs_drained as u32);
+            .saturating_add(self.pump_msgs_drained as u32);
         if now_instant.duration_since(self.perf_last_report) >= std::time::Duration::from_secs(5) {
             if self.perf_slow_frame_count > 0 || self.perf_broker_msgs_drained > 0 {
                 let pending_fetches = self.total_pending_market_data_fetches();

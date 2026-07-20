@@ -851,14 +851,14 @@ pub struct TyphooNApp {
     /// 60s scheduler doesn't re-normalize+sort the whole list every tick. Signature
     /// is `kraken_equity_universe_symbols.len()` — the list is replaced wholesale on
     /// reload, and a same-length replacement normalizes to the same result anyway.
-    pub(super) cached_kraken_equity_catalog: Vec<String>,
+    pub(super) cached_kraken_equity_catalog: std::sync::Arc<Vec<String>>,
     pub(crate) cached_kraken_equity_catalog_sig: Option<usize>,
     /// Memoized Alpaca equity rotation list (~11k us_equity assets + a chart/
     /// watchlist floor), so the 60s rotation doesn't uppercase+dedup+sort the whole
     /// universe every tick. Signature is the three input lengths; the chart/watchlist
     /// floor is a backup (those symbols also sync via demand), so one cycle of
     /// staleness on a rare same-length swap is harmless.
-    pub(super) cached_alpaca_equity_rotation: Vec<String>,
+    pub(super) cached_alpaca_equity_rotation: std::sync::Arc<Vec<String>>,
     pub(crate) cached_alpaca_equity_rotation_sig: Option<(usize, usize, usize)>,
     /// Cached Kraken Futures bar-state map keyed by normalized `(symbol, timeframe)`.
     pub(super) cached_kraken_futures_sync_state:
@@ -3744,6 +3744,49 @@ pub struct TyphooNApp {
     pub(crate) perf_slow_frame_count: u32,
     pub(crate) perf_max_update_ms: f64,
     pub(crate) perf_broker_msgs_drained: u32,
+
+    // ── Background pump (render-independent sync) ────────────────────────
+    /// Set at the top of each `App::ui` frame. `App::logic` treats a ≥2s gap
+    /// since this instant as "rendering has stopped" (window on another
+    /// workspace / occluded): the pump then self-arms wakeups, drains the
+    /// broker queue with a bigger budget, and emits liveness heartbeats.
+    pub(crate) last_ui_frame_at: std::time::Instant,
+    /// True while the pump is running without ui frames (hidden window).
+    pub(crate) pump_hidden: bool,
+    /// Start instant of the current pass's `App::logic` run — the timing base
+    /// for the same-pass `App::ui` frame-stall telemetry.
+    pub(crate) pump_started: std::time::Instant,
+    /// Pump-side perf numbers stashed by `App::logic` for the same-pass
+    /// `App::ui` stall telemetry (log-line field names are unchanged).
+    pub(crate) pump_pre_broker_ms: f64,
+    pub(crate) pump_broker_drain_ms: f64,
+    pub(crate) pump_msgs_drained: usize,
+    pub(crate) pump_session_save_ms: f64,
+    /// Liveness counters while hidden — reported by the 5-minute heartbeat
+    /// and by the resume log, then reset when rendering resumes.
+    pub(crate) hidden_pump_passes: u64,
+    pub(crate) hidden_pump_msgs: u64,
+    pub(crate) hidden_pump_last_heartbeat: std::time::Instant,
+    /// Round-robin cursor for the weekend crypto sync (was frame_count-based,
+    /// which stalls entirely when rendering stops).
+    pub(crate) weekend_crypto_rotation_idx: usize,
+    /// Rotation cursor over the heavy broad-scheduler lanes (Kraken universe,
+    /// Kraken futures, Alpaca rotation). Visible passes run at most one due
+    /// lane per frame; hidden passes run every due lane. See
+    /// `run_broad_dispatch_slice`.
+    pub(crate) broad_dispatch_cursor: usize,
+    /// Lanes still owed a settlement-driven refill. The broker drain sets this
+    /// to the lane count instead of walking all catalog worksets inline
+    /// (which cost 180-800ms inside the drain budget); the post-drain
+    /// dispatcher services one lane per visible pass until it reaches 0.
+    pub(crate) broad_refill_lanes_pending: u8,
+    /// Broad-dispatch cost of the current pass, for ui() stall telemetry.
+    pub(crate) pump_dispatch_ms: f64,
+    /// When the last BG snapshot was applied. During heavy sync applies are
+    /// normally skipped (render-thread protection) unless a data window needs
+    /// them — this stamp bounds that staleness so scheduler state and the
+    /// coverage %/auto-full-tilt inputs can't freeze for an entire catch-up.
+    pub(crate) bg_snapshot_last_applied: std::time::Instant,
 
     /// Screenshot requested via SCREENSHOT command (triggers ViewportCommand::Screenshot next frame).
     pub(crate) screenshot_requested: bool,

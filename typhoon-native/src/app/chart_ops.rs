@@ -2,14 +2,31 @@ use super::*;
 
 const EMPTY_CHART_RELOAD_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Max concurrent background deferred-chart loaders. Each holds a full bar set
-/// while it merges, so this bounds cold-start RSS and read-connection lock churn.
+/// Max concurrent background deferred-chart loaders. Each runs a full equity
+/// merge on a `spawn_blocking` worker and holds the merged bar set plus large
+/// transient intermediates while it builds, so this bounds cold-start RSS and
+/// read-connection lock churn. Kept deliberately low: a cold equity merge can
+/// transiently allocate gigabytes, so even a handful running at once saturates
+/// the allocator/memory bandwidth and janks the render thread through contention
+/// — observed live (2026-07-20) as multi-hundred-ms render stalls migrating
+/// between subsystems (dispatch lane, log panel) during a large session restore,
+/// with RSS spiking past 18 GB.
+///
+/// Applied uniformly whether the window is visible or hidden: when hidden the
+/// pump thread's job IS bar sync, so spawning more concurrent merges (memory
+/// contention with the sync workers) or finalizing more per pass (render-thread
+/// indicator recompute blocking the pump) is exactly backwards. An earlier
+/// hidden-only raise to 8 in-flight / 16 finalize was reverted — it aimed to
+/// clear the restore queue before it held `heavy_sync` long enough to throttle
+/// sync, but ungating the broad-dispatch lanes from `heavy_sync` already removed
+/// that throttle, leaving the raise with only its RSS/contention cost.
 const DEFERRED_CHART_MAX_INFLIGHT: usize = 3;
-/// Cheap in-memory restores finalized per frame. Each restore clones bars + runs
-/// GPU indicators (a few ms); capping keeps a burst of simultaneously-ready cells
-/// from spiking one frame.
+/// Cheap in-memory restores finalized per pass. Each restore clones bars + runs
+/// GPU indicators (up to ~150-240ms for the MTF SMA / MultiKAMA overlays on a
+/// deep series), so capping keeps a burst of simultaneously-ready cells from
+/// blocking the render (or hidden pump) thread.
 const DEFERRED_CHART_FINALIZE_PER_FRAME: usize = 4;
-/// Queue entries examined per frame. Bounds the scheduler's own per-frame cost.
+/// Queue entries examined per pass. Bounds the scheduler's own per-pass cost.
 const DEFERRED_CHART_SCAN_WINDOW: usize = 16;
 /// In-flight marker is evicted after this long so a hung/deadlocked worker (whose
 /// completion never arrives) can't strand a cell as permanently "loading". Far
@@ -617,10 +634,13 @@ impl TyphooNApp {
         // not-yet-loading charts up to the concurrency cap.
         let mut gpu = self.gpu_indicators.take();
         let now_ms = chrono::Utc::now().timestamp_millis();
+        let finalize_cap = DEFERRED_CHART_FINALIZE_PER_FRAME;
+        let inflight_cap = DEFERRED_CHART_MAX_INFLIGHT;
+        let scan_window = DEFERRED_CHART_SCAN_WINDOW;
         let mut finalized = 0usize;
         let mut scanned = 0usize;
         let mut i = 0usize;
-        while i < self.deferred_chart_loads.len() && scanned < DEFERRED_CHART_SCAN_WINDOW {
+        while i < self.deferred_chart_loads.len() && scanned < scan_window {
             scanned += 1;
             let idx = self.deferred_chart_loads[i];
             let Some((load_key, sym_key, tf, source_override, bars_empty, symbol, timeframe)) =
@@ -650,7 +670,7 @@ impl TyphooNApp {
             // auto-source chart — which is the startup-freeze hot path. Populated
             // reloads arrive one at a time, so running them here can't re-freeze.
             if !source_override.is_empty() || !bars_empty {
-                if finalized >= DEFERRED_CHART_FINALIZE_PER_FRAME {
+                if finalized >= finalize_cap {
                     i += 1;
                     continue;
                 }
@@ -689,7 +709,7 @@ impl TyphooNApp {
                 .map(|e| !e.bars.is_empty())
                 .unwrap_or(false);
             if ready {
-                if finalized >= DEFERRED_CHART_FINALIZE_PER_FRAME {
+                if finalized >= finalize_cap {
                     i += 1;
                     continue;
                 }
@@ -716,7 +736,7 @@ impl TyphooNApp {
             // cells get scheduled in the same frame.
             let key = (sym_key, tf);
             if !self.deferred_chart_inflight.contains_key(&key)
-                && self.deferred_chart_inflight.len() < DEFERRED_CHART_MAX_INFLIGHT
+                && self.deferred_chart_inflight.len() < inflight_cap
             {
                 self.deferred_chart_inflight
                     .insert(key.clone(), now_instant);

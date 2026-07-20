@@ -9,3 +9,10 @@ Change License: Apache License, Version 2.0
 Change Date: Four years from the date each version is published.
 
 Commercial licensing is available. See COMMERCIAL.md for terms.
+
+Third-party code vendored in this repository:
+
+vendor/eframe — eframe 0.35.0, part of the egui project
+(https://github.com/emilk/egui), Copyright (c) 2018-2025 Emil Ernerfeldt,
+licensed under MIT OR Apache-2.0. Carries a local patch; see
+vendor/eframe/README.md ("TyphooN-Terminal local patch").

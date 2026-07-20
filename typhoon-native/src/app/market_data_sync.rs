@@ -422,6 +422,155 @@ impl TyphooNApp {
         std::time::Duration::from_secs(secs)
     }
 
+    /// Mark every broad lane as owed a settlement-driven refill. Called by the
+    /// broker drain instead of walking all catalog worksets inline; the
+    /// post-drain `run_broad_dispatch_slice` services them one per visible
+    /// pass.
+    pub(super) fn request_broad_refill(&mut self) {
+        self.broad_refill_lanes_pending = BROAD_DISPATCH_LANES;
+    }
+
+    /// Run the broad catalog schedulers with per-frame staggering.
+    ///
+    /// The heavy lanes (Kraken spot/equities universe, Kraken futures, Alpaca
+    /// rotation) each scan thousands of catalog rows; running them all in one
+    /// pass cost ~240ms per full-tilt second on the render thread. Visible
+    /// passes therefore run at most ONE due lane per frame (rotating cursor);
+    /// hidden passes have no frame pacing to protect and run every due lane,
+    /// so overnight catch-up throughput is unchanged. Lane cadence is not the
+    /// throughput limiter: the full-tilt queue windows (256-768 pending) keep
+    /// the workers buffered between refills, and the per-provider rate
+    /// limiters remain the real ceiling.
+    ///
+    /// A pending settlement refill (`broad_refill_lanes_pending`) makes lanes
+    /// due early, floored at `BROAD_DISPATCH_REFILL_MIN_SPACING` per lane so a
+    /// continuous settlement stream can't turn every frame into a scan. The
+    /// periodic path is unchanged: each lane still runs on
+    /// `market_data_sync_interval()` via its own last-run timestamp.
+    pub(super) fn run_broad_dispatch_slice(&mut self, now_instant: std::time::Instant) {
+        if !self.cache_loaded {
+            return;
+        }
+        let interval = self.market_data_sync_interval();
+        let refill_requested = self.broad_refill_lanes_pending > 0;
+        let lane_budget = if self.pump_hidden {
+            BROAD_DISPATCH_LANES
+        } else {
+            1
+        };
+        let (ran, new_cursor) = broad_dispatch_rotate(
+            self.broad_dispatch_cursor,
+            BROAD_DISPATCH_LANES as usize,
+            lane_budget,
+            |lane| match lane {
+                0 => self.broad_dispatch_kraken_universe_lane(now_instant, interval, refill_requested),
+                1 => self.broad_dispatch_kraken_futures_lane(now_instant, interval, refill_requested),
+                _ => self.broad_dispatch_alpaca_lane(now_instant, interval, refill_requested),
+            },
+        );
+        self.broad_dispatch_cursor = new_cursor;
+        self.broad_refill_lanes_pending = self.broad_refill_lanes_pending.saturating_sub(ran);
+    }
+
+    fn broad_dispatch_lane_due(
+        last_run: std::time::Instant,
+        now_instant: std::time::Instant,
+        interval: std::time::Duration,
+        refill_requested: bool,
+    ) -> bool {
+        let elapsed = now_instant.duration_since(last_run);
+        elapsed >= interval || (refill_requested && elapsed >= BROAD_DISPATCH_REFILL_MIN_SPACING)
+    }
+
+    /// Kraken spot/equities universe lane: equities-universe workset, spot
+    /// sector budgets, and the WS OHLC snapshot sweep.
+    ///
+    /// Deliberately NOT gated on `heavy_sync_in_progress`: that flag engages at
+    /// 32 pending fetches while the full-tilt queue windows are sized for
+    /// ~2100, so gating the refill on it strangled catch-up into a pending≈32
+    /// equilibrium — the queues could never reach their designed depth. Slot
+    /// math (`memory_bounded_available_slots`, which also shrinks under RSS
+    /// pressure), per-provider rate limiters, and the staggered one-lane-per-
+    /// pass scan budget are the real governors; when the queues are full this
+    /// lane early-outs cheaply at the slot checks.
+    fn broad_dispatch_kraken_universe_lane(
+        &mut self,
+        now_instant: std::time::Instant,
+        interval: std::time::Duration,
+        refill_requested: bool,
+    ) -> bool {
+        if !Self::broad_dispatch_lane_due(
+            self.kraken_universe_last_schedule,
+            now_instant,
+            interval,
+            refill_requested,
+        ) {
+            return false;
+        }
+        if !self.kraken_enabled
+            || !self.kraken_full_bar_sync_enabled
+            || !(self.kraken_any_spot_scrape_enabled()
+                || (self.kraken_scrape_xstocks && !self.kraken_equity_universe_symbols.is_empty()))
+        {
+            return false;
+        }
+        self.kraken_universe_last_schedule = now_instant;
+        let _ = self.schedule_kraken_equities_universe();
+        let _ = self.schedule_kraken_universe_sectors();
+        let _ = self.maybe_schedule_kraken_ws_ohlc_snapshot_sweep();
+        true
+    }
+
+    fn broad_dispatch_kraken_futures_lane(
+        &mut self,
+        now_instant: std::time::Instant,
+        interval: std::time::Duration,
+        refill_requested: bool,
+    ) -> bool {
+        if !Self::broad_dispatch_lane_due(
+            self.kraken_futures_universe_last_schedule,
+            now_instant,
+            interval,
+            refill_requested,
+        ) {
+            return false;
+        }
+        if !self.kraken_enabled {
+            return false;
+        }
+        self.kraken_futures_universe_last_schedule = now_instant;
+        let _ = self.schedule_kraken_futures_universe_sectors();
+        true
+    }
+
+    /// Alpaca full us_equity rotation (~11k symbols plus the chart/watchlist
+    /// floor). Like the Kraken lanes, ungated by `heavy_sync_in_progress` —
+    /// its own capacity gates (`alpaca_sync_capacity` + slot math) bound it.
+    fn broad_dispatch_alpaca_lane(
+        &mut self,
+        now_instant: std::time::Instant,
+        interval: std::time::Duration,
+        refill_requested: bool,
+    ) -> bool {
+        if !Self::broad_dispatch_lane_due(
+            self.alpaca_rotation_last_sync,
+            now_instant,
+            interval,
+            refill_requested,
+        ) {
+            return false;
+        }
+        if !self.alpaca_enabled {
+            return false;
+        }
+        self.alpaca_rotation_last_sync = now_instant;
+        self.maybe_request_alpaca_asset_universe();
+        self.push_alpaca_sync_runtime_config();
+        let equity_syms = self.alpaca_equity_rotation_symbols_cached();
+        let _ = self.schedule_alpaca_pairs(&equity_syms);
+        true
+    }
+
     /// UX7: Lazily fetch 30 daily closes for a symbol from bar cache.
     /// Returns Arc for O(1) clones — called per-row per-frame in open scanners.
     /// MEM: Soft-capped at 2000 entries (≈2000 × 30 × 8 bytes = ~480KB).
@@ -583,22 +732,25 @@ impl TyphooNApp {
     }
 
     pub(super) fn build_source_cache_state_map(
-        &self,
+        &mut self,
         prefix: &str,
     ) -> std::collections::HashMap<(String, String), SyncCacheState> {
-        // Read the BG-worker-precomputed map (built once, off the render thread,
-        // in `build_source_sync_state_maps`) instead of rescanning the whole
-        // catalog here. Empty until the first BG snapshot arrives — cold-cache
-        // semantics, i.e. everything reads as Missing → coverage-first sync.
+        // TAKE the BG-worker-precomputed map (built off the render thread in
+        // `build_source_sync_state_maps`) instead of cloning it: each prefix is
+        // consumed by exactly one `cached_*_sync_state` field per bg_rev (all
+        // callers are rev-guarded), and every snapshot apply replaces `self.bg`
+        // wholesale, so removing the entry is safe and turns an O(rows) clone
+        // of a ~100k-entry map into an O(1) move. Empty until the first BG
+        // snapshot arrives — cold-cache semantics, i.e. everything reads as
+        // Missing → coverage-first sync.
         self.bg
             .source_sync_state
-            .get(prefix)
-            .cloned()
+            .remove(prefix)
             .unwrap_or_default()
     }
 
     pub(super) fn build_alpaca_cache_state_map(
-        &self,
+        &mut self,
     ) -> std::collections::HashMap<(String, String), SyncCacheState> {
         self.build_source_cache_state_map("alpaca:")
     }
@@ -985,14 +1137,14 @@ impl TyphooNApp {
     /// ~12k xStock universe is pure and was re-run on the render thread every 60s
     /// scheduler tick; cache it and rebuild only when the universe list length
     /// changes (it is replaced wholesale on reload). Used by the hot scheduler path.
-    pub(super) fn kraken_equity_catalog_symbols_cached(&mut self) -> Vec<String> {
+    pub(super) fn kraken_equity_catalog_symbols_cached(&mut self) -> std::sync::Arc<Vec<String>> {
         let sig = self.kraken_equity_universe_symbols.len();
         if self.cached_kraken_equity_catalog_sig != Some(sig) {
             let rebuilt = self.kraken_equity_catalog_symbols();
-            self.cached_kraken_equity_catalog = rebuilt;
+            self.cached_kraken_equity_catalog = std::sync::Arc::new(rebuilt);
             self.cached_kraken_equity_catalog_sig = Some(sig);
         }
-        self.cached_kraken_equity_catalog.clone()
+        std::sync::Arc::clone(&self.cached_kraken_equity_catalog)
     }
 
     /// The WS-subscribable subset (tokenized `{SYM}x/USD` xStocks). Used to scope
@@ -1109,11 +1261,11 @@ impl TyphooNApp {
         let demand_symbols = self.kraken_equity_demand_symbols();
         let native_symbols =
             kraken_equity_native_history_symbols(&catalog_symbols, &demand_symbols);
-        // Move the chosen list instead of cloning either.
-        let fallback_symbols = if catalog_symbols.is_empty() {
-            demand_symbols
+        // Borrow the chosen list — the catalog cache hands out an O(1) Arc.
+        let fallback_symbols: &[String] = if catalog_symbols.is_empty() {
+            &demand_symbols
         } else {
-            catalog_symbols
+            &catalog_symbols
         };
         if !self.kraken_enabled
             || !self.kraken_full_bar_sync_enabled
@@ -1291,7 +1443,7 @@ impl TyphooNApp {
                         self.is_fetch_on_cooldown("alpaca", &symbol, tf)
                     };
                     let mut candidates = select_alpaca_sync_workset_rotating(
-                        &fallback_symbols,
+                        fallback_symbols,
                         &alpaca_timeframes,
                         &self.cached_alpaca_sync_state,
                         &focus_symbols,
@@ -1383,7 +1535,7 @@ impl TyphooNApp {
                     // the whole catalog's monthly history forever, starving
                     // 1Week/1Day (observed 8.3k 1Month rewrites in one night).
                     let mut candidates = select_alpaca_sync_workset_rotating(
-                        &fallback_symbols,
+                        fallback_symbols,
                         &yahoo_timeframes,
                         &self.cached_yahoo_chart_sync_state,
                         &focus_symbols,
@@ -2499,7 +2651,7 @@ impl TyphooNApp {
     /// every 60s rotation tick; cache it and rebuild only when the input lengths
     /// change. The chart/watchlist floor is a backup (those symbols also sync via
     /// their demand paths), so a same-length swap costing one cycle is harmless.
-    pub(super) fn alpaca_equity_rotation_symbols_cached(&mut self) -> Vec<String> {
+    pub(super) fn alpaca_equity_rotation_symbols_cached(&mut self) -> std::sync::Arc<Vec<String>> {
         let sig = (
             self.all_broker_assets.len(),
             self.charts.len(),
@@ -2507,16 +2659,112 @@ impl TyphooNApp {
         );
         if self.cached_alpaca_equity_rotation_sig != Some(sig) {
             let rebuilt = self.alpaca_equity_rotation_symbols();
-            self.cached_alpaca_equity_rotation = rebuilt;
+            self.cached_alpaca_equity_rotation = std::sync::Arc::new(rebuilt);
             self.cached_alpaca_equity_rotation_sig = Some(sig);
         }
-        self.cached_alpaca_equity_rotation.clone()
+        std::sync::Arc::clone(&self.cached_alpaca_equity_rotation)
     }
+}
+
+/// Pure staggering core for `run_broad_dispatch_slice`: starting at `cursor`,
+/// offer each lane once in rotation order until `lane_budget` lanes have
+/// actually run. `try_lane` returns true only when the lane was due, enabled,
+/// and did its work — lanes that decline don't consume budget, so a disabled
+/// lane never wastes a pass. The cursor lands just past the last lane that
+/// ran (unchanged when none did), keeping the rotation fair across passes.
+fn broad_dispatch_rotate(
+    cursor: usize,
+    lane_count: usize,
+    lane_budget: u8,
+    mut try_lane: impl FnMut(usize) -> bool,
+) -> (u8, usize) {
+    let mut ran: u8 = 0;
+    let mut new_cursor = cursor;
+    for step in 0..lane_count {
+        if ran >= lane_budget {
+            break;
+        }
+        let lane = (cursor + step) % lane_count;
+        if try_lane(lane) {
+            ran += 1;
+            new_cursor = (lane + 1) % lane_count;
+        }
+    }
+    (ran, new_cursor)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broad_dispatch_rotate_runs_one_lane_per_visible_pass() {
+        // Visible budget is 1: only the first runnable lane runs; the cursor
+        // lands just past it so the next pass starts at the next lane.
+        let mut log = Vec::new();
+        let (ran, cursor) = broad_dispatch_rotate(0, 3, 1, |lane| {
+            log.push(lane);
+            true
+        });
+        assert_eq!((ran, cursor), (1, 1));
+        assert_eq!(log, vec![0]);
+
+        // Next pass continues the rotation from lane 1.
+        let (ran, cursor) = broad_dispatch_rotate(cursor, 3, 1, |lane| lane == 1);
+        assert_eq!((ran, cursor), (1, 2));
+    }
+
+    #[test]
+    fn broad_dispatch_rotate_declined_lanes_do_not_consume_budget() {
+        // Lane 0 declines (disabled / not due) — lane 1 still runs this pass.
+        let mut offered = Vec::new();
+        let (ran, cursor) = broad_dispatch_rotate(0, 3, 1, |lane| {
+            offered.push(lane);
+            lane == 1
+        });
+        assert_eq!((ran, cursor), (1, 2));
+        assert_eq!(offered, vec![0, 1]);
+
+        // Nothing runnable: no lane runs and the cursor stays put.
+        let (ran, cursor) = broad_dispatch_rotate(2, 3, 1, |_| false);
+        assert_eq!((ran, cursor), (0, 2));
+    }
+
+    #[test]
+    fn broad_dispatch_rotate_hidden_budget_runs_every_due_lane() {
+        // Hidden passes have no frame pacing to protect: budget = lane count,
+        // every lane is offered exactly once and all due lanes run.
+        let mut log = Vec::new();
+        let (ran, cursor) = broad_dispatch_rotate(1, 3, 3, |lane| {
+            log.push(lane);
+            lane != 2 // lane 2 not due
+        });
+        assert_eq!(ran, 2);
+        assert_eq!(log, vec![1, 2, 0], "offered once each, starting at cursor");
+        assert_eq!(cursor, 1, "cursor lands past the last lane that ran (0)");
+    }
+
+    #[test]
+    fn broad_dispatch_lane_due_periodic_and_refill_floor() {
+        let interval = std::time::Duration::from_secs(1);
+        let now = std::time::Instant::now();
+        let due = |elapsed_ms: u64, refill: bool| {
+            TyphooNApp::broad_dispatch_lane_due(
+                now - std::time::Duration::from_millis(elapsed_ms),
+                now,
+                interval,
+                refill,
+            )
+        };
+        // Periodic cadence holds with no refill pending.
+        assert!(due(1_000, false));
+        assert!(!due(999, false));
+        // A pending refill pulls a lane in early, but never below the 250ms
+        // floor — a continuous settlement stream can't scan every frame.
+        assert!(due(250, true));
+        assert!(!due(249, true));
+        assert!(!due(100, true));
+    }
 
     #[test]
     fn market_status_is_idle_only_for_closed_and_overnight() {
