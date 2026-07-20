@@ -2246,3 +2246,61 @@ fn live_tick_anchor_clamps_only_gross_divergence_on_newest_bar() {
     assert!(chart_live_tick_anchor_guard(&mut ok_bars, 0.0).is_none());
     assert!(chart_live_tick_anchor_guard(&mut [], 4.2).is_none());
 }
+
+#[test]
+fn merged_base_memo_scopes_by_cache_not_across_symbols() {
+    // chart_merged_base_bars memoizes the merged 1Day/1Hour base process-wide so
+    // sibling higher timeframes (1Week + 1Month share 1Day) restored in the same
+    // burst don't each rebuild it. The memo MUST key on the cache's db_path: two
+    // independent caches holding the same symbol with different daily history must
+    // never serve each other a memoized base.
+    use chrono::{TimeZone, Utc};
+    let day = chrono::Duration::days(1);
+    let base = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+
+    let make_cache = |tag: &str, close: f64| {
+        let db_path = std::env::temp_dir().join(format!(
+            "typhoon-merged-base-memo-{}-{}-{}.db",
+            tag,
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let daily: Vec<serde_json::Value> = (0..14i64)
+            .map(|i| {
+                serde_json::json!({
+                    "timestamp": (base + day * i as i32).to_rfc3339(),
+                    "open": close, "high": close, "low": close, "close": close, "volume": 100.0
+                })
+            })
+            .collect();
+        let daily_str = serde_json::to_string(&daily).unwrap();
+        // Both broad sources agree so the merge output is unambiguous at `close`.
+        cache.put_bars("alpaca:MEMO:1Day", &daily_str).unwrap();
+        cache.put_bars("yahoo-chart:MEMO:1Day", &daily_str).unwrap();
+        cache
+    };
+
+    // Same symbol "MEMO", clearly different daily levels, distinct db_paths.
+    let cache_lo = make_cache("lo", 1.00);
+    let cache_hi = make_cache("hi", 9.00);
+
+    // 1Week rolls up the merged 1Day base via chart_merged_base_bars. If the memo
+    // leaked across caches, the second load would echo the first cache's base.
+    let wk_lo = chart_load_merged_equity_bars_from_cache(&cache_lo, "MEMO", "1Week");
+    let wk_hi = chart_load_merged_equity_bars_from_cache(&cache_hi, "MEMO", "1Week");
+
+    assert!(!wk_lo.is_empty(), "lo cache should produce weekly bars");
+    assert!(!wk_hi.is_empty(), "hi cache should produce weekly bars");
+    assert!(
+        wk_lo.iter().all(|b| b.close < 2.0),
+        "lo weekly must reflect lo daily (~1.0): {:?}",
+        wk_lo.iter().map(|b| b.close).collect::<Vec<_>>()
+    );
+    assert!(
+        wk_hi.iter().all(|b| b.close > 5.0),
+        "hi weekly must reflect hi daily (~9.0) — a <5 value means the base memo \
+         leaked the lo cache's base across db_paths: {:?}",
+        wk_hi.iter().map(|b| b.close).collect::<Vec<_>>()
+    );
+}

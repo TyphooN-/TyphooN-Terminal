@@ -1171,13 +1171,76 @@ pub(crate) fn chart_log_merged_cache_load_done(
     }
 }
 
+struct MergedBaseEntry {
+    bars: std::sync::Arc<Vec<Bar>>,
+    written_ms: i64,
+}
+
+/// Short TTL for the merged-base memo below. Long enough to span a session
+/// restore burst (all deferred chart loads fire within a few seconds, each merge
+/// build takes ~1s), short enough that live daily/hourly updates still reach the
+/// derived charts promptly. A higher-timeframe aggregation's forming bar is
+/// anchored separately, so this staleness never touches the live edge.
+const MERGED_BASE_MEMO_TTL_MS: i64 = 15_000;
+
+#[allow(clippy::type_complexity)]
+fn merged_base_memo() -> &'static std::sync::RwLock<
+    std::collections::HashMap<(String, String, &'static str), MergedBaseEntry>,
+> {
+    static MEMO: std::sync::OnceLock<
+        std::sync::RwLock<
+            std::collections::HashMap<(String, String, &'static str), MergedBaseEntry>,
+        >,
+    > = std::sync::OnceLock::new();
+    MEMO.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Build — or reuse — a merged BASE series that a derived timeframe rolls up:
+/// 1Week and 1Month both aggregate 1Day, 4Hour aggregates 1Hour. Restored
+/// sibling timeframes for one symbol arrive as separate `spawn_blocking` workers
+/// in the same burst, so without this each independently rebuilds the identical,
+/// expensive base (full raw-source load + cross-source merge + split back-adjust)
+/// from scratch. Memoized process-wide under a short TTL and keyed by the cache's
+/// `db_path` so parallel tests (many caches, shared symbol names) stay isolated.
+/// The memo returns bars byte-identical to a fresh build; only up to
+/// `MERGED_BASE_MEMO_TTL_MS` of base staleness is possible.
+fn chart_merged_base_bars(cache: &SqliteCache, symbol: &str, base_tf: &'static str) -> Vec<Bar> {
+    let key = (
+        cache.db_path().to_string_lossy().into_owned(),
+        symbol.to_string(),
+        base_tf,
+    );
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if let Ok(guard) = merged_base_memo().read() {
+        if let Some(entry) = guard.get(&key) {
+            if now_ms.saturating_sub(entry.written_ms) < MERGED_BASE_MEMO_TTL_MS {
+                return (*entry.bars).clone();
+            }
+        }
+    }
+    let arc = std::sync::Arc::new(chart_build_merged_equity_bars_from_cache(
+        cache, symbol, base_tf,
+    ));
+    if let Ok(mut guard) = merged_base_memo().write() {
+        guard.retain(|_, e| now_ms.saturating_sub(e.written_ms) < MERGED_BASE_MEMO_TTL_MS);
+        guard.insert(
+            key,
+            MergedBaseEntry {
+                bars: std::sync::Arc::clone(&arc),
+                written_ms: now_ms,
+            },
+        );
+    }
+    (*arc).clone()
+}
+
 fn chart_build_merged_equity_bars_from_cache(
     cache: &SqliteCache,
     symbol: &str,
     timeframe: &str,
 ) -> Vec<Bar> {
     if timeframe == "4Hour" {
-        let hourly = chart_build_merged_equity_bars_from_cache(cache, symbol, "1Hour");
+        let hourly = chart_merged_base_bars(cache, symbol, "1Hour");
         if hourly.len() >= 2 {
             let hourly_raw = chart_bars_to_raw(hourly);
             let four_hour = chart_aggregate_raw_to_4hour(&hourly_raw);
@@ -1188,7 +1251,7 @@ fn chart_build_merged_equity_bars_from_cache(
     }
 
     if timeframe == "1Week" {
-        let daily = chart_build_merged_equity_bars_from_cache(cache, symbol, "1Day");
+        let daily = chart_merged_base_bars(cache, symbol, "1Day");
         if daily.len() >= 2 {
             let daily_raw = chart_bars_to_raw(daily);
             let weekly = chart_aggregate_raw_to_weekly(&daily_raw);
@@ -1199,7 +1262,7 @@ fn chart_build_merged_equity_bars_from_cache(
     }
 
     if timeframe == "1Month" {
-        let daily = chart_build_merged_equity_bars_from_cache(cache, symbol, "1Day");
+        let daily = chart_merged_base_bars(cache, symbol, "1Day");
         if daily.len() >= 2 {
             let daily_raw = chart_bars_to_raw(daily);
             let monthly = ChartState::aggregate_daily_raw_to_monthly(daily_raw);

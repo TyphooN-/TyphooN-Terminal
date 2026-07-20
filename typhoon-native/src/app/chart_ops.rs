@@ -28,6 +28,16 @@ const DEFERRED_CHART_MAX_INFLIGHT: usize = 3;
 const DEFERRED_CHART_FINALIZE_PER_FRAME: usize = 4;
 /// Queue entries examined per pass. Bounds the scheduler's own per-pass cost.
 const DEFERRED_CHART_SCAN_WINDOW: usize = 16;
+/// Wall-clock ceiling on one finalize/spawn pass. The count cap alone can't bound
+/// wall time: a single restore re-runs GPU indicators (up to ~240ms for a deep
+/// MTF SMA / MultiKAMA overlay), so a burst of ready cells would otherwise block
+/// the render thread (visible) or the sync pump (hidden) for most of a second.
+/// Whatever is left resumes next pass. Tighter when visible (protect the frame);
+/// looser when hidden (the pump ticks ~4x/s and its real job is bar sync).
+const DEFERRED_CHART_FINALIZE_BUDGET_VISIBLE: std::time::Duration =
+    std::time::Duration::from_millis(8);
+const DEFERRED_CHART_FINALIZE_BUDGET_HIDDEN: std::time::Duration =
+    std::time::Duration::from_millis(50);
 /// In-flight marker is evicted after this long so a hung/deadlocked worker (whose
 /// completion never arrives) can't strand a cell as permanently "loading". Far
 /// longer than any plausible single load, so it never races a healthy worker.
@@ -637,10 +647,19 @@ impl TyphooNApp {
         let finalize_cap = DEFERRED_CHART_FINALIZE_PER_FRAME;
         let inflight_cap = DEFERRED_CHART_MAX_INFLIGHT;
         let scan_window = DEFERRED_CHART_SCAN_WINDOW;
+        let finalize_budget = if self.pump_hidden {
+            DEFERRED_CHART_FINALIZE_BUDGET_HIDDEN
+        } else {
+            DEFERRED_CHART_FINALIZE_BUDGET_VISIBLE
+        };
+        let pass_started = std::time::Instant::now();
         let mut finalized = 0usize;
         let mut scanned = 0usize;
         let mut i = 0usize;
-        while i < self.deferred_chart_loads.len() && scanned < scan_window {
+        while i < self.deferred_chart_loads.len()
+            && scanned < scan_window
+            && pass_started.elapsed() < finalize_budget
+        {
             scanned += 1;
             let idx = self.deferred_chart_loads[i];
             let Some((load_key, sym_key, tf, source_override, bars_empty, symbol, timeframe)) =
