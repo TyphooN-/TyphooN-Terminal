@@ -372,7 +372,9 @@ pub async fn handle_kraken_account_order_command(
                 let _ = broker_msg_tx.send(BrokerMsg::OrderResult("Kraken: connect first".into()));
             }
         }
-        BrokerCmd::KrakenCancelOrder { txid } => {
+        BrokerCmd::KrakenCancelOrder { account_id, txid } => {
+            // `kraken_broker` is resolved by the dispatch to the account that
+            // holds this txid (ADR-130), not necessarily the primary.
             if let Some(ref kb) = kraken_broker {
                 let msg_tx = broker_msg_tx.clone();
                 match kb.cancel_order(&txid).await {
@@ -387,7 +389,9 @@ pub async fn handle_kraken_account_order_command(
                     }
                 }
             } else {
-                let _ = broker_msg_tx.send(BrokerMsg::OrderResult("Kraken: connect first".into()));
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "Kraken cancel failed: account {account_id} is not connected"
+                )));
             }
         }
         BrokerCmd::KrakenCancelAll => {

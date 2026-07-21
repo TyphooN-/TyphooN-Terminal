@@ -867,11 +867,26 @@ pub fn spawn_broker_message_processor(
                     )
                     .await;
                 }
+                cmd @ BrokerCmd::KrakenCancelOrder { .. } => {
+                    // Txids are account-specific: resolve the account that holds
+                    // this order rather than defaulting to the primary (ADR-130).
+                    let acct_broker = match &cmd {
+                        BrokerCmd::KrakenCancelOrder { account_id, .. } => {
+                            kraken_pool.broker_by_id(account_id).map(|h| &h.broker)
+                        }
+                        _ => None,
+                    };
+                    kraken_order_ops::handle_kraken_account_order_command(
+                        cmd,
+                        acct_broker,
+                        &broker_msg_tx_clone,
+                    )
+                    .await;
+                }
                 cmd @ (BrokerCmd::KrakenGetBalance
                 | BrokerCmd::KrakenPlaceOrder { .. }
                 | BrokerCmd::KrakenPlaceOrderAdvanced { .. }
                 | BrokerCmd::KrakenClosePosition { .. }
-                | BrokerCmd::KrakenCancelOrder { .. }
                 | BrokerCmd::KrakenCancelAll) => {
                     kraken_order_ops::handle_kraken_account_order_command(
                         cmd,

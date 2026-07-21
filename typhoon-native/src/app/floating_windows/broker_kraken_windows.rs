@@ -133,6 +133,9 @@ impl TyphooNApp {
                                         if ui.small_button("Cancel").clicked() {
                                             let _ =
                                                 self.broker_tx.send(BrokerCmd::KrakenCancelOrder {
+                                                    account_id: self
+                                                        .kraken_primary_account_id
+                                                        .clone(),
                                                     txid: order.txid.clone(),
                                                 });
                                         }

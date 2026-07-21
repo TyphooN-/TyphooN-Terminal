@@ -232,27 +232,29 @@ pub async fn handle_alpaca_order_command(
                 }
             }
         }
-        BrokerCmd::AlpacaCancelOrder { order_id } => {
-            // Order ids are account-specific — never mirrored.
-            if let Some(b) = pool.primary_broker() {
-                match b.cancel_order(&order_id).await {
+        BrokerCmd::AlpacaCancelOrder {
+            account_id,
+            order_id,
+        } => {
+            // Order ids are account-specific: cancel on the account that holds
+            // the order, never the primary or a mirror (ADR-130).
+            if let Some(account) = pool.broker_by_id(&account_id) {
+                let tag = format!(" [{}]", account.spec.label);
+                match account.broker.cancel_order(&order_id).await {
                     Ok(_) => {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
-                            "Order {} cancelled",
-                            order_id
+                            "Order {order_id} cancelled{tag}"
                         )));
-                        if mirror {
-                            let _ = broker_msg_tx.send(BrokerMsg::OrderResult(
-                                "mirror: cancel not replicated (order ids are account-specific)"
-                                    .into(),
-                            ));
-                        }
                     }
                     Err(e) => {
-                        let _ =
-                            broker_msg_tx.send(BrokerMsg::Error(format!("Cancel failed: {}", e)));
+                        let _ = broker_msg_tx
+                            .send(BrokerMsg::Error(format!("Cancel failed: {e}{tag}")));
                     }
                 }
+            } else {
+                let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+                    "Alpaca cancel failed: account {account_id} is not connected"
+                )));
             }
         }
         BrokerCmd::AlpacaOcoOrder {

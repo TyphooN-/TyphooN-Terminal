@@ -370,8 +370,10 @@ impl TyphooNApp {
                 ui.add_space(4.0);
             }
 
-            let mut cancel_ids: Vec<String> = Vec::new();
-            let mut kr_cancel_ids: Vec<String> = Vec::new();
+            // (account_id, order_id/txid) — cancel must target the account that
+            // holds the order, not the primary (ADR-130).
+            let mut cancel_ids: Vec<(String, String)> = Vec::new();
+            let mut kr_cancel_ids: Vec<(String, String)> = Vec::new();
             let mut lo_action = SymbolAction::None;
             let mut has_orders = false;
             for account in &alpaca_order_groups {
@@ -414,14 +416,18 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(format!("×{}", group.orders.len())).color(AXIS_TEXT).small().strong())
                                 .on_hover_text("Identical open orders grouped by symbol, side, type, price, and status");
                         }
-                        if account.is_primary && self.broker_connected {
-                            if ui
+                        if self.broker_connected
+                            && ui
                                 .small_button(egui::RichText::new("X").color(DOWN))
                                 .on_hover_text(if group.orders.len() > 1 { "Cancel all orders in this group" } else { "Cancel order" })
                                 .clicked()
-                            {
-                                cancel_ids.extend(group.orders.iter().map(|order| order.id.clone()));
-                            }
+                        {
+                            cancel_ids.extend(
+                                group
+                                    .orders
+                                    .iter()
+                                    .map(|order| (account.account_id.clone(), order.id.clone())),
+                            );
                         }
                     });
                     let qty_text = if group.orders.len() > 1 && group.all_qty_numeric {
@@ -485,8 +491,8 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new(&order.r#type).color(side_c).small());
                         ui.label(egui::RichText::new(&order.ordertype).color(AXIS_TEXT).small());
                         ui.label(egui::RichText::new(format!("@ {}", format_price(order.price))).color(ACCENT).small().strong());
-                        if account.is_primary && ui.small_button(egui::RichText::new("X").color(DOWN)).on_hover_text("Cancel Kraken order").clicked() {
-                            kr_cancel_ids.push(order.txid.clone());
+                        if ui.small_button(egui::RichText::new("X").color(DOWN)).on_hover_text("Cancel Kraken order").clicked() {
+                            kr_cancel_ids.push((account.account_id.clone(), order.txid.clone()));
                         }
                     });
                     ui.label(egui::RichText::new(format!("qty: {} rem {} | {}", format_price(order.vol), format_price(remain), order.status)).color(ACCENT).small());
@@ -494,11 +500,15 @@ impl TyphooNApp {
                 }
                 }
             }
-            for oid in cancel_ids {
-                let _ = self.broker_tx.send(BrokerCmd::AlpacaCancelOrder { order_id: oid });
+            for (account_id, order_id) in cancel_ids {
+                let _ = self
+                    .broker_tx
+                    .send(BrokerCmd::AlpacaCancelOrder { account_id, order_id });
             }
-            for txid in kr_cancel_ids {
-                let _ = self.broker_tx.send(BrokerCmd::KrakenCancelOrder { txid });
+            for (account_id, txid) in kr_cancel_ids {
+                let _ = self
+                    .broker_tx
+                    .send(BrokerCmd::KrakenCancelOrder { account_id, txid });
             }
             if !matches!(lo_action, SymbolAction::None) {
                 self.deferred_symbol_action = lo_action;

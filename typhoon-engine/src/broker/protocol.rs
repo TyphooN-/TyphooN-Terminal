@@ -498,8 +498,11 @@ pub enum BrokerCmd {
         stop_loss: f64,
         take_profit: f64,
     },
-    /// Cancel an Alpaca order by ID.
+    /// Cancel an Alpaca order by ID on a specific account. Order ids are
+    /// account-specific, so the cancel must target the account that holds the
+    /// order, which is not necessarily the primary (ADR-130).
     AlpacaCancelOrder {
+        account_id: String,
         order_id: String,
     },
     /// Place an OCO (one-cancels-other) exit order on Alpaca.
@@ -2608,8 +2611,11 @@ pub enum BrokerCmd {
     KrakenPlaceOrderAdvanced {
         order: crate::broker::kraken::KrakenOrderRequest,
     },
-    /// Cancel a Kraken order by transaction ID.
+    /// Cancel a Kraken order by transaction ID on a specific account. Txids are
+    /// account-specific, so the cancel must target the account that holds the
+    /// order, not necessarily the primary (ADR-130).
     KrakenCancelOrder {
+        account_id: String,
         txid: String,
     },
     /// Cancel all open Kraken orders.
