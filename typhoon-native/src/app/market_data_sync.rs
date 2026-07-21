@@ -186,6 +186,42 @@ fn memory_bounded_available_slots(
     }
 }
 
+/// Free-slot floor below which a broad-catalog scan is not worth running. Each
+/// scan walks up to `scan_limit` catalog rows with per-row cache-state, cooldown,
+/// and stale-multiplier work — a fixed few-hundred-ms cost at full tilt. During
+/// steady-state catch-up the queue hovers near full and only a slot or two frees
+/// per pass, so gating on `available > 0` re-runs that whole scan every render
+/// pass just to dispatch a trickle (the ~200-470ms visible after-hours dispatch
+/// stall). Requiring a quarter-batch of free slots amortizes the scan over that
+/// many completions (≈batch/4× fewer scans at full tilt) with NO throughput or
+/// coverage loss: the rotating cursor advances at the dispatch rate either way,
+/// and downstream provider rate limiters — not scan frequency — cap fetches.
+/// Balanced mode (batch ≈ 4 → floor 1) keeps the old "scan whenever a slot is
+/// free" behaviour, so only full-tilt catch-up changes.
+/// Free-slot floor for `memory_bounded_scan_slots`: a quarter of the batch,
+/// never below 1. At full tilt (batch ≈ 128) this is ~32; in balanced mode
+/// (batch ≈ 4) it collapses to 1 so the gate behaves exactly like the old
+/// `available > 0` check. Always strictly reachable as in-flight fetches
+/// complete, so it can never wedge the queue.
+fn broad_scan_slot_floor(batch_limit: usize) -> usize {
+    (batch_limit / 4).max(1)
+}
+
+fn memory_bounded_scan_slots(
+    queue_window: usize,
+    pending: usize,
+    batch_limit: usize,
+    foreground_reserve: usize,
+) -> usize {
+    let available =
+        memory_bounded_available_slots(queue_window, pending, batch_limit, foreground_reserve);
+    if available >= broad_scan_slot_floor(batch_limit) {
+        available
+    } else {
+        0
+    }
+}
+
 fn drop_background_candidates_when_paused(candidates: &mut Vec<AlpacaSyncCandidate>) {
     if current_market_data_memory_pressure() == MarketDataMemoryPressure::PauseBackground {
         candidates.retain(|candidate| candidate.focus);
@@ -1335,7 +1371,7 @@ impl TyphooNApp {
         let mut dispatched = 0usize;
         let now_s = chrono::Utc::now().timestamp();
 
-        let native_available_slots = memory_bounded_available_slots(
+        let native_available_slots = memory_bounded_scan_slots(
             queue_window,
             self.pending_kraken_fetches
                 .iter()
@@ -1418,7 +1454,7 @@ impl TyphooNApp {
                     self.alpaca_backfill_complete_load();
                 }
                 let capacity = self.alpaca_sync_capacity();
-                let available_slots = memory_bounded_available_slots(
+                let available_slots = memory_bounded_scan_slots(
                     capacity.queue_window,
                     self.pending_alpaca_fetches.len(),
                     capacity.batch_size,
@@ -1497,7 +1533,7 @@ impl TyphooNApp {
                 } else {
                     128
                 };
-                let available_slots = memory_bounded_available_slots(
+                let available_slots = memory_bounded_scan_slots(
                     yahoo_queue_window,
                     self.pending_yahoo_chart_fetches.len(),
                     yahoo_batch_limit,
@@ -2262,7 +2298,7 @@ impl TyphooNApp {
             return 0;
         }
         let capacity = self.alpaca_sync_capacity();
-        let available_slots = memory_bounded_available_slots(
+        let available_slots = memory_bounded_scan_slots(
             capacity.queue_window,
             self.pending_alpaca_fetches.len(),
             capacity.batch_size,
@@ -2403,7 +2439,7 @@ impl TyphooNApp {
         } else {
             KRAKEN_SPOT_BACKGROUND_SCAN_LIMIT
         };
-        let available_slots = memory_bounded_available_slots(
+        let available_slots = memory_bounded_scan_slots(
             queue_window,
             self.pending_kraken_fetches.len(),
             batch_limit,
@@ -2535,7 +2571,7 @@ impl TyphooNApp {
         } else {
             KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT
         };
-        let available_slots = memory_bounded_available_slots(
+        let available_slots = memory_bounded_scan_slots(
             queue_window,
             self.pending_kraken_futures_fetches.len(),
             batch_limit,
@@ -2764,6 +2800,24 @@ mod tests {
         assert!(due(250, true));
         assert!(!due(249, true));
         assert!(!due(100, true));
+    }
+
+    #[test]
+    fn broad_scan_slot_floor_amortizes_full_tilt_but_leaves_balanced_unchanged() {
+        // Balanced mode (small batch) collapses to floor 1 — identical to the old
+        // `available > 0` gate, so nothing off full-tilt changes behaviour.
+        assert_eq!(broad_scan_slot_floor(1), 1);
+        assert_eq!(broad_scan_slot_floor(3), 1);
+        assert_eq!(broad_scan_slot_floor(4), 1);
+        // Full-tilt batches gate on a quarter-batch of free slots, so the catalog
+        // scan runs ~batch/4x less often during steady-state catch-up.
+        assert_eq!(broad_scan_slot_floor(128), 32);
+        assert_eq!(broad_scan_slot_floor(256), 64);
+        // The floor never exceeds the batch size, so `available` (capped at the
+        // batch) can always reach it as in-flight fetches complete — no wedge.
+        for batch in [1usize, 2, 4, 16, 64, 128, 256, 1024] {
+            assert!(broad_scan_slot_floor(batch) <= batch);
+        }
     }
 
     #[test]
