@@ -1186,6 +1186,18 @@ fn full_recompute_caches_previous_daily_close_for_constant_time_rendering() {
 }
 
 #[test]
+fn symbol_switch_clears_previous_symbol_close_caches() {
+    let mut chart = ChartState::new("AAPL", Timeframe::D1);
+    chart.prev_daily_close = 101.0;
+    chart.bars_prev_daily_close = 99.0;
+
+    chart.switch_symbol("MSFT");
+
+    assert_eq!(chart.prev_daily_close, 0.0);
+    assert_eq!(chart.bars_prev_daily_close, 0.0);
+}
+
+#[test]
 fn news_dedup_placeholder_test() {
     // Placeholder test for article deduplication logic.
     // Real implementation will use article_exists_by_url_hash.

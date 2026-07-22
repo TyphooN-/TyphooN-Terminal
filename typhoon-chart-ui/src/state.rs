@@ -404,6 +404,8 @@ impl ChartState {
         self.live_depth_asks.clear();
         self.live_quote_at = None;
         self.live_quote_delayed = false;
+        self.prev_daily_close = 0.0;
+        self.bars_prev_daily_close = 0.0;
     }
 
     pub fn fresh_live_quote_mid(&self) -> Option<f64> {

@@ -1,6 +1,9 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+mod tests;
+
 fn normalize_quote_symbol(symbol: &str) -> String {
     let mut out = String::with_capacity(symbol.len());
     for b in symbol.bytes() {
@@ -28,6 +31,14 @@ fn bare_chart_symbol(symbol: &str) -> String {
     } else {
         s.trim_end_matches(".EQ").to_string()
     }
+}
+
+fn quote_symbol_alias_matches(chart_symbol: &str, row_symbol: &str) -> bool {
+    if row_symbol.is_empty() {
+        return false;
+    }
+    let bare = bare_chart_symbol(chart_symbol);
+    !bare.is_empty() && (bare.contains(row_symbol) || row_symbol.contains(bare.as_str()))
 }
 
 fn apply_watchlist_row_to_chart(chart: &mut ChartState, row: &WatchlistRow, weekend_closed: bool) {
@@ -151,6 +162,9 @@ impl TyphooNApp {
                 continue;
             }
             let row_symbol = normalize_quote_symbol(&row.symbol);
+            if row_symbol.is_empty() {
+                continue;
+            }
             row_symbols.insert(row_symbol.clone());
 
             if let Some(indices) = self.chart_by_bare.get(&row_symbol) {
@@ -161,11 +175,7 @@ impl TyphooNApp {
                 }
             } else {
                 for chart in &mut self.charts {
-                    let bare = bare_chart_symbol(&chart.symbol);
-                    if !bare.is_empty()
-                        && (bare.contains(row_symbol.as_str())
-                            || row_symbol.contains(bare.as_str()))
-                    {
+                    if quote_symbol_alias_matches(&chart.symbol, &row_symbol) {
                         apply_watchlist_row_to_chart(chart, row, kraken_weekend_closed);
                     }
                 }
