@@ -334,8 +334,14 @@ pub(super) fn spawn_background_refresh(
                             })
                             .collect(),
                     );
-                    data.upcoming_earnings =
-                        fundamentals::get_upcoming_earnings(conn, 50).unwrap_or_default();
+                    data.upcoming_earnings = fundamentals::get_upcoming_earnings(conn, 50)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(symbol, company, date)| {
+                            UpcomingEarningsRow::from_raw(symbol, company, date)
+                        })
+                        .collect::<Vec<_>>()
+                        .into();
                     data.upcoming_dividends =
                         fundamentals::get_upcoming_dividends(conn, 50).unwrap_or_default();
                     // PERF: normalize SEC filing tickers to uppercase once so per-frame

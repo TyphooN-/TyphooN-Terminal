@@ -1209,41 +1209,37 @@ impl TyphooNApp {
                                     ui.strong("Symbol");
                                     ui.strong("Company");
                                     ui.end_row();
-                                    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                                    for (sym, company, date) in &self.bg.upcoming_earnings {
+                                    let today = chrono::Utc::now().date_naive();
+                                    for row in self.bg.upcoming_earnings.iter() {
                                         // PERF: fundamentals.symbol is always uppercase (parse_yahoo_data).
                                         if filter_active
                                             && !self
                                                 .cached_active_symbols_set
-                                                .contains(sym.as_str())
+                                                .contains(row.symbol.as_str())
                                         {
                                             continue;
                                         }
-                                        let days_away =
-                                            chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-                                                .ok()
-                                                .and_then(|d| {
-                                                    chrono::NaiveDate::parse_from_str(
-                                                        &today, "%Y-%m-%d",
-                                                    )
-                                                    .ok()
-                                                    .map(|t| (d - t).num_days())
-                                                });
+                                        let days_away = row.days_from(today);
                                         let date_col = match days_away {
                                             Some(d) if d <= 3 => DOWN,
                                             Some(d) if d <= 7 => SMA200_COL,
                                             _ => AXIS_TEXT,
                                         };
-                                        ui.label(egui::RichText::new(date).color(date_col).small());
+                                        ui.label(
+                                            egui::RichText::new(&row.date).color(date_col).small(),
+                                        );
                                         let (_, ec_action) = symbol_label_with_menu(
                                             ui,
-                                            sym,
-                                            egui::RichText::new(sym).small().strong().monospace(),
+                                            &row.symbol,
+                                            egui::RichText::new(&row.symbol)
+                                                .small()
+                                                .strong()
+                                                .monospace(),
                                         );
                                         if !matches!(ec_action, SymbolAction::None) {
                                             earn_pending_action = ec_action;
                                         }
-                                        ui.label(egui::RichText::new(company).small());
+                                        ui.label(egui::RichText::new(&row.company).small());
                                         ui.end_row();
                                     }
                                 });

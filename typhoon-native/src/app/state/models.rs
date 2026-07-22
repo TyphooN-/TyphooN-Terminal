@@ -42,6 +42,32 @@ pub(crate) struct EventRow {
     pub(crate) in_kraken: bool,
 }
 
+/// Earnings Calendar row prepared when the background query refreshes. The raw
+/// date text is retained for display while parsing happens once per source row.
+#[derive(Debug, Clone)]
+pub(crate) struct UpcomingEarningsRow {
+    pub(crate) symbol: String,
+    pub(crate) company: String,
+    pub(crate) date: String,
+    parsed_date: Option<chrono::NaiveDate>,
+}
+
+impl UpcomingEarningsRow {
+    pub(crate) fn from_raw(symbol: String, company: String, date: String) -> Self {
+        let parsed_date = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok();
+        Self {
+            symbol,
+            company,
+            date,
+            parsed_date,
+        }
+    }
+
+    pub(crate) fn days_from(&self, today: chrono::NaiveDate) -> Option<i64> {
+        self.parsed_date.map(|date| (date - today).num_days())
+    }
+}
+
 /// Background-computed data — populated by background thread, read by render thread.
 /// This eliminates SQLite queries from the render loop.
 #[derive(Default, Clone)]
@@ -93,7 +119,7 @@ pub(crate) struct BgData {
     /// Static sector/capitalization structure rebuilt only when fundamentals refresh.
     /// `BgData` snapshots share it O(1); rendering only joins current quote changes.
     pub(crate) market_map_model: Arc<crate::app::market_map_model::MarketMapModel>,
-    pub(crate) upcoming_earnings: Vec<(String, String, String)>,
+    pub(crate) upcoming_earnings: Arc<[UpcomingEarningsRow]>,
     pub(crate) upcoming_dividends: Vec<(String, String, String, Option<f64>)>,
     /// Active symbol-level regulatory warnings keyed by normalized ticker.
     /// Populated by the background thread from cached public outlier lists
@@ -322,4 +348,28 @@ pub(crate) struct AlpacaRetry {
     /// True if a prior fetch returned some bars but was cut short by 429 —
     /// tells the coverage sweep this is genuinely incomplete, not "no history."
     pub(crate) partial: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upcoming_earnings_rows_parse_dates_once_and_preserve_invalid_text() {
+        let valid = UpcomingEarningsRow::from_raw(
+            "AAPL".to_string(),
+            "Apple".to_string(),
+            "2026-07-25".to_string(),
+        );
+        let invalid = UpcomingEarningsRow::from_raw(
+            "BAD".to_string(),
+            "Invalid".to_string(),
+            "unknown".to_string(),
+        );
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 22).unwrap();
+
+        assert_eq!(valid.days_from(today), Some(3));
+        assert_eq!(invalid.days_from(today), None);
+        assert_eq!(invalid.date, "unknown");
+    }
 }
