@@ -96,7 +96,7 @@ impl TyphooNApp {
                                 // From already-known active/cached symbols. This avoids a synchronous
                                 // SQLite all_keys() scan on every keystroke.
                                 let query_norm = query.replace('/', "");
-                                for sym in &self.cached_active_symbols {
+                                for sym in self.cached_active_symbols.iter() {
                                     let sym_norm = sym.replace('/', "").to_uppercase();
                                     if sym_norm.contains(&query_norm)
                                         && suggestion_keys.insert(sym_norm.clone())

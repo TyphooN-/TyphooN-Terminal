@@ -834,7 +834,7 @@ pub struct TyphooNApp {
     /// UX3: Deferred symbol action from right-panel context menus (applied at end of update()).
     pub(crate) deferred_symbol_action: SymbolAction,
     /// PERF: Cached active symbols list. Recomputed when chart/position/watchlist inputs change.
-    pub(crate) cached_active_symbols: Vec<String>,
+    pub(crate) cached_active_symbols: std::sync::Arc<[String]>,
     pub(crate) cached_active_symbols_key: Option<u64>,
     /// PERF: HashSet of cached_active_symbols for O(1) lookup.
     pub(crate) cached_active_symbols_set: std::collections::HashSet<String>,

@@ -2,6 +2,10 @@ use super::*;
 
 use super::app_runtime_support::*;
 
+fn shared_active_symbols(symbols: Vec<String>) -> std::sync::Arc<[String]> {
+    symbols.into()
+}
+
 /// Log the slowest `pre_broker` tick when it crosses the threshold, with a sorted
 /// breakdown of the others. Silent in steady state; a cold-start hang prints e.g.
 /// `Slow pre_broker tick: deferred_chart_loads took 13800.0ms — breakdown: ...`,
@@ -121,7 +125,7 @@ impl eframe::App for TyphooNApp {
         // (used by 5+ windows for "Active Only" filters).
         let active_symbols_key = self.active_symbols_cache_key();
         if self.cached_active_symbols_key != Some(active_symbols_key) {
-            self.cached_active_symbols = self.active_symbols();
+            self.cached_active_symbols = shared_active_symbols(self.active_symbols());
             // Store normalized (strip .SUFFIX, upper, no /) for O(1) contains in sync/filters.
             // Matches the normalize + eq used in market_data_sync etc.
             self.cached_active_symbols_set = self
@@ -959,5 +963,19 @@ impl eframe::App for TyphooNApp {
             let action = std::mem::replace(&mut self.deferred_symbol_action, SymbolAction::None);
             self.apply_symbol_action(action);
         }
+    }
+}
+
+#[cfg(test)]
+mod active_symbol_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn active_symbol_snapshot_preserves_rows_and_clones_by_pointer() {
+        let symbols = shared_active_symbols(vec!["AAPL".to_string(), "BTC/USD".to_string()]);
+        let shared = std::sync::Arc::clone(&symbols);
+
+        assert_eq!(symbols.as_ref(), ["AAPL", "BTC/USD"]);
+        assert!(std::sync::Arc::ptr_eq(&symbols, &shared));
     }
 }

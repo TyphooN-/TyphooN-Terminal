@@ -565,7 +565,7 @@ impl TyphooNApp {
             workspaces: std::collections::HashMap::new(),
             sparkline_cache: std::collections::HashMap::with_capacity(256),
             deferred_symbol_action: SymbolAction::None,
-            cached_active_symbols: Vec::with_capacity(64),
+            cached_active_symbols: std::sync::Arc::from([]),
             cached_active_symbols_key: None,
             cached_active_symbols_set: std::collections::HashSet::with_capacity(64),
             cached_kraken_sync_sectors: vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()],

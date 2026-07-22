@@ -330,11 +330,11 @@ impl TyphooNApp {
 
         // Fundamentals Viewer
         if self.show_fundamentals {
-            let fund_tickers = self.cached_active_symbols.clone();
+            let fund_tickers = std::sync::Arc::clone(&self.cached_active_symbols);
             // UX7: Pre-fetch sparklines for all tickers in fundamentals window
             let mut fw_sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> =
                 std::collections::HashMap::new();
-            for t in &fund_tickers {
+            for t in fund_tickers.iter() {
                 let closes = self.get_sparkline(t);
                 if !closes.is_empty() {
                     fw_sparklines.insert(t.to_uppercase(), closes);
@@ -345,7 +345,7 @@ impl TyphooNApp {
                         .resizable(true)
                         .default_size([520.0, 480.0])
                         .show(ctx, |ui| {
-                            let tickers = fund_tickers.clone();
+                            let tickers = fund_tickers.as_ref();
 
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(
@@ -375,7 +375,7 @@ impl TyphooNApp {
                                         .on_hover_text("Refresh fundamentals only for symbols currently active in charts/windows")
                                         .clicked()
                                 {
-                                    for t in &tickers {
+                                    for t in tickers {
                                         if !t.is_empty() {
                                             let db_path = cache_db_path();
                                             let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrapeOne {
@@ -409,7 +409,7 @@ impl TyphooNApp {
                                 if tickers.len() > 1 && ui.small_button("None").clicked() {
                                     self.fundamentals_hidden_symbols = tickers.iter().cloned().collect();
                                 }
-                                for ticker in &tickers {
+                                for ticker in tickers {
                                     let visible = !self.fundamentals_hidden_symbols.contains(ticker);
                                     let response = ui
                                         .selectable_label(visible, egui::RichText::new(ticker).small())
