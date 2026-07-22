@@ -12,6 +12,19 @@ const BAR_SYNC_STATS_HIDDEN_REFRESH: std::time::Duration = std::time::Duration::
 // 30s while 10k+ symbols are catching up.
 const BAR_SYNC_STATS_HEAVY_REFRESH: std::time::Duration = std::time::Duration::from_secs(120);
 
+fn shared_bar_sync_rows(rows: Vec<SyncStatsRow>) -> std::sync::Arc<[SyncStatsRow]> {
+    rows.into()
+}
+
+fn bar_sync_rows_refresh_due(
+    initialized: bool,
+    last_refresh: std::time::Instant,
+    now: std::time::Instant,
+    refresh_interval: std::time::Duration,
+) -> bool {
+    !initialized || now.duration_since(last_refresh) >= refresh_interval
+}
+
 fn bar_sync_stats_refresh_interval_for_broad_symbol_count(
     heavy_sync_in_progress: bool,
     sync_status_visible: bool,
@@ -63,9 +76,12 @@ impl TyphooNApp {
             // A snapshot compute is already running on a worker — don't stack another.
             return;
         }
-        if !self.cached_bar_sync_rows.is_empty()
-            && now.duration_since(self.cached_bar_sync_rows_last) < refresh_interval
-        {
+        if !bar_sync_rows_refresh_due(
+            self.cached_bar_sync_rows_initialized,
+            self.cached_bar_sync_rows_last,
+            now,
+            refresh_interval,
+        ) {
             return;
         }
         // The bar-sync matrix scan (full xStocks/Merged catalog × enabled
@@ -159,6 +175,7 @@ impl TyphooNApp {
                     self.auto_full_tilt_active = true;
                 }
                 self.cached_bar_sync_rows = result.rows;
+                self.cached_bar_sync_rows_initialized = true;
                 self.cached_bar_sync_rows_last = std::time::Instant::now();
                 self.bar_sync_compute_rx = None;
             }
@@ -171,9 +188,9 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn compute_bar_sync_rows(&mut self) -> Vec<SyncStatsRow> {
+    pub(super) fn compute_bar_sync_rows(&mut self) -> std::sync::Arc<[SyncStatsRow]> {
         self.refresh_bar_sync_rows_if_stale();
-        self.cached_bar_sync_rows.clone()
+        std::sync::Arc::clone(&self.cached_bar_sync_rows)
     }
 
     pub(super) fn render_sync_status_window(&mut self, ctx: &egui::Context) {
@@ -181,7 +198,7 @@ impl TyphooNApp {
             return;
         }
         let rows = self.compute_bar_sync_rows();
-        let broker_totals = compute_bar_sync_broker_totals(&rows);
+        let broker_totals = compute_bar_sync_broker_totals(rows.as_ref());
         let mut sync_save_after = false;
         let mut show_sync_status = self.show_sync_status;
         egui::Window::new("Sync Status")
@@ -210,7 +227,7 @@ impl TyphooNApp {
                 // reachable % is shown alongside only when it differs.
                 let unreachable_by_broker: std::collections::HashMap<&str, u64> = {
                     let mut m: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
-                    for row in &rows {
+                    for row in rows.iter() {
                         if row.unreachable > 0 {
                             *m.entry(row.broker.as_str()).or_default() += row.unreachable;
                         }
@@ -271,7 +288,7 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new("Unhealthy").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
                         ui.end_row();
-                        for row in &rows {
+                        for row in rows.iter() {
                             let broker_color = match row.broker.as_str() {
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
                                 "Kraken Spot" | "Kraken Equities" | "Kraken Equities (Tradable)" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
@@ -390,7 +407,7 @@ pub(super) struct BarSyncInputs {
 
 /// Result of an off-thread bar-sync recompute, applied by `poll_bar_sync_compute`.
 pub(crate) struct BarSyncResult {
-    rows: Vec<SyncStatsRow>,
+    rows: std::sync::Arc<[SyncStatsRow]>,
     overall_pct: f32,
     total: u64,
 }
@@ -468,7 +485,7 @@ impl BarSyncInputs {
             (healthy as f32 / total as f32) * 100.0
         };
         BarSyncResult {
-            rows,
+            rows: shared_bar_sync_rows(rows),
             overall_pct,
             total,
         }
@@ -1085,5 +1102,32 @@ mod tests {
         assert!(BAR_SYNC_STATS_HIDDEN_REFRESH > BAR_SYNC_STATS_VISIBLE_REFRESH);
         assert!(BAR_SYNC_STATS_HEAVY_REFRESH >= std::time::Duration::from_secs(120));
         assert!(BAR_SYNC_STATS_HEAVY_REFRESH > BAR_SYNC_STATS_HIDDEN_REFRESH);
+    }
+
+    #[test]
+    fn shared_bar_sync_rows_preserve_data_and_clone_by_pointer() {
+        let rows = shared_bar_sync_rows(vec![SyncStatsRow {
+            broker: "Kraken Spot".to_string(),
+            ..Default::default()
+        }]);
+        let shared = std::sync::Arc::clone(&rows);
+
+        assert_eq!(rows[0].broker, "Kraken Spot");
+        assert!(std::sync::Arc::ptr_eq(&rows, &shared));
+    }
+
+    #[test]
+    fn completed_empty_bar_sync_snapshot_still_respects_refresh_interval() {
+        let now = std::time::Instant::now();
+        let interval = std::time::Duration::from_secs(15);
+
+        assert!(bar_sync_rows_refresh_due(false, now, now, interval));
+        assert!(!bar_sync_rows_refresh_due(true, now, now, interval));
+        assert!(bar_sync_rows_refresh_due(
+            true,
+            now - interval,
+            now,
+            interval
+        ));
     }
 }
