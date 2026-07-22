@@ -1080,6 +1080,15 @@ fn chart_persist_merged_equity_bars_best_effort(
     timeframe: &str,
     bars: &[Bar],
 ) {
+    // Best-effort merged-cache write: the returned display bars never depend on
+    // it. Probe write-lock contention BEFORE serializing — during heavy sync a
+    // bulk writer holds the lock, and `put_bars_if_uncontended` would drop the
+    // write anyway, so serializing tens of thousands of merged bars to JSON
+    // (then packing + zstd) on the render thread first was pure waste. When the
+    // lock is free this still persists so the next load hits the fast path.
+    if cache.write_lock_contended() {
+        return;
+    }
     let Some(json) = chart_merged_bars_to_cache_json(bars) else {
         return;
     };

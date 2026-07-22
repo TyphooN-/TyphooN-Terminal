@@ -2549,6 +2549,18 @@ impl SqliteCache {
     /// transaction. The blob is a best-effort cache, so callers must already
     /// tolerate it being absent (it gets re-materialised off-thread).
     /// Mirrors the prep in [`put_bars`]; keep the two in sync.
+    /// Advisory probe: `true` if the write connection is currently held, so a
+    /// `put_bars_if_uncontended` call would return `false` (dropped) anyway.
+    /// Lets a caller skip building a large write payload (JSON-serialize +
+    /// binary pack + zstd) for a best-effort write that won't land — during
+    /// heavy sync a bulk bar writer holds the lock, and serializing tens of
+    /// thousands of merged bars on the render thread just to drop the write was
+    /// a real stall. Racy by nature (the lock state can change immediately
+    /// after); only use it to skip optional work, never for correctness.
+    pub fn write_lock_contended(&self) -> bool {
+        matches!(self.conn.try_lock(), Err(std::sync::TryLockError::WouldBlock))
+    }
+
     pub fn put_bars_if_uncontended(&self, key: &str, json_data: &str) -> Result<bool, String> {
         let binary = pack_bars_for_key(key, json_data)?;
         let bar_count = u32::from_le_bytes(
