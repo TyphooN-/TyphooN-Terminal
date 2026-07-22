@@ -438,15 +438,36 @@ pub(crate) struct BarSyncResult {
 
 type DetailedSyncKeyParts<'a> = (&'a str, &'a str, &'a str);
 
-fn detailed_sync_key_parts(
-    detailed_stats: &[(String, i64, i64)],
-) -> std::collections::HashSet<DetailedSyncKeyParts<'_>> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DetailedSyncRow {
+    bar_count: i64,
+    write_ts_s: i64,
+    last_bar_ms: Option<i64>,
+}
+
+type DetailedSyncRows<'a> = std::collections::HashMap<DetailedSyncKeyParts<'a>, DetailedSyncRow>;
+
+fn detailed_sync_rows<'a>(
+    detailed_stats: &'a [(String, i64, i64)],
+    bar_ts_cache: &std::collections::HashMap<String, (i64, i64, i64)>,
+) -> DetailedSyncRows<'a> {
     detailed_stats
         .iter()
-        .filter_map(|(key, _, _)| {
-            let (source, rest) = key.split_once(':')?;
-            let (symbol, timeframe) = rest.rsplit_once(':')?;
-            Some((source, symbol, timeframe))
+        .filter_map(|(key, bar_count, write_ts_s)| {
+            let (source, remainder) = key.split_once(':')?;
+            let (symbol, timeframe) = remainder.rsplit_once(':')?;
+            let last_bar_ms = bar_ts_cache
+                .get(key)
+                .map(|(_, last_bar_ms, _)| *last_bar_ms)
+                .filter(|last_bar_ms| *last_bar_ms > 0);
+            Some((
+                (source, symbol, timeframe),
+                DetailedSyncRow {
+                    bar_count: *bar_count,
+                    write_ts_s: *write_ts_s,
+                    last_bar_ms,
+                },
+            ))
         })
         .collect()
 }
@@ -507,17 +528,7 @@ impl BarSyncInputs {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let prepared_equity_symbols =
             PreparedBarSyncEquitySymbols::new(&self.catalog_symbols, &self.demand_symbols);
-        let checked_or_complete_lookup = |key: &str| -> bool {
-            let mut parts = key.splitn(3, ':');
-            let Some(prefix) = parts.next() else {
-                return false;
-            };
-            let Some(symbol) = parts.next() else {
-                return false;
-            };
-            let Some(tf) = parts.next() else {
-                return false;
-            };
+        let checked_or_complete_parts = |prefix: &str, symbol: &str, tf: &str| -> bool {
             // Kraken Spot WS OHLC snapshots/updates are authoritative liveness checks for
             // subscribed low-timeframe pairs. Illiquid pairs may have an old last trade,
             // but if WS just delivered the recent-window snapshot/update, the cache is in
@@ -542,21 +553,37 @@ impl BarSyncInputs {
                 _ => false,
             }
         };
+        let checked_or_complete_lookup = |key: &str| -> bool {
+            let mut parts = key.splitn(3, ':');
+            let Some(prefix) = parts.next() else {
+                return false;
+            };
+            let Some(symbol) = parts.next() else {
+                return false;
+            };
+            let Some(tf) = parts.next() else {
+                return false;
+            };
+            checked_or_complete_parts(prefix, symbol, tf)
+        };
         let mut rows = compute_bar_sync_stats(
             &self.detailed_stats,
             &self.bar_ts_cache,
             &checked_or_complete_lookup,
         );
+        let detailed_rows = detailed_sync_rows(&self.detailed_stats, &self.bar_ts_cache);
         self.add_kraken_equities_tradable_catalog_row(&mut rows);
         self.add_expected_kraken_sync_rows(
             &mut rows,
             &prepared_equity_symbols,
-            &checked_or_complete_lookup,
+            &detailed_rows,
+            &checked_or_complete_parts,
         );
         self.add_kraken_equities_merged_rows(
             &mut rows,
             &prepared_equity_symbols,
-            &checked_or_complete_lookup,
+            &detailed_rows,
+            &checked_or_complete_parts,
         );
         relabel_kraken_equity_intraday_rows(&mut rows);
         // Disabled Sync TFs (e.g. M1/M5 unchecked) are skipped by automated
@@ -617,7 +644,8 @@ impl BarSyncInputs {
         &self,
         rows: &mut Vec<SyncStatsRow>,
         prepared_equity_symbols: &PreparedBarSyncEquitySymbols<'_>,
-        checked_or_complete_lookup: &dyn Fn(&str) -> bool,
+        detailed: &DetailedSyncRows<'_>,
+        checked_or_complete_parts: &dyn Fn(&str, &str, &str) -> bool,
     ) {
         if self.timeframes.is_empty() {
             return;
@@ -626,11 +654,6 @@ impl BarSyncInputs {
             return;
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let mut detailed: std::collections::HashMap<&str, (i64, i64)> =
-            std::collections::HashMap::with_capacity(self.detailed_stats.len());
-        for (key, bar_count, write_ts_s) in &self.detailed_stats {
-            detailed.insert(key.as_str(), (*bar_count, *write_ts_s));
-        }
 
         for raw_tf in &self.timeframes {
             let Some(tf) = normalize_sync_timeframe_key(raw_tf) else {
@@ -639,7 +662,7 @@ impl BarSyncInputs {
             if !self.kraken_equities_merged_source_supported(tf) {
                 continue;
             }
-            let symbols =
+            let (symbols, symbols_are_normalized) =
                 self.kraken_equities_merged_symbols_for_timeframe(prepared_equity_symbols, tf);
             if symbols.is_empty() {
                 continue;
@@ -649,19 +672,25 @@ impl BarSyncInputs {
             let mut empty = 0u64;
             let mut unreachable = 0u64;
             for symbol in symbols.iter() {
-                let symbol = normalize_market_data_symbol(symbol)
-                    .replace('/', "")
-                    .trim_end_matches(".EQ")
-                    .to_ascii_uppercase();
+                let normalized_symbol;
+                let symbol = if symbols_are_normalized {
+                    symbol.as_str()
+                } else {
+                    normalized_symbol = normalize_market_data_symbol(symbol)
+                        .replace('/', "")
+                        .trim_end_matches(".EQ")
+                        .to_ascii_uppercase();
+                    normalized_symbol.as_str()
+                };
                 if symbol.is_empty() {
                     continue;
                 }
                 let status = self.kraken_equities_merged_symbol_status(
-                    &symbol,
+                    symbol,
                     tf,
                     now_ms,
-                    &detailed,
-                    checked_or_complete_lookup,
+                    detailed,
+                    checked_or_complete_parts,
                 );
                 match status {
                     MergedSyncStatus::Healthy => healthy += 1,
@@ -700,7 +729,7 @@ impl BarSyncInputs {
         &'a self,
         prepared_equity_symbols: &'a PreparedBarSyncEquitySymbols<'_>,
         tf: &str,
-    ) -> &'a [String] {
+    ) -> (&'a [String], bool) {
         // Full-catalog M1/M5 is not reachable today: Alpaca assist is disabled
         // for those rows, Yahoo assist is unsupported, and native Kraken WS only
         // exists for tokenized xStocks. Keep the Merged denominator honest so
@@ -708,11 +737,11 @@ impl BarSyncInputs {
         // scheduler into wasting assist-provider RPM on ignored low-TF rows.
         if matches!(tf, "1Min" | "5Min") {
             if !self.ws_sweep_symbols.is_empty() {
-                return &self.ws_sweep_symbols;
+                return (&self.ws_sweep_symbols, false);
             }
-            return &self.demand_symbols;
+            return (&self.demand_symbols, false);
         }
-        prepared_equity_symbols.broad(tf)
+        (prepared_equity_symbols.broad(tf), true)
     }
 
     fn kraken_equities_merged_source_supported(&self, tf: &str) -> bool {
@@ -732,24 +761,22 @@ impl BarSyncInputs {
         symbol: &str,
         tf: &str,
         now_ms: i64,
-        detailed: &std::collections::HashMap<&str, (i64, i64)>,
-        checked_or_complete_lookup: &dyn Fn(&str) -> bool,
+        detailed: &DetailedSyncRows<'_>,
+        checked_or_complete_parts: &dyn Fn(&str, &str, &str) -> bool,
     ) -> MergedSyncStatus {
         let mut saw_stale = false;
-        let merged_key = chart_merged_equity_cache_key(symbol, tf);
-        if let Some((bar_count, write_ts_s)) = detailed.get(merged_key.as_str()).copied() {
-            if bar_count > 0 {
-                let last_ms = self
-                    .bar_ts_cache
-                    .get(&merged_key)
-                    .map(|(_, last_ms, _)| *last_ms)
-                    .filter(|last_ms| *last_ms > 0)
-                    .unwrap_or_else(|| write_ts_s.saturating_mul(1000));
+        if let Some(row) = detailed.get(&("merged", symbol, tf)).copied() {
+            if row.bar_count > 0 {
+                let last_ms = row
+                    .last_bar_ms
+                    .unwrap_or_else(|| row.write_ts_s.saturating_mul(1000));
                 if let Some(period_ms) = merged_sync_period_ms(tf) {
-                    let write_ms = write_ts_s.saturating_mul(1000);
+                    let write_ms = row.write_ts_s.saturating_mul(1000);
                     let recently_checked = write_ms > 0 && now_ms - write_ms <= period_ms * 24;
                     let bar_aged_out = now_ms - last_ms > period_ms * 24;
-                    if bar_aged_out && !recently_checked && !checked_or_complete_lookup(&merged_key)
+                    if bar_aged_out
+                        && !recently_checked
+                        && !checked_or_complete_parts("merged", symbol, tf)
                     {
                         saw_stale = true;
                     } else {
@@ -791,19 +818,15 @@ impl BarSyncInputs {
                 tombstoned_sources += 1;
             }
 
-            let key = format!("{source}:{symbol}:{tf}");
-            let Some((bar_count, write_ts_s)) = detailed.get(key.as_str()).copied() else {
+            let Some(row) = detailed.get(&(source, symbol, tf)).copied() else {
                 continue;
             };
-            if bar_count <= 0 {
+            if row.bar_count <= 0 {
                 continue;
             }
-            let last_ms = self
-                .bar_ts_cache
-                .get(&key)
-                .map(|(_, last_ms, _)| *last_ms)
-                .filter(|last_ms| *last_ms > 0)
-                .unwrap_or_else(|| write_ts_s.saturating_mul(1000));
+            let last_ms = row
+                .last_bar_ms
+                .unwrap_or_else(|| row.write_ts_s.saturating_mul(1000));
             if last_ms <= 0 {
                 continue;
             }
@@ -811,10 +834,10 @@ impl BarSyncInputs {
                 saw_stale = true;
                 continue;
             };
-            let write_ms = write_ts_s.saturating_mul(1000);
+            let write_ms = row.write_ts_s.saturating_mul(1000);
             let recently_checked = write_ms > 0 && now_ms - write_ms <= period_ms * 24;
             let bar_aged_out = now_ms - last_ms > period_ms * 24;
-            if bar_aged_out && !recently_checked && !checked_or_complete_lookup(&key) {
+            if bar_aged_out && !recently_checked && !checked_or_complete_parts(source, symbol, tf) {
                 saw_stale = true;
             } else {
                 return MergedSyncStatus::Healthy;
@@ -833,13 +856,13 @@ impl BarSyncInputs {
         &self,
         rows: &mut Vec<SyncStatsRow>,
         prepared_equity_symbols: &PreparedBarSyncEquitySymbols<'_>,
-        checked_or_complete_lookup: &dyn Fn(&str) -> bool,
+        detailed: &DetailedSyncRows<'_>,
+        checked_or_complete_parts: &dyn Fn(&str, &str, &str) -> bool,
     ) {
         let timeframes = &self.timeframes;
         if timeframes.is_empty() || (!self.cache_stats_present && self.detailed_stats.is_empty()) {
             return;
         }
-        let existing = detailed_sync_key_parts(&self.detailed_stats);
         let mut row_index: std::collections::HashMap<(String, String), usize> = rows
             .iter()
             .enumerate()
@@ -892,12 +915,11 @@ impl BarSyncInputs {
                 };
                 let row_key = (broker.to_string(), tf.to_string());
                 for symbol in symbols.iter() {
-                    if existing.contains(&(source, symbol.as_str(), tf)) {
+                    if detailed.contains_key(&(source, symbol.as_str(), tf)) {
                         continue;
                     }
-                    let expected_key = format!("{source}:{symbol}:{tf}");
                     let fetch_key = alpaca_fetch_key(symbol, tf);
-                    let provider_settled = checked_or_complete_lookup(&expected_key);
+                    let provider_settled = checked_or_complete_parts(source, symbol, tf);
                     let provider_unreachable = self
                         .no_data_keys_by_source
                         .get(source)
@@ -1235,19 +1257,25 @@ mod tests {
     }
 
     #[test]
-    fn detailed_sync_key_parts_borrow_canonical_input_segments() {
+    fn detailed_sync_rows_borrow_canonical_segments_and_inline_last_bar_timestamp() {
         let detailed = vec![
             ("kraken:BTC/USD:1Day".to_string(), 42, 7),
             ("custom:SY:M:1Hour".to_string(), 12, 9),
             ("malformed".to_string(), 0, 0),
         ];
-        let keys = detailed_sync_key_parts(&detailed);
+        let bar_ts =
+            std::collections::HashMap::from([("kraken:BTC/USD:1Day".to_string(), (1, 6_000, 2))]);
+        let rows = detailed_sync_rows(&detailed, &bar_ts);
 
-        assert!(keys.contains(&("kraken", "BTC/USD", "1Day")));
-        assert!(keys.contains(&("custom", "SY:M", "1Hour")));
-        assert_eq!(keys.len(), 2);
-        let (source, symbol, timeframe) =
-            keys.get(&("kraken", "BTC/USD", "1Day")).copied().unwrap();
+        assert_eq!(rows.len(), 2);
+        let ((source, symbol, timeframe), row) = rows
+            .iter()
+            .find(|(parts, _)| **parts == ("kraken", "BTC/USD", "1Day"))
+            .expect("canonical key should be segmented");
+        assert_eq!(
+            (row.bar_count, row.write_ts_s, row.last_bar_ms),
+            (42, 7, Some(6_000))
+        );
         assert!(std::ptr::eq(source.as_ptr(), detailed[0].0.as_ptr()));
         assert!(std::ptr::eq(symbol.as_ptr(), detailed[0].0[7..].as_ptr()));
         assert!(std::ptr::eq(
