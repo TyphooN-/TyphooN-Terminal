@@ -44,6 +44,18 @@ const KRAKEN_WS_SUBSCRIBE_FRAME_DELAY: Duration = Duration::from_millis(20);
 /// backpressured by the bounded writer instead of piling up behind a 51-frame
 /// subscribe burst.
 const KRAKEN_WS_SUBSCRIBE_DRAIN_IDLE: Duration = Duration::from_millis(50);
+/// Hard upper bound on how long a single subscribe frame drains before we send
+/// the next one. The idle-detection above breaks when the socket goes quiet for
+/// `KRAKEN_WS_SUBSCRIBE_DRAIN_IDLE`, but an *active* low-timeframe interval
+/// (15Min/30Min/4Hour) over a large pair universe streams bars continuously, so
+/// the 50ms idle gap never appears — the drain never breaks, the outer loop
+/// never reaches the next batch, and the whole burst hits
+/// `KRAKEN_WS_SUBSCRIBE_TIMEOUT` and reconnects (the every-2-3-min resubscribe
+/// storm in the live log). Capping each frame's drain lets the burst always
+/// progress through every batch; the writer's `bar_tx.send().await`
+/// backpressure still bounds in-flight snapshot memory. At the worst 13k/250≈52
+/// batches this keeps the full burst (52 × 1.5s ≈ 78s) under the 120s timeout.
+const KRAKEN_WS_SUBSCRIBE_DRAIN_MAX: Duration = Duration::from_millis(1_500);
 /// How long the subscribe-burst can take before we time it out and treat
 /// the connection as broken. Sized so even the 13k/250 = 52 batches at
 /// 1 frame/sec stay well under it.
@@ -52,6 +64,12 @@ const KRAKEN_WS_SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(120);
 /// bounded catalog batch, drain the initial history burst, unsubscribe, close.
 /// This idle window decides when the snapshot burst is done.
 const KRAKEN_WS_SNAPSHOT_SWEEP_DRAIN_IDLE: Duration = Duration::from_millis(750);
+/// Wall-clock cap on a single snapshot-sweep drain, mirroring
+/// `KRAKEN_WS_SUBSCRIBE_DRAIN_MAX`: the 750ms idle test never fires on an
+/// actively-streaming universe, so an uncapped drain would hang the sweep
+/// indefinitely. Sweeps are bounded high-TF batches, so a few seconds is ample
+/// for the snapshot to land while still guaranteeing forward progress.
+const KRAKEN_WS_SNAPSHOT_SWEEP_DRAIN_MAX: Duration = Duration::from_secs(5);
 
 /// Kraken WS v2 caps subscribe frames at a few hundred symbols. We chunk at
 /// 250 to stay comfortably under that ceiling without paying the per-frame
@@ -500,7 +518,13 @@ async fn drain_ohlc_ws_until_idle<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    // Bound the total drain: on an active universe the `idle` gap never
+    // appears, so idle-detection alone would spin here forever.
+    let deadline = tokio::time::Instant::now() + KRAKEN_WS_SNAPSHOT_SWEEP_DRAIN_MAX;
     loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(());
+        }
         match tokio::time::timeout(idle, stream.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 if is_heartbeat_or_status(&text) || is_subscribe_ack(&text) {
@@ -561,7 +585,14 @@ async fn run_ohlc_streamer_once(
             // socket goes briefly idle; if the downstream writer is saturated,
             // `bar_tx.send(...).await` backpressures this loop and naturally
             // slows further subscriptions without shrinking universe coverage.
+            // A wall-clock cap guarantees the drain also ends when the socket
+            // never goes idle (active low-TF universe), so the burst still
+            // reaches every batch instead of hanging until the 120s timeout.
+            let drain_deadline = tokio::time::Instant::now() + KRAKEN_WS_SUBSCRIBE_DRAIN_MAX;
             loop {
+                if tokio::time::Instant::now() >= drain_deadline {
+                    break;
+                }
                 match tokio::time::timeout(KRAKEN_WS_SUBSCRIBE_DRAIN_IDLE, stream.next()).await {
                     Ok(Some(Ok(Message::Text(text)))) => {
                         if is_heartbeat_or_status(&text) || is_subscribe_ack(&text) {
