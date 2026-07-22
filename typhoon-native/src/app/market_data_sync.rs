@@ -532,6 +532,41 @@ impl TyphooNApp {
         }
     }
 
+    /// Every 60s, flush the rolling per-source sync-throughput counters to a
+    /// `tracing::info` line and reset the window. Reports actual catch-up rate
+    /// (cells synced/min per provider) alongside the Alpaca pool's aggregate RPM
+    /// ceiling (accounts × per-account rpm), so the operator can confirm the
+    /// multi-account rotation is in force and saturating the budget. Symbol
+    /// throughput — not HTTP req/min — because Alpaca's multi-symbol bars
+    /// endpoint packs many cells per request; the ceiling is the request budget.
+    /// Silent when nothing synced in the window (no idle spam).
+    pub(super) fn maybe_log_sync_throughput(&mut self, now_instant: std::time::Instant) {
+        if now_instant.duration_since(self.sync_throughput_window_start)
+            < std::time::Duration::from_secs(60)
+        {
+            return;
+        }
+        self.sync_throughput_window_start = now_instant;
+        let counts = std::mem::take(&mut self.sync_throughput_window);
+        let total: u32 = counts.values().sum();
+        if total == 0 {
+            return;
+        }
+        let get = |src: &str| counts.get(src).copied().unwrap_or(0);
+        tracing::info!(
+            "Sync throughput (60s): {} cells — alpaca={} kraken={} kraken-equities={} kraken-futures={} yahoo={} · Alpaca pool: {} acct × {} rpm/acct = ~{} req/min ceiling",
+            total,
+            get("alpaca"),
+            get("kraken"),
+            get("kraken-equities"),
+            get("kraken-futures"),
+            get("yahoo-chart"),
+            self.alpaca_data_account_count(),
+            self.alpaca_effective_historical_rpm(),
+            self.alpaca_aggregate_historical_rpm(),
+        );
+    }
+
     fn broad_dispatch_lane_due(
         last_run: std::time::Instant,
         now_instant: std::time::Instant,
@@ -848,6 +883,20 @@ impl TyphooNApp {
         let sym_key = normalize_market_data_symbol(symbol).replace('/', "");
         if sym_key.is_empty() {
             return;
+        }
+        // Count this synced cell toward the rolling throughput window (flushed by
+        // maybe_log_sync_throughput). Canonical sources only so the log stays a
+        // fixed, comparable set.
+        let canonical_source: Option<&'static str> = match source {
+            "alpaca" => Some("alpaca"),
+            "kraken" => Some("kraken"),
+            "kraken-futures" => Some("kraken-futures"),
+            "kraken-equities" => Some("kraken-equities"),
+            "yahoo-chart" => Some("yahoo-chart"),
+            _ => None,
+        };
+        if let Some(src) = canonical_source {
+            *self.sync_throughput_window.entry(src).or_insert(0) += 1;
         }
         let now_s = chrono::Utc::now().timestamp();
         let state = SyncCacheState {

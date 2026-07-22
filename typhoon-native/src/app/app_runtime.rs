@@ -406,6 +406,12 @@ impl eframe::App for TyphooNApp {
         self.run_broad_dispatch_slice(now_instant);
         self.pump_dispatch_ms = dispatch_started.elapsed().as_secs_f64() * 1000.0;
 
+        // Periodic sync-throughput heartbeat (cells/min per provider + Alpaca
+        // pool RPM ceiling). Runs on every pass — visible and hidden — so
+        // overnight catch-up rate is observable; internally rate-limited to 60s
+        // and silent when idle.
+        self.maybe_log_sync_throughput(now_instant);
+
         let session_save_started = std::time::Instant::now();
         self.maybe_incremental_session_save(ctx);
         self.pump_session_save_ms = session_save_started.elapsed().as_secs_f64() * 1000.0;

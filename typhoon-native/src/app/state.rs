@@ -852,6 +852,15 @@ pub struct TyphooNApp {
     /// `(no_data_pairs.len, alpaca unresolvable.len, retry_queue.len)` at the
     /// last `cached_alpaca_no_data_workset` rebuild. `None` forces a rebuild.
     pub(super) cached_alpaca_no_data_workset_sig: Option<(usize, usize, usize)>,
+    /// Rolling per-source count of (symbol,timeframe) cells successfully synced
+    /// in the current throughput window, keyed by canonical source. Flushed to a
+    /// `tracing::info` "Sync throughput" line every 60s so the operator can see
+    /// actual catch-up rate against the Alpaca pool's aggregate RPM ceiling
+    /// (proof the account rotation is saturating the budget). See
+    /// `maybe_log_sync_throughput`.
+    pub(super) sync_throughput_window: std::collections::HashMap<&'static str, u32>,
+    /// Start of the current `sync_throughput_window` accounting interval.
+    pub(super) sync_throughput_window_start: std::time::Instant,
     /// Cached Kraken bar-state map keyed by normalized `(symbol, timeframe)`.
     pub(super) cached_kraken_sync_state:
         std::collections::HashMap<(String, String), SyncCacheState>,

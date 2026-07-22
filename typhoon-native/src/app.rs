@@ -570,6 +570,8 @@ impl TyphooNApp {
             cached_alpaca_sync_state_rev: None,
             cached_alpaca_no_data_workset: std::collections::HashSet::new(),
             cached_alpaca_no_data_workset_sig: None,
+            sync_throughput_window: std::collections::HashMap::new(),
+            sync_throughput_window_start: std::time::Instant::now(),
             cached_kraken_sync_state: std::collections::HashMap::new(),
             cached_kraken_sync_state_rev: None,
             cached_kraken_equity_catalog: std::sync::Arc::new(Vec::new()),
