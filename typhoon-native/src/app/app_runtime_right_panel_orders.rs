@@ -54,7 +54,7 @@ fn order_leg_role(o: &OrderInfo) -> (&'static str, egui::Color32) {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OrderGroupKey {
     symbol: String,
     side: String,
@@ -68,7 +68,6 @@ struct OrderGroupKey {
 }
 
 struct OrderDisplayGroup<'a> {
-    key: OrderGroupKey,
     orders: Vec<&'a OrderInfo>,
     total_qty: f64,
     all_qty_numeric: bool,
@@ -119,10 +118,13 @@ fn order_group_key(order: &OrderInfo) -> OrderGroupKey {
 
 fn order_display_groups(orders: &[OrderInfo]) -> Vec<OrderDisplayGroup<'_>> {
     let mut groups: Vec<OrderDisplayGroup<'_>> = Vec::new();
+    let mut group_indices: std::collections::HashMap<OrderGroupKey, usize> =
+        std::collections::HashMap::with_capacity(orders.len());
     for order in orders {
         let key = order_group_key(order);
         let qty = parse_order_qty_value(&order.qty);
-        if let Some(group) = groups.iter_mut().find(|group| group.key == key) {
+        if let Some(index) = group_indices.get(&key).copied() {
+            let group = &mut groups[index];
             group.orders.push(order);
             if let Some(qty) = qty {
                 group.total_qty += qty;
@@ -130,8 +132,8 @@ fn order_display_groups(orders: &[OrderInfo]) -> Vec<OrderDisplayGroup<'_>> {
                 group.all_qty_numeric = false;
             }
         } else {
+            group_indices.insert(key, groups.len());
             groups.push(OrderDisplayGroup {
-                key,
                 orders: vec![order],
                 total_qty: qty.unwrap_or(0.0),
                 all_qty_numeric: qty.is_some(),
@@ -146,71 +148,9 @@ impl TyphooNApp {
     pub(super) fn render_right_panel_orders_section(&mut self, ui: &mut egui::Ui) {
         // ── Orders Section ────────────────────────────────────
         let alpaca_orders_available = self.alpaca_enabled;
-        // let heavy = self.heavy_sync_in_progress; // removed - always build small order groups
         let kr_orders_available = self.kraken_enabled;
-        let mut alpaca_order_groups: Vec<AccountOrders> = if self.show_alpaca_orders {
-            if !self.alpaca_account_orders.is_empty() {
-                self.alpaca_account_orders.clone()
-            } else if !self.live_orders.is_empty() {
-                vec![AccountOrders {
-                    account_id: self.alpaca_primary_account_id.clone(),
-                    label: self
-                        .alpaca_account_roster
-                        .iter()
-                        .find(|account| account.is_primary)
-                        .map(|account| account.label.clone())
-                        .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
-                    is_primary: true,
-                    orders: self.live_orders.clone(),
-                }]
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-        alpaca_order_groups.retain(|account| {
-            !self
-                .hidden_alpaca_order_account_ids
-                .contains(&account.account_id)
-        });
-        let mut kraken_order_groups: Vec<KrakenAccountOrders> = if self.show_kr_orders {
-            if !self.kraken_account_orders.is_empty() {
-                self.kraken_account_orders.clone()
-            } else if !self.kraken_open_orders.is_empty() {
-                vec![KrakenAccountOrders {
-                    account_id: self.kraken_primary_account_id.clone(),
-                    label: self
-                        .kraken_account_roster
-                        .iter()
-                        .find(|account| account.is_primary)
-                        .map(|account| account.label.clone())
-                        .unwrap_or_else(|| "Kraken (Live)".to_string()),
-                    is_primary: true,
-                    orders: self.kraken_open_orders.clone(),
-                }]
-            } else {
-                self.kraken_account_roster
-                    .iter()
-                    .filter(|account| account.connected)
-                    .map(|account| KrakenAccountOrders {
-                        account_id: account.id.clone(),
-                        label: account.label.clone(),
-                        is_primary: account.is_primary,
-                        orders: Vec::new(),
-                    })
-                    .collect()
-            }
-        } else {
-            Vec::new()
-        };
-        kraken_order_groups.retain(|account| {
-            !self
-                .hidden_kraken_order_account_ids
-                .contains(&account.account_id)
-        });
         // Cheap counts from source data for the header title (avoids extra pass over groups).
-        // Full groups still built for toggles/render inside expanded section.
+        // Full account snapshots are cloned only when the section body renders.
         let alpaca_count = if self.show_alpaca_orders {
             if !self.alpaca_account_orders.is_empty() {
                 self.alpaca_account_orders
@@ -253,6 +193,67 @@ impl TyphooNApp {
         .id_salt("orders_section")
         .default_open(self.right_orders_open)
         .show(ui, |ui| {
+            let mut alpaca_order_groups: Vec<AccountOrders> = if self.show_alpaca_orders {
+                if !self.alpaca_account_orders.is_empty() {
+                    self.alpaca_account_orders.clone()
+                } else if !self.live_orders.is_empty() {
+                    vec![AccountOrders {
+                        account_id: self.alpaca_primary_account_id.clone(),
+                        label: self
+                            .alpaca_account_roster
+                            .iter()
+                            .find(|account| account.is_primary)
+                            .map(|account| account.label.clone())
+                            .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
+                        is_primary: true,
+                        orders: self.live_orders.clone(),
+                    }]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            alpaca_order_groups.retain(|account| {
+                !self
+                    .hidden_alpaca_order_account_ids
+                    .contains(&account.account_id)
+            });
+            let mut kraken_order_groups: Vec<KrakenAccountOrders> = if self.show_kr_orders {
+                if !self.kraken_account_orders.is_empty() {
+                    self.kraken_account_orders.clone()
+                } else if !self.kraken_open_orders.is_empty() {
+                    vec![KrakenAccountOrders {
+                        account_id: self.kraken_primary_account_id.clone(),
+                        label: self
+                            .kraken_account_roster
+                            .iter()
+                            .find(|account| account.is_primary)
+                            .map(|account| account.label.clone())
+                            .unwrap_or_else(|| "Kraken (Live)".to_string()),
+                        is_primary: true,
+                        orders: self.kraken_open_orders.clone(),
+                    }]
+                } else {
+                    self.kraken_account_roster
+                        .iter()
+                        .filter(|account| account.connected)
+                        .map(|account| KrakenAccountOrders {
+                            account_id: account.id.clone(),
+                            label: account.label.clone(),
+                            is_primary: account.is_primary,
+                            orders: Vec::new(),
+                        })
+                        .collect()
+                }
+            } else {
+                Vec::new()
+            };
+            kraken_order_groups.retain(|account| {
+                !self
+                    .hidden_kraken_order_account_ids
+                    .contains(&account.account_id)
+            });
             let alpaca_toggles: Vec<(String, String, usize, bool)> = if !self.alpaca_account_orders.is_empty() {
                 self.alpaca_account_orders
                     .iter()
@@ -616,5 +617,30 @@ mod order_descriptor_tests {
 
         assert_eq!(groups.len(), 4);
         assert!(groups.iter().all(|group| group.orders.len() == 1));
+    }
+
+    #[test]
+    fn display_groups_preserve_first_seen_order_across_interleaved_duplicates() {
+        let mut first = ord("limit", Some("420.0000"), None);
+        first.id = "first".into();
+        let mut second = ord("limit", Some("421.0000"), None);
+        second.id = "second".into();
+        let mut duplicate = first.clone();
+        duplicate.id = "duplicate".into();
+
+        let orders = [first, second, duplicate];
+        let groups = order_display_groups(&orders);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].primary().id, "first");
+        assert_eq!(groups[1].primary().id, "second");
+        assert_eq!(
+            groups[0]
+                .orders
+                .iter()
+                .map(|order| order.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "duplicate"]
+        );
     }
 }

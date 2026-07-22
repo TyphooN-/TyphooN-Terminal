@@ -59,7 +59,11 @@ fn alpaca_account_pl_basis(account: &AccountPositions) -> f64 {
 }
 
 pub(super) fn single_kraken_account_label(label: &str, single_account: bool) -> &str {
-    if single_account { "Kraken (Live)" } else { label }
+    if single_account {
+        "Kraken (Live)"
+    } else {
+        label
+    }
 }
 
 pub(super) fn primary_marker(is_primary: bool, single_account: bool) -> &'static str {
@@ -82,84 +86,17 @@ impl TyphooNApp {
             .into_iter()
             .filter(|visible| *visible)
             .count();
-        let alpaca_position_groups: Vec<AccountPositions> = if show_alpaca_positions {
-            if !self.alpaca_account_positions.is_empty() {
-                self.alpaca_account_positions.clone()
-            } else if !self.live_positions.is_empty() {
-                vec![AccountPositions {
-                    account_id: self.alpaca_primary_account_id.clone(),
-                    label: self
-                        .alpaca_roster_by_id
-                        .get(&self.alpaca_primary_account_id)
-                        .map(|account| account.label.clone())
-                        .or_else(|| {
-                            self.alpaca_account_roster
-                                .iter()
-                                .find(|account| account.is_primary)
-                                .map(|account| account.label.clone())
-                        })
-                        .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
-                    is_primary: true,
-                    account_equity: self
-                        .live_account
-                        .as_ref()
-                        .map(|acct| acct.equity)
-                        .unwrap_or(0.0),
-                    account_last_equity: self
-                        .live_account
-                        .as_ref()
-                        .map(|acct| acct.last_equity)
-                        .unwrap_or(0.0),
-                    positions: self.live_positions.clone(),
-                }]
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-        let kraken_position_groups: Vec<KrakenAccountPositions> = if show_kr_positions {
-            if !self.kraken_account_positions.is_empty() {
-                self.kraken_account_positions.clone()
-            } else if !self.kr_positions.is_empty() {
-                vec![KrakenAccountPositions {
-                    account_id: self.kraken_primary_account_id.clone(),
-                    label: self
-                        .kraken_roster_by_id
-                        .get(&self.kraken_primary_account_id)
-                        .map(|account| account.label.clone())
-                        .or_else(|| {
-                            self.kraken_account_roster
-                                .iter()
-                                .find(|account| account.is_primary)
-                                .map(|account| account.label.clone())
-                        })
-                        .unwrap_or_else(|| "Kraken (Live)".to_string()),
-                    is_primary: true,
-                    positions: self.kr_positions.clone(),
-                }]
-            } else {
-                self.kraken_account_roster
-                    .iter()
-                    .filter(|account| account.connected)
-                    .map(|account| KrakenAccountPositions {
-                        account_id: account.id.clone(),
-                        label: account.label.clone(),
-                        is_primary: account.is_primary,
-                        positions: Vec::new(),
-                    })
-                    .collect()
-            }
-        } else {
-            Vec::new()
-        };
         // Cheap counts from source data for the header title.
-        // (groups are still built above for the content; this avoids re-filtering the cloned groups just for the "(N)").
+        // Full account snapshots are cloned only when the section body renders.
         let alpaca_count = if show_alpaca_positions {
             if !self.alpaca_account_positions.is_empty() {
                 self.alpaca_account_positions
                     .iter()
-                    .filter(|a| !self.hidden_alpaca_position_account_ids.contains(&a.account_id))
+                    .filter(|a| {
+                        !self
+                            .hidden_alpaca_position_account_ids
+                            .contains(&a.account_id)
+                    })
                     .map(|a| a.positions.len())
                     .sum::<usize>()
             } else {
@@ -172,7 +109,11 @@ impl TyphooNApp {
             if !self.kraken_account_positions.is_empty() {
                 self.kraken_account_positions
                     .iter()
-                    .filter(|a| !self.hidden_kraken_position_account_ids.contains(&a.account_id))
+                    .filter(|a| {
+                        !self
+                            .hidden_kraken_position_account_ids
+                            .contains(&a.account_id)
+                    })
                     .map(|a| a.positions.len())
                     .sum::<usize>()
             } else {
@@ -193,6 +134,77 @@ impl TyphooNApp {
         .id_salt("positions_section")
         .default_open(self.right_positions_open)
         .show(ui, |ui| {
+            let alpaca_position_groups: Vec<AccountPositions> = if show_alpaca_positions {
+                if !self.alpaca_account_positions.is_empty() {
+                    self.alpaca_account_positions.clone()
+                } else if !self.live_positions.is_empty() {
+                    vec![AccountPositions {
+                        account_id: self.alpaca_primary_account_id.clone(),
+                        label: self
+                            .alpaca_roster_by_id
+                            .get(&self.alpaca_primary_account_id)
+                            .map(|account| account.label.clone())
+                            .or_else(|| {
+                                self.alpaca_account_roster
+                                    .iter()
+                                    .find(|account| account.is_primary)
+                                    .map(|account| account.label.clone())
+                            })
+                            .unwrap_or_else(|| if self.broker_paper { "Alpaca 1 (Paper)".to_string() } else { "Alpaca 1 (Live)".to_string() }),
+                        is_primary: true,
+                        account_equity: self
+                            .live_account
+                            .as_ref()
+                            .map(|acct| acct.equity)
+                            .unwrap_or(0.0),
+                        account_last_equity: self
+                            .live_account
+                            .as_ref()
+                            .map(|acct| acct.last_equity)
+                            .unwrap_or(0.0),
+                        positions: self.live_positions.clone(),
+                    }]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            let kraken_position_groups: Vec<KrakenAccountPositions> = if show_kr_positions {
+                if !self.kraken_account_positions.is_empty() {
+                    self.kraken_account_positions.clone()
+                } else if !self.kr_positions.is_empty() {
+                    vec![KrakenAccountPositions {
+                        account_id: self.kraken_primary_account_id.clone(),
+                        label: self
+                            .kraken_roster_by_id
+                            .get(&self.kraken_primary_account_id)
+                            .map(|account| account.label.clone())
+                            .or_else(|| {
+                                self.kraken_account_roster
+                                    .iter()
+                                    .find(|account| account.is_primary)
+                                    .map(|account| account.label.clone())
+                            })
+                            .unwrap_or_else(|| "Kraken (Live)".to_string()),
+                        is_primary: true,
+                        positions: self.kr_positions.clone(),
+                    }]
+                } else {
+                    self.kraken_account_roster
+                        .iter()
+                        .filter(|account| account.connected)
+                        .map(|account| KrakenAccountPositions {
+                            account_id: account.id.clone(),
+                            label: account.label.clone(),
+                            is_primary: account.is_primary,
+                            positions: Vec::new(),
+                        })
+                        .collect()
+                }
+            } else {
+                Vec::new()
+            };
             // Visibility toggles only matter when more than one eligible
             // position source exists. Do not show disabled brokers.
             if position_source_count > 1
