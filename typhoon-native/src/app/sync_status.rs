@@ -1,6 +1,4 @@
-use super::market_data_sync::{
-    kraken_equity_native_symbols_for_timeframe, kraken_equity_symbols_for_timeframe,
-};
+use super::market_data_sync::normalize_kraken_equity_symbol_list;
 use super::*;
 use typhoon_engine::core::fallback_bars::yahoo_chart_supports_timeframe;
 
@@ -453,11 +451,62 @@ fn detailed_sync_key_parts(
         .collect()
 }
 
+struct PreparedBarSyncEquitySymbols<'a> {
+    catalog_source: &'a [String],
+    demand_source: &'a [String],
+    catalog: std::sync::OnceLock<Vec<String>>,
+    demand: std::sync::OnceLock<Vec<String>>,
+    catalog_available: bool,
+}
+
+impl<'a> PreparedBarSyncEquitySymbols<'a> {
+    fn new(catalog: &'a [String], demand: &'a [String]) -> Self {
+        Self {
+            catalog_source: catalog,
+            demand_source: demand,
+            catalog: std::sync::OnceLock::new(),
+            demand: std::sync::OnceLock::new(),
+            catalog_available: !catalog.is_empty(),
+        }
+    }
+
+    fn catalog(&self) -> &[String] {
+        self.catalog
+            .get_or_init(|| normalize_kraken_equity_symbol_list(self.catalog_source.iter()))
+    }
+
+    fn demand(&self) -> &[String] {
+        self.demand
+            .get_or_init(|| normalize_kraken_equity_symbol_list(self.demand_source.iter()))
+    }
+
+    fn native(&self, timeframe: &str) -> &[String] {
+        if kraken_equity_full_universe_timeframe(timeframe) {
+            self.demand()
+        } else {
+            &[]
+        }
+    }
+
+    fn broad(&self, timeframe: &str) -> &[String] {
+        if (kraken_equity_full_universe_timeframe(timeframe)
+            || kraken_equity_broad_fallback_timeframe(timeframe))
+            && self.catalog_available
+        {
+            self.catalog()
+        } else {
+            self.demand()
+        }
+    }
+}
+
 impl BarSyncInputs {
     /// Run the full bar-sync matrix scan. Pure CPU over the owned snapshot — no
     /// app state, no I/O — so it is safe to call from a blocking worker thread.
     pub(super) fn compute(self) -> BarSyncResult {
         let now_ms = chrono::Utc::now().timestamp_millis();
+        let prepared_equity_symbols =
+            PreparedBarSyncEquitySymbols::new(&self.catalog_symbols, &self.demand_symbols);
         let checked_or_complete_lookup = |key: &str| -> bool {
             let mut parts = key.splitn(3, ':');
             let Some(prefix) = parts.next() else {
@@ -499,8 +548,16 @@ impl BarSyncInputs {
             &checked_or_complete_lookup,
         );
         self.add_kraken_equities_tradable_catalog_row(&mut rows);
-        self.add_expected_kraken_sync_rows(&mut rows, &checked_or_complete_lookup);
-        self.add_kraken_equities_merged_rows(&mut rows, &checked_or_complete_lookup);
+        self.add_expected_kraken_sync_rows(
+            &mut rows,
+            &prepared_equity_symbols,
+            &checked_or_complete_lookup,
+        );
+        self.add_kraken_equities_merged_rows(
+            &mut rows,
+            &prepared_equity_symbols,
+            &checked_or_complete_lookup,
+        );
         relabel_kraken_equity_intraday_rows(&mut rows);
         // Disabled Sync TFs (e.g. M1/M5 unchecked) are skipped by automated
         // sync, so their cached-leftover rows must neither render in the
@@ -559,6 +616,7 @@ impl BarSyncInputs {
     fn add_kraken_equities_merged_rows(
         &self,
         rows: &mut Vec<SyncStatsRow>,
+        prepared_equity_symbols: &PreparedBarSyncEquitySymbols<'_>,
         checked_or_complete_lookup: &dyn Fn(&str) -> bool,
     ) {
         if self.timeframes.is_empty() {
@@ -581,7 +639,8 @@ impl BarSyncInputs {
             if !self.kraken_equities_merged_source_supported(tf) {
                 continue;
             }
-            let symbols = self.kraken_equities_merged_symbols_for_timeframe(tf);
+            let symbols =
+                self.kraken_equities_merged_symbols_for_timeframe(prepared_equity_symbols, tf);
             if symbols.is_empty() {
                 continue;
             }
@@ -637,10 +696,11 @@ impl BarSyncInputs {
         }
     }
 
-    fn kraken_equities_merged_symbols_for_timeframe(
-        &self,
+    fn kraken_equities_merged_symbols_for_timeframe<'a>(
+        &'a self,
+        prepared_equity_symbols: &'a PreparedBarSyncEquitySymbols<'_>,
         tf: &str,
-    ) -> std::borrow::Cow<'_, [String]> {
+    ) -> &'a [String] {
         // Full-catalog M1/M5 is not reachable today: Alpaca assist is disabled
         // for those rows, Yahoo assist is unsupported, and native Kraken WS only
         // exists for tokenized xStocks. Keep the Merged denominator honest so
@@ -648,15 +708,11 @@ impl BarSyncInputs {
         // scheduler into wasting assist-provider RPM on ignored low-TF rows.
         if matches!(tf, "1Min" | "5Min") {
             if !self.ws_sweep_symbols.is_empty() {
-                return std::borrow::Cow::Borrowed(&self.ws_sweep_symbols);
+                return &self.ws_sweep_symbols;
             }
-            return std::borrow::Cow::Borrowed(&self.demand_symbols);
+            return &self.demand_symbols;
         }
-        std::borrow::Cow::Owned(kraken_equity_symbols_for_timeframe(
-            &self.catalog_symbols,
-            &self.demand_symbols,
-            tf,
-        ))
+        prepared_equity_symbols.broad(tf)
     }
 
     fn kraken_equities_merged_source_supported(&self, tf: &str) -> bool {
@@ -776,6 +832,7 @@ impl BarSyncInputs {
     fn add_expected_kraken_sync_rows(
         &self,
         rows: &mut Vec<SyncStatsRow>,
+        prepared_equity_symbols: &PreparedBarSyncEquitySymbols<'_>,
         checked_or_complete_lookup: &dyn Fn(&str) -> bool,
     ) {
         let timeframes = &self.timeframes;
@@ -826,24 +883,12 @@ impl BarSyncInputs {
                 if source == "yahoo-chart" && !yahoo_chart_supports_timeframe(tf) {
                     continue;
                 }
-                let symbols: std::borrow::Cow<'_, [String]> = match source {
-                    "kraken" => std::borrow::Cow::Borrowed(&self.spot_symbols),
-                    "kraken-futures" => std::borrow::Cow::Borrowed(&self.futures_symbols),
-                    "kraken-equities" => {
-                        std::borrow::Cow::Owned(kraken_equity_native_symbols_for_timeframe(
-                            &self.catalog_symbols,
-                            &self.demand_symbols,
-                            tf,
-                        ))
-                    }
-                    "alpaca" | "yahoo-chart" => {
-                        std::borrow::Cow::Owned(kraken_equity_symbols_for_timeframe(
-                            &self.catalog_symbols,
-                            &self.demand_symbols,
-                            tf,
-                        ))
-                    }
-                    _ => std::borrow::Cow::Borrowed(&[]),
+                let symbols: &[String] = match source {
+                    "kraken" => &self.spot_symbols,
+                    "kraken-futures" => &self.futures_symbols,
+                    "kraken-equities" => prepared_equity_symbols.native(tf),
+                    "alpaca" | "yahoo-chart" => prepared_equity_symbols.broad(tf),
+                    _ => &[],
                 };
                 let row_key = (broker.to_string(), tf.to_string());
                 for symbol in symbols.iter() {
@@ -1209,5 +1254,51 @@ mod tests {
             timeframe.as_ptr(),
             detailed[0].0[15..].as_ptr()
         ));
+    }
+
+    #[test]
+    fn prepared_equity_symbols_reuse_normalized_scopes_without_broad_fallback_drift() {
+        let catalog = vec!["WOK.EQ".to_string(), "WOK".to_string()];
+        let demand = vec!["ARRAY.EQ".to_string(), "ARRAY".to_string()];
+        let prepared = PreparedBarSyncEquitySymbols::new(&catalog, &demand);
+
+        assert!(prepared.catalog.get().is_none());
+        assert!(prepared.demand.get().is_none());
+        assert!(prepared.native("1Month").is_empty());
+        assert!(prepared.catalog.get().is_none());
+        assert!(prepared.demand.get().is_none());
+
+        for timeframe in [
+            "1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month",
+        ] {
+            assert_eq!(
+                prepared.native(timeframe),
+                super::super::market_data_sync::kraken_equity_native_symbols_for_timeframe(
+                    &catalog, &demand, timeframe,
+                )
+            );
+            assert_eq!(
+                prepared.broad(timeframe),
+                super::super::market_data_sync::kraken_equity_symbols_for_timeframe(
+                    &catalog, &demand, timeframe,
+                )
+            );
+        }
+        assert!(std::ptr::eq(
+            prepared.broad("1Day").as_ptr(),
+            prepared.broad("1Month").as_ptr()
+        ));
+
+        let invalid_catalog = vec![String::new()];
+        let prepared = PreparedBarSyncEquitySymbols::new(&invalid_catalog, &demand);
+        assert_eq!(
+            prepared.broad("1Day"),
+            super::super::market_data_sync::kraken_equity_symbols_for_timeframe(
+                &invalid_catalog,
+                &demand,
+                "1Day"
+            ),
+            "a present catalog that normalizes empty must retain legacy scope selection"
+        );
     }
 }
