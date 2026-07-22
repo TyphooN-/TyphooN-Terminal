@@ -1,8 +1,107 @@
 use super::*;
 
+const NEWS_PURGE_NOTCHES_DAYS: &[(i64, &str)] = &[
+    (7, "7 days"),
+    (30, "30 days"),
+    (90, "90 days"),
+    (180, "6 months"),
+    (365, "1 year"),
+    (730, "2 years"),
+    (1825, "5 years"),
+];
+
+fn news_purge_preview_matches(
+    result_idx: usize,
+    result_db_total: Option<i64>,
+    current_idx: usize,
+    current_db_total: Option<i64>,
+) -> bool {
+    result_idx == current_idx && result_db_total == current_db_total
+}
+
 impl TyphooNApp {
+    fn poll_storage_news_purge_count(&mut self, ctx: &egui::Context) {
+        if !self.show_storage {
+            self.storage_purge_news_count_rx = None;
+            self.storage_purge_news_count = None;
+            self.storage_purge_news_count_idx = None;
+            self.storage_purge_news_count_db_total = None;
+            self.storage_purge_news_count_cutoff_ts = None;
+            return;
+        }
+        if let Some(rx) = self.storage_purge_news_count_rx.take() {
+            match rx.try_recv() {
+                Ok((idx, db_total, cutoff_ts, result)) => {
+                    let current_idx = self
+                        .storage_purge_news_age_idx
+                        .min(NEWS_PURGE_NOTCHES_DAYS.len() - 1);
+                    if news_purge_preview_matches(idx, db_total, current_idx, self.news_db_total) {
+                        match result {
+                            Ok(count) => {
+                                self.storage_purge_news_count_idx = Some(idx);
+                                self.storage_purge_news_count_db_total = db_total;
+                                self.storage_purge_news_count_cutoff_ts = Some(cutoff_ts);
+                                self.storage_purge_news_count = Some(count);
+                            }
+                            Err(_) => {
+                                self.storage_purge_news_count_idx = None;
+                                self.storage_purge_news_count_db_total = None;
+                                self.storage_purge_news_count_cutoff_ts = None;
+                                self.storage_purge_news_count = None;
+                                self.storage_purge_news_count_retry_at =
+                                    std::time::Instant::now() + std::time::Duration::from_secs(5);
+                            }
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.storage_purge_news_count_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+
+        let idx = self
+            .storage_purge_news_age_idx
+            .min(NEWS_PURGE_NOTCHES_DAYS.len() - 1);
+        if self.storage_purge_news_count_rx.is_some()
+            || (self.storage_purge_news_count_idx == Some(idx)
+                && self.storage_purge_news_count_db_total == self.news_db_total)
+            || std::time::Instant::now() < self.storage_purge_news_count_retry_at
+        {
+            return;
+        }
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let cutoff_ts =
+            chrono::Utc::now().timestamp() - NEWS_PURGE_NOTCHES_DAYS[idx].0 * 86_400;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.storage_purge_news_count_rx = Some(rx);
+        let db_total = self.news_db_total;
+        let repaint = ctx.clone();
+        if std::thread::Builder::new()
+            .name("typhoon-news-purge-count".into())
+            .spawn(move || {
+                let result = cache.open_bg_read_connection().and_then(|conn| {
+                    typhoon_engine::core::news::count_articles_older_than_readonly(
+                        &conn, cutoff_ts,
+                    )
+                });
+                let _ = tx.send((idx, db_total, cutoff_ts, result));
+                repaint.request_repaint();
+            })
+            .is_err()
+        {
+            self.storage_purge_news_count_rx = None;
+            self.storage_purge_news_count_retry_at =
+                std::time::Instant::now() + std::time::Duration::from_secs(5);
+        }
+    }
+
     pub(super) fn render_storage_sync_windows(&mut self, ctx: &egui::Context) {
         self.render_cache_stats_window(ctx);
+        self.poll_storage_news_purge_count(ctx);
 
         // Storage-sanity worker pump (audit / repair / merged rebuild / export
         // — one job at a time). Take the receiver so the drain loop can mutate
@@ -671,32 +770,21 @@ impl TyphooNApp {
                                     // Notches: 1w / 1m / 3m / 6m / 1y / 2y / 5y.
                                     // Days, not seconds, so the cutoff is timezone
                                     // independent and the labels read naturally.
-                                    const NEWS_PURGE_NOTCHES_DAYS: &[(i64, &str)] = &[
-                                        (7,    "7 days"),
-                                        (30,   "30 days"),
-                                        (90,   "90 days"),
-                                        (180,  "6 months"),
-                                        (365,  "1 year"),
-                                        (730,  "2 years"),
-                                        (1825, "5 years"),
-                                    ];
                                     let idx = self
                                         .storage_purge_news_age_idx
                                         .min(NEWS_PURGE_NOTCHES_DAYS.len() - 1);
-                                    let (days, label) = NEWS_PURGE_NOTCHES_DAYS[idx];
-                                    let cutoff_ts =
-                                        chrono::Utc::now().timestamp() - days * 86_400;
-                                    let count = self
-                                        .cache
-                                        .as_ref()
-                                        .and_then(|c| c.connection().ok())
-                                        .and_then(|conn| {
-                                            typhoon_engine::core::news::count_articles_older_than(
-                                                &conn, cutoff_ts,
-                                            )
-                                            .ok()
-                                        })
-                                        .unwrap_or(0);
+                                    let (_, label) = NEWS_PURGE_NOTCHES_DAYS[idx];
+                                    let count = if self.storage_purge_news_count_idx == Some(idx)
+                                        && self.storage_purge_news_count_db_total
+                                            == self.news_db_total
+                                        && self.storage_purge_news_count_cutoff_ts.is_some()
+                                    {
+                                        self.storage_purge_news_count
+                                            .map(|count| count.to_string())
+                                            .unwrap_or_else(|| "unavailable".into())
+                                    } else {
+                                        "calculating…".into()
+                                    };
                                     ui.label(
                                         egui::RichText::new("Purge news older than:")
                                             .color(AXIS_TEXT)
@@ -716,6 +804,15 @@ impl TyphooNApp {
                                     });
                                     if ui.add(slider).changed() {
                                         self.storage_purge_news_age_idx = slider_idx;
+                                        self.storage_purge_news_count = None;
+                                        self.storage_purge_news_count_idx = None;
+                                        self.storage_purge_news_count_db_total = None;
+                                        self.storage_purge_news_count_cutoff_ts = None;
+                                        // Drop the receiver so an old result cannot win a
+                                        // same-index race after another slider change.
+                                        self.storage_purge_news_count_rx = None;
+                                        self.storage_purge_news_count_retry_at =
+                                            std::time::Instant::now();
                                         // Cancel any pending confirm if the user is
                                         // re-aiming the slider — they should
                                         // explicitly re-confirm at the new cutoff.
@@ -731,24 +828,25 @@ impl TyphooNApp {
                                     );
                                 });
                                 ui.horizontal(|ui| {
-                                    // Re-resolve count for the confirm line so the
-                                    // displayed N matches the in-flight slider
-                                    // value even on the confirmation frame.
-                                    const NEWS_PURGE_NOTCHES_DAYS: &[(i64, &str)] = &[
-                                        (7,    "7 days"),
-                                        (30,   "30 days"),
-                                        (90,   "90 days"),
-                                        (180,  "6 months"),
-                                        (365,  "1 year"),
-                                        (730,  "2 years"),
-                                        (1825, "5 years"),
-                                    ];
+                                    // Delete against the exact cutoff used by the
+                                    // preview, never a newly computed timestamp.
                                     let idx = self
                                         .storage_purge_news_age_idx
                                         .min(NEWS_PURGE_NOTCHES_DAYS.len() - 1);
-                                    let (days, label) = NEWS_PURGE_NOTCHES_DAYS[idx];
-                                    let cutoff_ts =
-                                        chrono::Utc::now().timestamp() - days * 86_400;
+                                    let (_, label) = NEWS_PURGE_NOTCHES_DAYS[idx];
+                                    let preview_cutoff = if self.storage_purge_news_count_idx
+                                        == Some(idx)
+                                        && self.storage_purge_news_count_db_total
+                                            == self.news_db_total
+                                    {
+                                        self.storage_purge_news_count_cutoff_ts
+                                    } else {
+                                        None
+                                    };
+                                    if preview_cutoff.is_none() {
+                                        self.storage_purge_news_confirm = false;
+                                    }
+                                    let cutoff_ts = preview_cutoff.unwrap_or_default();
                                     if self.storage_purge_news_confirm {
                                         ui.label(
                                             egui::RichText::new(format!(
@@ -773,6 +871,18 @@ impl TyphooNApp {
                                                         &conn, cutoff_ts,
                                                     ) {
                                                         Ok(n) => {
+                                                            self.storage_purge_news_count = None;
+                                                            self.storage_purge_news_count_idx = None;
+                                                            self.storage_purge_news_count_db_total =
+                                                                None;
+                                                            self.storage_purge_news_count_cutoff_ts =
+                                                                None;
+                                                            // Cancel the pre-purge preview. Its
+                                                            // result describes rows that no longer
+                                                            // exist and must never be cached.
+                                                            self.storage_purge_news_count_rx = None;
+                                                            self.storage_purge_news_count_retry_at =
+                                                                std::time::Instant::now();
                                                             let size_now = cache
                                                                 .stats()
                                                                 .ok()
@@ -802,10 +912,13 @@ impl TyphooNApp {
                                             self.storage_purge_news_confirm = false;
                                         }
                                     } else if ui
-                                        .button(
+                                        .add_enabled(
+                                            preview_cutoff.is_some(),
+                                            egui::Button::new(
                                             egui::RichText::new("Purge News")
                                                 .color(egui::Color32::from_rgb(231, 76, 60))
                                                 .small(),
+                                            ),
                                         )
                                         .clicked()
                                     {
@@ -1594,8 +1707,15 @@ fn already_fetched_split_symbols(
 
 #[cfg(test)]
 mod split_backfill_set_tests {
-    use super::sanity_split_backfill_symbols;
+    use super::{news_purge_preview_matches, sanity_split_backfill_symbols};
     use typhoon_engine::core::cache::{BarCacheSanityIssue, BarCacheSanitySeverity};
+
+    #[test]
+    fn news_purge_preview_rejects_slider_or_database_revision_changes() {
+        assert!(news_purge_preview_matches(4, Some(100), 4, Some(100)));
+        assert!(!news_purge_preview_matches(3, Some(100), 4, Some(100)));
+        assert!(!news_purge_preview_matches(4, Some(99), 4, Some(100)));
+    }
 
     fn issue(code: &str, symbol: &str) -> BarCacheSanityIssue {
         BarCacheSanityIssue {

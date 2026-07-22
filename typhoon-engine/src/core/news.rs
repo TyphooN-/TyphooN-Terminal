@@ -889,6 +889,31 @@ pub fn count_articles_older_than(conn: &Connection, cutoff_ts: i64) -> Result<i6
     .map_err(|e| format!("count older than: {e}"))
 }
 
+/// Read-only counterpart used by background/UI preview workers. It never runs
+/// schema DDL and treats a fresh cache without the news table as empty.
+pub fn count_articles_older_than_readonly(
+    conn: &Connection,
+    cutoff_ts: i64,
+) -> Result<i64, String> {
+    let table_exists = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_news'",
+            [],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(|e| format!("check news table read-only: {e}"))?;
+    if table_exists.is_none() {
+        return Ok(0);
+    }
+    conn.query_row(
+        "SELECT COUNT(*) FROM research_news WHERE published_at < ?1",
+        params![cutoff_ts],
+        |r| r.get::<_, i64>(0),
+    )
+    .map_err(|e| format!("count old news read-only: {e}"))
+}
+
 /// Delete articles older than `cutoff_ts`. Keeps the FTS5 table in sync.
 pub fn purge_older_than(conn: &Connection, cutoff_ts: i64) -> Result<usize, String> {
     let _ = create_news_tables(conn);

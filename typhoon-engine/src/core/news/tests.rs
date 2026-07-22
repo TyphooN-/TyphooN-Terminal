@@ -628,6 +628,33 @@ fn count_all_articles_readonly_matches_and_tolerates_missing_table() {
 }
 
 #[test]
+fn count_articles_older_than_readonly_matches_and_tolerates_missing_table() {
+    let bare = Connection::open_in_memory().expect("open in-memory");
+    assert_eq!(
+        count_articles_older_than_readonly(&bare, i64::MAX).unwrap(),
+        0
+    );
+
+    let conn = mem_conn();
+    for published_at in [100, 200, 300] {
+        let article = NewsArticle {
+            symbol: "AAPL".into(),
+            headline: format!("article-{published_at}"),
+            url: format!("https://example.com/{published_at}"),
+            published_at,
+            ..Default::default()
+        }
+        .with_hash();
+        upsert_news(&conn, &article).unwrap();
+    }
+    assert_eq!(count_articles_older_than_readonly(&conn, 250).unwrap(), 2);
+    assert_eq!(
+        count_articles_older_than_readonly(&conn, 250).unwrap(),
+        count_articles_older_than(&conn, 250).unwrap()
+    );
+}
+
+#[test]
 fn enforce_max_rows_keeps_newest_and_syncs_fts() {
     let conn = mem_conn();
     // Insert 6 articles with increasing publish times (i is the recency rank).

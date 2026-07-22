@@ -249,12 +249,21 @@ impl TyphooNApp {
         self.auto_compact_schedule = schedule.sanitized();
     }
 
-    pub(in crate::app) fn sync_preferences_save(&self) {
-        if let Some(ref cache) = self.cache {
-            let json =
-                serde_json::to_string(&self.build_sync_preferences_value()).unwrap_or_default();
-            let _ = cache.put_kv("app:sync_preferences", &json);
-        }
+    pub(in crate::app) fn sync_preferences_save(&mut self) {
+        let session_json = self.build_session_json();
+        let pref_json =
+            serde_json::to_string(&self.build_sync_preferences_value()).unwrap_or_default();
+        // Preference-only writes cannot safely race full-session snapshots: an
+        // older explicit save could otherwise overwrite this value after it
+        // lands. Persist a complete, newer session snapshot through the same
+        // sequence gate instead. The contended SQLite write remains off egui.
+        self.session_save_seq = self.session_save_seq.wrapping_add(1);
+        let seq = self.session_save_seq;
+        let gate = self.session_write_gate.clone();
+        let cache = self.cache.clone();
+        self.rt_handle.spawn_blocking(move || {
+            Self::persist_session_to_disk(&gate, seq, &session_json, &pref_json, cache.as_ref());
+        });
     }
 
     pub(in crate::app) fn sync_preferences_load(&mut self) {

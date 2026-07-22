@@ -1062,6 +1062,15 @@ pub struct TyphooNApp {
     /// Default 4 = 1 year, which is the most common "I want to free
     /// some space but keep recent context" pick.
     pub(crate) storage_purge_news_age_idx: usize,
+    /// Cached age-purge preview. Counting research_news can scan a large table;
+    /// it runs on an owned read-only connection instead of the egui thread.
+    pub(crate) storage_purge_news_count: Option<i64>,
+    pub(crate) storage_purge_news_count_idx: Option<usize>,
+    pub(crate) storage_purge_news_count_db_total: Option<i64>,
+    pub(crate) storage_purge_news_count_cutoff_ts: Option<i64>,
+    pub(crate) storage_purge_news_count_retry_at: std::time::Instant,
+    pub(crate) storage_purge_news_count_rx:
+        Option<std::sync::mpsc::Receiver<(usize, Option<i64>, i64, Result<i64, String>)>>,
     /// 2-step confirmation latch for the news purge button.
     pub(crate) storage_purge_news_confirm: bool,
     pub(crate) storage_page: usize,

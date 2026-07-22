@@ -22,7 +22,7 @@ impl TyphooNApp {
     /// of clobbering it. Safe to call from a blocking worker or the UI thread —
     /// the `put_kv` here is what contends with bulk bar-sync writers, which is
     /// exactly why the per-frame autosave runs this off the render thread.
-    fn persist_session_to_disk(
+    pub(in crate::app) fn persist_session_to_disk(
         gate: &std::sync::Mutex<u64>,
         seq: u64,
         session_json: &str,

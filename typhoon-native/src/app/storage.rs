@@ -193,7 +193,14 @@ impl TyphooNApp {
         let detailed_rows = cache.detailed_stats_with_size()?;
         apply_storage_snapshot(&mut self.bg, cache_stats, detailed_rows);
         self.bg_rev = self.bg_rev.wrapping_add(1);
+        self.invalidate_storage_render_caches();
         Ok(())
+    }
+
+    fn invalidate_storage_render_caches(&mut self) {
+        self.storage_filtered_rows_cache_key = None;
+        self.storage_disabled_kraken_quote_keys_cache_rev = None;
+        self.storage_out_of_scope_kraken_keys_cache_rev = None;
     }
 
     pub(super) fn refresh_storage_snapshot_after_action(&mut self, action: &str) {
@@ -236,8 +243,16 @@ impl TyphooNApp {
         // multi-second stalls when SQLite was busy with maintenance. Treat the
         // table as an operator snapshot: rebuild when row/filter/sort shape
         // changes, not for every write-age tick.
-        self.bg.detailed_stats.len().hash(&mut h);
-        self.bg.cache_blob_sizes.len().hash(&mut h);
+        // Broad sync adds rows on nearly every BG snapshot. Re-keying on those
+        // lengths rebuilt + resorted the 100k-row operator table on egui,
+        // producing the observed 0.3-7.5s `storage_sync` stalls. Freeze the
+        // table shape during heavy sync; filter/sort changes still rebuild from
+        // the latest snapshot, and the first post-sync frame refreshes it.
+        self.heavy_sync_in_progress.hash(&mut h);
+        if !self.heavy_sync_in_progress {
+            self.bg.detailed_stats.len().hash(&mut h);
+            self.bg.cache_blob_sizes.len().hash(&mut h);
+        }
         self.storage_filter.hash(&mut h);
         self.storage_sort_col.hash(&mut h);
         self.storage_sort_asc.hash(&mut h);
@@ -250,7 +265,10 @@ impl TyphooNApp {
         // `storage_filtered_rows_cache_key`: a broad sync can advance the
         // background snapshot every few seconds without changing the set of
         // cache keys eligible for this operator action.
-        self.bg.detailed_stats.len().hash(&mut h);
+        self.heavy_sync_in_progress.hash(&mut h);
+        if !self.heavy_sync_in_progress {
+            self.bg.detailed_stats.len().hash(&mut h);
+        }
         for quote in [
             "USD", "USDT", "USDC", "USDG", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF",
         ] {
@@ -314,7 +332,10 @@ impl TyphooNApp {
         // Avoid rescanning all cache keys on every background snapshot; the
         // eligibility set changes when the key count, Kraken universe, or sync
         // filters change, not when existing rows get refreshed.
-        self.bg.detailed_stats.len().hash(&mut h);
+        self.heavy_sync_in_progress.hash(&mut h);
+        if !self.heavy_sync_in_progress {
+            self.bg.detailed_stats.len().hash(&mut h);
+        }
         // Eligibility inputs: every sector/quote flag plus the loaded-pairs set
         // (its size flips the delisted-residue half of the predicate on/off).
         self.kraken_scrape_xstocks.hash(&mut h);
