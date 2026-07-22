@@ -97,6 +97,14 @@ impl TyphooNApp {
     }
 
     pub(super) fn handle_kraken_ws_bars_committed(&mut self, fresh: Vec<(String, String, i64)>) {
+        // Count WS-committed cells toward the sync-throughput window under a
+        // distinct `kraken-ws` bucket. These bars never hit note_cached_sync_success
+        // (the REST-settlement chokepoint), so without this the heartbeat reads
+        // alpaca-only and hides the fact that Kraken spot/xStocks are kept current
+        // by the WS feed, not REST — the real reason those REST lanes look idle.
+        if !fresh.is_empty() {
+            *self.sync_throughput_window.entry("kraken-ws").or_insert(0) += fresh.len() as u32;
+        }
         // Mark each (symbol, tf) WS-fresh so the REST scheduler skips refetch while
         // the WS feed is keeping the cache current. O(n) over the flush batch;
         // per-key insert is O(1).

@@ -554,10 +554,11 @@ impl TyphooNApp {
         }
         let get = |src: &str| counts.get(src).copied().unwrap_or(0);
         tracing::info!(
-            "Sync throughput (60s): {} cells — alpaca={} kraken={} kraken-equities={} kraken-futures={} yahoo={} · Alpaca pool: {} acct × {} rpm/acct = ~{} req/min ceiling",
+            "Sync throughput (60s): {} cells — alpaca={} kraken-rest={} kraken-ws={} kraken-equities={} kraken-futures={} yahoo={} · Alpaca pool: {} acct × {} rpm/acct = ~{} req/min ceiling",
             total,
             get("alpaca"),
             get("kraken"),
+            get("kraken-ws"),
             get("kraken-equities"),
             get("kraken-futures"),
             get("yahoo-chart"),
