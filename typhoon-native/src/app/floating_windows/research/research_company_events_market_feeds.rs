@@ -282,6 +282,7 @@ impl TyphooNApp {
                                             .ok()
                                             .flatten()
                                             .unwrap_or_default();
+                                    self.ipo_sorted_indices.invalidate();
                                 }
                             }
                         }
@@ -294,28 +295,25 @@ impl TyphooNApp {
                         );
                     });
                     ui.separator();
+                    let sort_col = self.ipo_sort_col;
+                    let sort_asc = self.ipo_sort_asc;
+                    let rows = &self.ipo_events;
+                    let order = self
+                        .ipo_sorted_indices
+                        .order(rows, sort_col, sort_asc, |a, b| match sort_col {
+                            0 => a.date.cmp(&b.date),
+                            1 => a.symbol.cmp(&b.symbol),
+                            2 => a.name.cmp(&b.name),
+                            3 => a.exchange.cmp(&b.exchange),
+                            4 => a.price_range.cmp(&b.price_range),
+                            5 => a.shares.cmp(&b.shares),
+                            6 => a.total_value.total_cmp(&b.total_value),
+                            7 => a.status.cmp(&b.status),
+                            _ => a.date.cmp(&b.date),
+                        });
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let mut rows = self.ipo_events.clone();
-                            rows.sort_by(|a, b| {
-                                let ord = match self.ipo_sort_col {
-                                    0 => a.date.cmp(&b.date),
-                                    1 => a.symbol.cmp(&b.symbol),
-                                    2 => a.name.cmp(&b.name),
-                                    3 => a.exchange.cmp(&b.exchange),
-                                    4 => a.price_range.cmp(&b.price_range),
-                                    5 => a.shares.cmp(&b.shares),
-                                    6 => a.total_value.total_cmp(&b.total_value),
-                                    7 => a.status.cmp(&b.status),
-                                    _ => a.date.cmp(&b.date),
-                                };
-                                if self.ipo_sort_asc {
-                                    ord
-                                } else {
-                                    ord.reverse()
-                                }
-                            });
                             egui::Grid::new("ipo_grid").striped(true).show(ui, |ui| {
                                 sortable_header(
                                     ui,
@@ -374,7 +372,8 @@ impl TyphooNApp {
                                     &mut self.ipo_sort_asc,
                                 );
                                 ui.end_row();
-                                for e in rows.iter() {
+                                for &index in order.iter() {
+                                    let e = &rows[index];
                                     ui.label(&e.date);
                                     ui.label(
                                         egui::RichText::new(&e.symbol)
@@ -440,6 +439,7 @@ impl TyphooNApp {
                                         .ok()
                                         .flatten()
                                         .unwrap_or_default();
+                                    self.earnings_history_sorted_indices.invalidate();
                                 }
                             }
                         }
@@ -464,39 +464,39 @@ impl TyphooNApp {
                         }
                     });
                     ui.separator();
+                    let sort_col = self.earnings_history_sort_col;
+                    let sort_asc = self.earnings_history_sort_asc;
+                    let rows = &self.earnings_history_rows;
+                    let order = self.earnings_history_sorted_indices.order(
+                        rows,
+                        sort_col,
+                        sort_asc,
+                        |a, b| match sort_col {
+                            0 => a.period.cmp(&b.period),
+                            1 => a.quarter.cmp(&b.quarter),
+                            2 => a.year.cmp(&b.year),
+                            3 => a
+                                .actual
+                                .unwrap_or(f64::NEG_INFINITY)
+                                .total_cmp(&b.actual.unwrap_or(f64::NEG_INFINITY)),
+                            4 => a
+                                .estimate
+                                .unwrap_or(f64::NEG_INFINITY)
+                                .total_cmp(&b.estimate.unwrap_or(f64::NEG_INFINITY)),
+                            5 => a
+                                .surprise
+                                .unwrap_or(f64::NEG_INFINITY)
+                                .total_cmp(&b.surprise.unwrap_or(f64::NEG_INFINITY)),
+                            6 => a
+                                .surprise_pct
+                                .unwrap_or(f64::NEG_INFINITY)
+                                .total_cmp(&b.surprise_pct.unwrap_or(f64::NEG_INFINITY)),
+                            _ => a.period.cmp(&b.period),
+                        },
+                    );
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let mut rows = self.earnings_history_rows.clone();
-                            rows.sort_by(|a, b| {
-                                let ord = match self.earnings_history_sort_col {
-                                    0 => a.period.cmp(&b.period),
-                                    1 => a.quarter.cmp(&b.quarter),
-                                    2 => a.year.cmp(&b.year),
-                                    3 => a
-                                        .actual
-                                        .unwrap_or(f64::NEG_INFINITY)
-                                        .total_cmp(&b.actual.unwrap_or(f64::NEG_INFINITY)),
-                                    4 => a
-                                        .estimate
-                                        .unwrap_or(f64::NEG_INFINITY)
-                                        .total_cmp(&b.estimate.unwrap_or(f64::NEG_INFINITY)),
-                                    5 => a
-                                        .surprise
-                                        .unwrap_or(f64::NEG_INFINITY)
-                                        .total_cmp(&b.surprise.unwrap_or(f64::NEG_INFINITY)),
-                                    6 => a
-                                        .surprise_pct
-                                        .unwrap_or(f64::NEG_INFINITY)
-                                        .total_cmp(&b.surprise_pct.unwrap_or(f64::NEG_INFINITY)),
-                                    _ => a.period.cmp(&b.period),
-                                };
-                                if self.earnings_history_sort_asc {
-                                    ord
-                                } else {
-                                    ord.reverse()
-                                }
-                            });
                             egui::Grid::new("ern_grid").striped(true).show(ui, |ui| {
                                 sortable_header(
                                     ui,
@@ -548,7 +548,8 @@ impl TyphooNApp {
                                     &mut self.earnings_history_sort_asc,
                                 );
                                 ui.end_row();
-                                for r in rows.iter() {
+                                for &index in order.iter() {
+                                    let r = &rows[index];
                                     ui.label(&r.period);
                                     ui.label(
                                         r.quarter.map(|v| format!("Q{}", v)).unwrap_or_default(),
@@ -803,6 +804,7 @@ impl TyphooNApp {
                                             .ok()
                                             .flatten()
                                             .unwrap_or_default();
+                                    self.sentiment_sorted_indices.invalidate();
                                 }
                             }
                         }
@@ -994,26 +996,26 @@ impl TyphooNApp {
                         );
                     }
                     ui.separator();
+                    let sort_col = self.sentiment_sort_col;
+                    let sort_asc = self.sentiment_sort_asc;
+                    let rows = &self.sentiment_rows;
+                    let order = self.sentiment_sorted_indices.order(
+                        rows,
+                        sort_col,
+                        sort_asc,
+                        |a, b| match sort_col {
+                            0 => a.source.cmp(&b.source),
+                            1 => a.at_time.cmp(&b.at_time),
+                            2 => a.mention.cmp(&b.mention),
+                            3 => a.positive_mention.cmp(&b.positive_mention),
+                            4 => a.negative_mention.cmp(&b.negative_mention),
+                            5 => a.score.total_cmp(&b.score),
+                            _ => a.at_time.cmp(&b.at_time),
+                        },
+                    );
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let mut rows = self.sentiment_rows.clone();
-                            rows.sort_by(|a, b| {
-                                let ord = match self.sentiment_sort_col {
-                                    0 => a.source.cmp(&b.source),
-                                    1 => a.at_time.cmp(&b.at_time),
-                                    2 => a.mention.cmp(&b.mention),
-                                    3 => a.positive_mention.cmp(&b.positive_mention),
-                                    4 => a.negative_mention.cmp(&b.negative_mention),
-                                    5 => a.score.total_cmp(&b.score),
-                                    _ => a.at_time.cmp(&b.at_time),
-                                };
-                                if self.sentiment_sort_asc {
-                                    ord
-                                } else {
-                                    ord.reverse()
-                                }
-                            });
                             egui::Grid::new("sentiment_grid")
                                 .striped(true)
                                 .show(ui, |ui| {
@@ -1060,7 +1062,8 @@ impl TyphooNApp {
                                         &mut self.sentiment_sort_asc,
                                     );
                                     ui.end_row();
-                                    for r in rows.iter() {
+                                    for &index in order.iter() {
+                                        let r = &rows[index];
                                         ui.label(&r.source);
                                         ui.label(&r.at_time);
                                         ui.label(format!("{}", r.mention));

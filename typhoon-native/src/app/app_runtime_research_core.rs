@@ -35,6 +35,7 @@ impl TyphooNApp {
                 let sym_u = sym.to_uppercase();
                 if self.earnings_history_symbol.eq_ignore_ascii_case(&sym_u) {
                     self.earnings_history_rows = rows.clone();
+                    self.earnings_history_sorted_indices.invalidate();
                     self.earnings_history_loading = false;
                 }
                 if self.desc_symbol.eq_ignore_ascii_case(&sym_u) {
@@ -50,6 +51,7 @@ impl TyphooNApp {
             }
             BrokerMsg::IpoCalendar(rows) => {
                 self.ipo_events = rows.clone();
+                self.ipo_sorted_indices.invalidate();
                 self.ipo_loading = false;
                 if let Some(ref cache) = self.cache {
                     if let Ok(conn) = cache.connection() {
@@ -82,6 +84,7 @@ impl TyphooNApp {
                 let sym_u = sym.to_uppercase();
                 if self.sentiment_symbol.eq_ignore_ascii_case(&sym_u) {
                     self.sentiment_rows = rows.clone();
+                    self.sentiment_sorted_indices.invalidate();
                     self.sentiment_loading = false;
                 }
                 if let Some(ref cache) = self.cache {

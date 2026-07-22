@@ -100,6 +100,7 @@ mod kraken_sync;
 mod market_data_sync;
 mod market_map_model;
 mod platform;
+mod research_sort_indices;
 mod session_persistence;
 mod settings;
 mod ssr_scan;
@@ -860,12 +861,14 @@ impl TyphooNApp {
             ipo_loading: false,
             ipo_sort_col: 0,
             ipo_sort_asc: true,
+            ipo_sorted_indices: research_sort_indices::SortedRowIndices::default(),
             show_earnings_history: false,
             earnings_history_symbol: String::new(),
             earnings_history_rows: Vec::new(),
             earnings_history_loading: false,
             earnings_history_sort_col: 0,
             earnings_history_sort_asc: false,
+            earnings_history_sorted_indices: research_sort_indices::SortedRowIndices::default(),
             show_peers: false,
             peers_symbol: String::new(),
             peers_list: Vec::new(),
@@ -894,6 +897,7 @@ impl TyphooNApp {
             sentiment_loading: false,
             sentiment_sort_col: 1,
             sentiment_sort_asc: false,
+            sentiment_sorted_indices: research_sort_indices::SortedRowIndices::default(),
             show_transcripts: false,
             transcripts_symbol: String::new(),
             transcripts_list: Vec::new(),

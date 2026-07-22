@@ -1379,6 +1379,7 @@ pub struct TyphooNApp {
     pub(crate) ipo_loading: bool,
     pub(crate) ipo_sort_col: usize,
     pub(crate) ipo_sort_asc: bool,
+    pub(crate) ipo_sorted_indices: research_sort_indices::SortedRowIndices,
 
     /// EARNINGS command — historical actuals vs estimates.
     pub(crate) show_earnings_history: bool,
@@ -1387,6 +1388,7 @@ pub struct TyphooNApp {
     pub(crate) earnings_history_loading: bool,
     pub(crate) earnings_history_sort_col: usize,
     pub(crate) earnings_history_sort_asc: bool,
+    pub(crate) earnings_history_sorted_indices: research_sort_indices::SortedRowIndices,
 
     /// PEERS command — related tickers.
     pub(crate) show_peers: bool,
@@ -1433,6 +1435,7 @@ pub struct TyphooNApp {
     pub(crate) social_history_dirty: bool,
     pub(crate) sentiment_sort_col: usize,
     pub(crate) sentiment_sort_asc: bool,
+    pub(crate) sentiment_sorted_indices: research_sort_indices::SortedRowIndices,
 
     /// TRANSCRIPTS command — earnings call transcripts.
     pub(crate) show_transcripts: bool,
