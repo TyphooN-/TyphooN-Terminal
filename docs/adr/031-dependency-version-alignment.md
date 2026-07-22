@@ -457,3 +457,22 @@ Security-first lockfile refresh per the initiative (ADR-031/088):
 - Updated root Cargo.toml comment + this ADR. Cargo.lock carries the patches.
 
 Policy held: latest stable compatible, minimal direct features only, no workspace drift, upstream dups documented not removed locally.
+
+## Follow-up verification comb-over (2026-07-22)
+
+Security-first initiative verification pass after Claude-assisted centralization + refresh changes (ADR-031/088 policy):
+
+- Verified no manifest or version changes needed: `cargo search` + declared pins confirm all at latest stable (or intentionally pinned per pairing rule); `cargo update --workspace` reports "Locking 0 packages" (tree at ceiling for declared ranges).
+- No multiple versions of same crates declared: all repeated direct deps centralized in `[workspace.dependencies]`; grep shows zero repeated `version = ` strings for third-party crates in member manifests (only platform `dbus-secret-service-keyring-store = { version = "1" }` target-dep).
+- Minimal features only: re-audited via call-site grep + `cargo tree --edges features`; every direct declaration uses `default-features = false` + exactly the exercised features (e.g. engine tokio rt+sync+time+macros+net+io-util + futures std+sink; native rt-multi-thread + egui_extras image+webp+http + rustls aws_lc_rs; broker futures alloc only; no unnecessary like derive on zeroize in engine, svg on egui_extras, etc.).
+- `cargo check --workspace` clean (incremental 0.3s).
+- `cargo udeps --workspace`: "All deps seem to have been used."
+- `cargo tree -d --workspace`: 52 dup families, *all* upstream-owned (no direct TyphooN drift); same families as prior (aes 0.8/0.9 vs 0.9/0.11, block-buffer/digest 0.10/0.12, calloop 0.13/0.14 + smithay, syn 2/3 from async-trait, thiserror 1/2, generic-array 0.14.7, wgpu etc.).
+- `python .../cargo_manifest_drift.py`: drift_check=OK.
+- `cargo audit` expectations unchanged (clean except documented build-time quick-xml RUSTSEC-2026-0194/0195 ignores in .cargo/audit.toml).
+- No regressions from recent Claude changes (centralize 20+ crates, wasm bump, feature normalizations, bare-string fixes): all verifications pass; call sites compile and use the inherited workspace versions/features without modification.
+- Blockers unchanged and documented: wgpu@29 (egui-wgpu/eframe 0.35 pin; 30 would split GPU types), generic-array@0.14.7 (latest dbus-secret-service-keyring-store still on old RustCrypto line).
+- Root Cargo.toml comment and per-crate rationale comments remain accurate.
+
+Policy re-confirmed with zero edits required. Future "latest" sweeps remain one-place (workspace table) + documented non-upgrades.
+

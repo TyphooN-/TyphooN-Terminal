@@ -38,7 +38,8 @@ base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # minimal feature surface, and easy security refreshes (per ADR-031/088).
 # Versions are latest stable at time of 2026-07-22 pass; features kept to exactly
 # what each consuming crate enables (see per-crate manifests for call-site
-# additions and rationale comments).
+# additions and rationale comments). Re-comb 2026-07-22 confirmed: no new
+# available majors/minors, no direct dup versions, minimal flags only, udeps clean.
 # Lockfile carries latest compatible patches within declared ranges.
 async-trait = { version = "0.1", default-features = false }
 bytemuck = { version = "1.25", default-features = false }

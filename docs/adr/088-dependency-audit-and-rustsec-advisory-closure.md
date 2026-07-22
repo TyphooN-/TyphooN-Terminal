@@ -338,3 +338,19 @@ Security-first lockfile refresh (per ADR-031/088):
 - Reconfirmed no avoidable direct multi-versions, features remain the audited minimal sets.
 
 See ADR-031 for full command list and blocker details.
+
+## Follow-up verification comb-over (2026-07-22)
+
+Verification pass post centralization/refresh (companion to ADR-031):
+
+- No new updates or manifest edits required (cargo update locking 0; declared at latest within policy).
+- `cargo udeps --workspace`: All deps used.
+- `cargo check --workspace` clean.
+- `cargo tree -d`: only upstream dups, no direct multi-versions anywhere in workspace manifests.
+- Drift script OK; features remain the minimal audited sets (no widening).
+- `cargo audit` expectations: clean aside from the two documented build-time quick-xml ignores.
+- Confirmed no regressions from prior Claude work on centralization, feature localization, version bumps.
+- All crates sharing common version via workspace table; only compiling needed flags.
+
+See ADR-031 for detailed command output and policy restatement.
+
