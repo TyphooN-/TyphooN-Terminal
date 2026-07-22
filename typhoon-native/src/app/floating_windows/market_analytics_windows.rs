@@ -786,8 +786,8 @@ impl TyphooNApp {
         // ── Sector Heatmap ────────────────────────────────────────────
         if self.show_sector_heatmap {
             let scope_label = self.broker_scope_label();
-            // PERF: read from per-frame cache
-            let scoped = self.cached_scoped_fundamentals.clone();
+            // PERF: share the immutable scope snapshot instead of cloning every Fundamentals row.
+            let scoped = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
             egui::Window::new("Sector Heatmap")
                 .open(&mut self.show_sector_heatmap)
                 .resizable(true)
@@ -833,8 +833,8 @@ impl TyphooNApp {
         // ── Dividend Yield Screener ───────────────────────────────────
         if self.show_dividends {
             let scope_label = self.broker_scope_label();
-            // PERF: read from per-frame cache
-            let scoped = self.cached_scoped_fundamentals.clone();
+            // PERF: share the immutable scope snapshot instead of cloning every Fundamentals row.
+            let scoped = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
             let mut div_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for dividend stocks
             let divs_for_sl = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);

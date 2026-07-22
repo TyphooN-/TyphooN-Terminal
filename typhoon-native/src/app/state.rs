@@ -836,10 +836,11 @@ pub struct TyphooNApp {
     /// Recomputed only on active input or kraken_pairs/flags change (tied to active key + sig).
     pub(crate) cached_kraken_sync_sectors: Vec<Vec<String>>,
     pub(crate) cached_kraken_sync_sectors_key: Option<u64>,
-    /// Cached scoped fundamentals (filtered by broker_scope). Rebuilt only when
+    /// Shared scoped-fundamentals snapshot (filtered by broker_scope). Rebuilt only when
     /// `(bg_rev, broker_scope)` changes — not per frame. Used by Sector Heatmap,
     /// Dividend Yield Screener, Outlier Scanner.
-    pub(crate) cached_scoped_fundamentals: Vec<typhoon_engine::core::fundamentals::Fundamentals>,
+    pub(crate) cached_scoped_fundamentals:
+        std::sync::Arc<[typhoon_engine::core::fundamentals::Fundamentals]>,
     pub(crate) cached_scoped_fundamentals_key: Option<(u64, EventSource)>,
     /// Cached Alpaca bar-state map (symbol, timeframe) -> sync metadata.
     /// Rebuilt only when `bg_rev` changes so the sync scheduler doesn't rescan

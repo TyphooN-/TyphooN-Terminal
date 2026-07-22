@@ -145,11 +145,15 @@ impl eframe::App for TyphooNApp {
                 self.cached_kraken_sync_sectors_key = Some(active_symbols_key);
             }
         }
-        // PERF: Cache scoped_fundamentals_owned() only when bg/scope changes — not per frame.
-        // Was cloning ~500 Fundamentals structs (≈1 MB) every frame for no reason.
+        // PERF: Replace the shared scoped-fundamentals snapshot only when bg/scope changes.
         if self.cached_scoped_fundamentals_key != Some(scope_key) {
-            self.cached_scoped_fundamentals = self.scoped_fundamentals_owned();
-            self.cached_scoped_fundamentals_key = Some(scope_key);
+            let scoped_fundamentals = self.scoped_fundamentals_owned();
+            style_scope::refresh_arc_slice_cache(
+                &mut self.cached_scoped_fundamentals,
+                &mut self.cached_scoped_fundamentals_key,
+                scope_key,
+                || scoped_fundamentals,
+            );
         }
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
             let previous = std::mem::take(&mut self.cached_alpaca_sync_state);

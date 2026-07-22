@@ -495,8 +495,8 @@ impl TyphooNApp {
         // Multi-Dimensional Outlier Scanner
         if self.show_outliers {
             let outlier_scope_label = self.broker_scope_label().to_string();
-            // PERF: read from per-frame cache
-            let outlier_scoped_fund = self.cached_scoped_fundamentals.clone();
+            // PERF: share the immutable scope snapshot instead of cloning every Fundamentals row.
+            let outlier_scoped_fund = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
             let mut pending_action = SymbolAction::None;
             // UX7: pre-fetch sparklines for top outlier symbols
             let mut outlier_syms: Vec<String> = self
@@ -539,7 +539,7 @@ impl TyphooNApp {
                                     if let Some(ref cache) = self.cache {
                                         if let Some(_conn) = cache.try_connection() {
                                             let mut data: Vec<(String, String, String, f64)> = Vec::new();
-                                            for f in &outlier_scoped_fund {
+                                            for f in outlier_scoped_fund.iter() {
                                                 let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
                                                 let industry = if f.industry.is_empty() { sector.clone() } else { f.industry.clone() };
                                                 if let Some(mc) = f.market_cap { if mc > 0.0 { data.push((f.symbol.clone(), sector, industry, mc)); } }

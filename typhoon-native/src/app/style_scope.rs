@@ -3,6 +3,21 @@ use super::*;
 const SEC_CACHE_HEAVY_SYNC_MIN_REBUILD_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(30);
 
+pub(super) fn refresh_arc_slice_cache<T, K, F>(
+    cached: &mut std::sync::Arc<[T]>,
+    cached_key: &mut Option<K>,
+    next_key: K,
+    build: F,
+) where
+    K: PartialEq,
+    F: FnOnce() -> Vec<T>,
+{
+    if cached_key.as_ref() != Some(&next_key) {
+        *cached = build().into();
+        *cached_key = Some(next_key);
+    }
+}
+
 impl TyphooNApp {
     pub(super) fn dark_visuals() -> egui::Visuals {
         let mut v = egui::Visuals::dark();
@@ -1043,6 +1058,10 @@ fn kraken_sec_scrape_scope_symbols(
 
     normalize_sec_scrape_symbols_priority_order(std::collections::HashSet::new(), raw)
 }
+
+#[cfg(test)]
+#[path = "style_scope/arc_cache_tests.rs"]
+mod arc_cache_tests;
 
 #[cfg(test)]
 mod tests {
