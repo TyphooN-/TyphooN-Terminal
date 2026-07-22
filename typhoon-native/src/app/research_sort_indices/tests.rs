@@ -14,6 +14,14 @@ struct Row {
 }
 
 #[test]
+fn active_only_filter_requires_both_toggle_and_nonempty_scope() {
+    assert!(!active_only_filter_enabled(false, 0));
+    assert!(!active_only_filter_enabled(false, 3));
+    assert!(!active_only_filter_enabled(true, 0));
+    assert!(active_only_filter_enabled(true, 3));
+}
+
+#[test]
 fn sorted_indices_preserve_source_order_for_equal_keys_in_both_directions() {
     let rows = [
         Row { key: 2, label: "a" },

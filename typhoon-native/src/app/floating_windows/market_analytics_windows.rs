@@ -4,11 +4,10 @@ impl TyphooNApp {
     pub(super) fn render_market_analytics_windows(&mut self, ctx: &egui::Context) {
         // Dividend Calendar
         if self.show_dividend_calendar {
-            let div_active = if self.dividends_active_only {
-                self.cached_active_symbols.clone()
-            } else {
-                Vec::new()
-            };
+            let filter_active = research_sort_indices::active_only_filter_enabled(
+                self.dividends_active_only,
+                self.cached_active_symbols.len(),
+            );
             let mut dc_pending_action = SymbolAction::None;
             egui::Window::new("Dividend Calendar")
                 .open(&mut self.show_dividend_calendar)
@@ -44,7 +43,7 @@ impl TyphooNApp {
                                     ui.end_row();
                                     for (sym, company, date, yld) in &self.bg.upcoming_dividends {
                                         // PERF: fundamentals.symbol is always uppercase.
-                                        if !div_active.is_empty()
+                                        if filter_active
                                             && !self
                                                 .cached_active_symbols_set
                                                 .contains(sym.as_str())

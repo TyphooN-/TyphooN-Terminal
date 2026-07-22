@@ -1173,11 +1173,10 @@ impl TyphooNApp {
 
         // Earnings Calendar
         if self.show_earnings_calendar {
-            let earn_active = if self.earnings_active_only {
-                self.cached_active_symbols.clone()
-            } else {
-                Vec::new()
-            };
+            let filter_active = research_sort_indices::active_only_filter_enabled(
+                self.earnings_active_only,
+                self.cached_active_symbols.len(),
+            );
             let mut earn_pending_action = SymbolAction::None;
             egui::Window::new("Earnings Calendar")
                 .open(&mut self.show_earnings_calendar)
@@ -1213,7 +1212,7 @@ impl TyphooNApp {
                                     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                                     for (sym, company, date) in &self.bg.upcoming_earnings {
                                         // PERF: fundamentals.symbol is always uppercase (parse_yahoo_data).
-                                        if !earn_active.is_empty()
+                                        if filter_active
                                             && !self
                                                 .cached_active_symbols_set
                                                 .contains(sym.as_str())

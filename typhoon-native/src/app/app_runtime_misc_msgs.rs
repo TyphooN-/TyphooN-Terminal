@@ -8,7 +8,7 @@ impl TyphooNApp {
                     "Unusual volume: {} symbols flagged",
                     results.len()
                 )));
-                self.unusual_volume_results = results;
+                self.unusual_volume_results = results.into();
             }
             BrokerMsg::MarketClock(msg) => {
                 if self.market_clock_status.as_str() != msg.as_str() {

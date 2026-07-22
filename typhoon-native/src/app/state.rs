@@ -1282,7 +1282,7 @@ pub struct TyphooNApp {
     pub(crate) show_dividend_calendar: bool,
     // Unusual Whales / Godel Terminal features
     pub(crate) show_unusual_volume: bool,
-    pub(crate) unusual_volume_results: Vec<(String, f64, f64, f64)>, // (symbol, today_vol, avg_vol, ratio)
+    pub(crate) unusual_volume_results: std::sync::Arc<[(String, f64, f64, f64)]>, // (symbol, today_vol, avg_vol, ratio)
     pub(crate) show_sector_rotation: bool,
     pub(crate) show_fred: bool,
     pub(crate) fred_data: Vec<typhoon_engine::core::fred::FredSeries>,

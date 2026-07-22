@@ -6,6 +6,10 @@ use std::sync::Arc;
 use typhoon_engine::broker::cache_keys::bare_symbol_from_key;
 use typhoon_engine::core::fundamentals::Fundamentals;
 
+pub(crate) fn active_only_filter_enabled(active_only: bool, active_symbol_count: usize) -> bool {
+    active_only && active_symbol_count > 0
+}
+
 pub(crate) fn fundamentals_order(
     left: &Fundamentals,
     right: &Fundamentals,

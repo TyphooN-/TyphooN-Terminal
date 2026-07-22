@@ -784,7 +784,7 @@ impl TyphooNApp {
             show_earnings_calendar: false,
             show_dividend_calendar: false,
             show_unusual_volume: false,
-            unusual_volume_results: Vec::new(),
+            unusual_volume_results: std::sync::Arc::from([]),
             show_sector_rotation: false,
             show_fred: false,
             fred_data: Vec::new(),

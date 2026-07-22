@@ -897,16 +897,16 @@ impl TyphooNApp {
 
         // Unusual Volume Scanner
         if self.show_unusual_volume {
-            let vol_active = if self.volume_active_only {
-                self.cached_active_symbols.clone()
-            } else {
-                Vec::new()
-            };
+            let filter_active = research_sort_indices::active_only_filter_enabled(
+                self.volume_active_only,
+                self.cached_active_symbols.len(),
+            );
             let mut uv_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for unusual volume symbols
             let mut uv_sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> =
                 std::collections::HashMap::new();
-            for (sym, _, _, _) in self.unusual_volume_results.clone().iter().take(100) {
+            let unusual_volume_results = std::sync::Arc::clone(&self.unusual_volume_results);
+            for (sym, _, _, _) in unusual_volume_results.iter().take(100) {
                 let closes = self.get_sparkline(sym);
                 if !closes.is_empty() {
                     uv_sparklines.insert(sym.to_uppercase(), closes);
@@ -969,9 +969,11 @@ impl TyphooNApp {
                                             .strong(),
                                     );
                                     ui.end_row();
-                                    for (sym, today, avg, ratio) in &self.unusual_volume_results {
+                                    for (sym, today, avg, ratio) in
+                                        self.unusual_volume_results.iter()
+                                    {
                                         // PERF: sym is already uppercase (set at creation) — skip redundant alloc.
-                                        if !vol_active.is_empty()
+                                        if filter_active
                                             && !self
                                                 .cached_active_symbols_set
                                                 .contains(sym.as_str())
@@ -1492,11 +1494,10 @@ impl TyphooNApp {
 
         // Congressional Trades (House Stock Watcher)
         if self.show_congress {
-            let cong_active = if self.congress_active_only {
-                self.cached_active_symbols.clone()
-            } else {
-                Vec::new()
-            };
+            let filter_active = research_sort_indices::active_only_filter_enabled(
+                self.congress_active_only,
+                self.cached_active_symbols.len(),
+            );
             let mut cong_pending_action = SymbolAction::None;
             egui::Window::new("Congressional Trades")
                 .open(&mut self.show_congress)
@@ -1569,7 +1570,7 @@ impl TyphooNApp {
                                         for (date, rep, ticker, tx_type, amount, party) in
                                             &self.congress_trades
                                         {
-                                            if !cong_active.is_empty()
+                                            if filter_active
                                                 && !self
                                                     .cached_active_symbols_set
                                                     .contains(ticker.as_str())
