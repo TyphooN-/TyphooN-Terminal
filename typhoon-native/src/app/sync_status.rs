@@ -438,10 +438,18 @@ pub(crate) struct BarSyncResult {
     total: u64,
 }
 
-fn detailed_sync_key_set(detailed_stats: &[(String, i64, i64)]) -> std::collections::HashSet<&str> {
+type DetailedSyncKeyParts<'a> = (&'a str, &'a str, &'a str);
+
+fn detailed_sync_key_parts(
+    detailed_stats: &[(String, i64, i64)],
+) -> std::collections::HashSet<DetailedSyncKeyParts<'_>> {
     detailed_stats
         .iter()
-        .map(|(key, _, _)| key.as_str())
+        .filter_map(|(key, _, _)| {
+            let (source, rest) = key.split_once(':')?;
+            let (symbol, timeframe) = rest.rsplit_once(':')?;
+            Some((source, symbol, timeframe))
+        })
         .collect()
 }
 
@@ -774,7 +782,7 @@ impl BarSyncInputs {
         if timeframes.is_empty() || (!self.cache_stats_present && self.detailed_stats.is_empty()) {
             return;
         }
-        let existing = detailed_sync_key_set(&self.detailed_stats);
+        let existing = detailed_sync_key_parts(&self.detailed_stats);
         let mut row_index: std::collections::HashMap<(String, String), usize> = rows
             .iter()
             .enumerate()
@@ -839,10 +847,10 @@ impl BarSyncInputs {
                 };
                 let row_key = (broker.to_string(), tf.to_string());
                 for symbol in symbols.iter() {
-                    let expected_key = format!("{source}:{symbol}:{tf}");
-                    if existing.contains(expected_key.as_str()) {
+                    if existing.contains(&(source, symbol.as_str(), tf)) {
                         continue;
                     }
+                    let expected_key = format!("{source}:{symbol}:{tf}");
                     let fetch_key = alpaca_fetch_key(symbol, tf);
                     let provider_settled = checked_or_complete_lookup(&expected_key);
                     let provider_unreachable = self
@@ -1182,11 +1190,24 @@ mod tests {
     }
 
     #[test]
-    fn detailed_sync_key_set_borrows_input_keys() {
-        let detailed = vec![("kraken:BTC/USD:1Min".to_string(), 10, 20)];
-        let keys = detailed_sync_key_set(&detailed);
-        let stored = keys.get("kraken:BTC/USD:1Min").unwrap();
+    fn detailed_sync_key_parts_borrow_canonical_input_segments() {
+        let detailed = vec![
+            ("kraken:BTC/USD:1Day".to_string(), 42, 7),
+            ("custom:SY:M:1Hour".to_string(), 12, 9),
+            ("malformed".to_string(), 0, 0),
+        ];
+        let keys = detailed_sync_key_parts(&detailed);
 
-        assert!(std::ptr::eq(stored.as_ptr(), detailed[0].0.as_ptr()));
+        assert!(keys.contains(&("kraken", "BTC/USD", "1Day")));
+        assert!(keys.contains(&("custom", "SY:M", "1Hour")));
+        assert_eq!(keys.len(), 2);
+        let (source, symbol, timeframe) =
+            keys.get(&("kraken", "BTC/USD", "1Day")).copied().unwrap();
+        assert!(std::ptr::eq(source.as_ptr(), detailed[0].0.as_ptr()));
+        assert!(std::ptr::eq(symbol.as_ptr(), detailed[0].0[7..].as_ptr()));
+        assert!(std::ptr::eq(
+            timeframe.as_ptr(),
+            detailed[0].0[15..].as_ptr()
+        ));
     }
 }
