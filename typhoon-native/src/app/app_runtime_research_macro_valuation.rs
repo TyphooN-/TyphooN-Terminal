@@ -1,6 +1,14 @@
 use super::*;
 
 impl TyphooNApp {
+    pub(super) fn replace_omon_snapshot(
+        &mut self,
+        snapshot: typhoon_engine::core::research::OptionsChainSnapshot,
+    ) {
+        self.omon_prepared = typhoon_research_ui::render::prepare_omon_snapshot(&snapshot);
+        self.omon_snapshot = snapshot;
+    }
+
     pub(super) fn handle_research_macro_valuation_msg(&mut self, msg: BrokerMsg) {
         match msg {
             // ── Research section ──
@@ -147,7 +155,7 @@ impl TyphooNApp {
             BrokerMsg::OptionsChainMsg(sym, snap) => {
                 let sym_u = sym.to_uppercase();
                 if self.omon_symbol.eq_ignore_ascii_case(&sym_u) {
-                    self.omon_snapshot = snap.clone();
+                    self.replace_omon_snapshot(snap.clone());
                     self.omon_loading = false;
                 }
                 if let Some(ref cache) = self.cache {

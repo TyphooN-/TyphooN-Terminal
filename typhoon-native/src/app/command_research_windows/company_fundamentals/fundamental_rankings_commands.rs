@@ -74,17 +74,14 @@ impl TyphooNApp {
                 }
                 self.show_omon = true;
                 if self.omon_snapshot.symbol.is_empty() && !self.omon_symbol.is_empty() {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            if let Ok(Some(snap)) =
-                                typhoon_engine::core::research::get_options_chain(
-                                    &conn,
-                                    &self.omon_symbol,
-                                )
-                            {
-                                self.omon_snapshot = snap;
-                            }
-                        }
+                    let cached_snapshot = self.cache.as_ref().and_then(|cache| {
+                        let conn = cache.connection().ok()?;
+                        typhoon_engine::core::research::get_options_chain(&conn, &self.omon_symbol)
+                            .ok()
+                            .flatten()
+                    });
+                    if let Some(snapshot) = cached_snapshot {
+                        self.replace_omon_snapshot(snapshot);
                     }
                 }
                 if !self.omon_symbol.is_empty() {

@@ -275,18 +275,16 @@ impl TyphooNApp {
                             self.omon_symbol = chart_sym_research.clone();
                         }
                         if ui.button("Load Cached").clicked() {
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let sym_u = self.omon_symbol.to_uppercase();
-                                    if let Ok(Some(snap)) =
-                                        typhoon_engine::core::research::get_options_chain(
-                                            &conn, &sym_u,
-                                        )
-                                    {
-                                        self.omon_snapshot = snap;
-                                        self.omon_symbol = sym_u;
-                                    }
-                                }
+                            let sym_u = self.omon_symbol.to_uppercase();
+                            let cached_snapshot = self.cache.as_ref().and_then(|cache| {
+                                let conn = cache.connection().ok()?;
+                                typhoon_engine::core::research::get_options_chain(&conn, &sym_u)
+                                    .ok()
+                                    .flatten()
+                            });
+                            if let Some(snapshot) = cached_snapshot {
+                                self.replace_omon_snapshot(snapshot);
+                                self.omon_symbol = sym_u;
                             }
                         }
                         if ui.add(egui::Button::new("Fetch").fill(BTN_MG)).clicked() {
@@ -301,7 +299,11 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Loading…").color(AXIS_TEXT).small());
                         }
                     });
-                    super::render::render_omon_snapshot(ui, &self.omon_snapshot);
+                    super::render::render_omon_snapshot(
+                        ui,
+                        &self.omon_snapshot,
+                        &self.omon_prepared,
+                    );
                 });
             self.show_omon = open;
         }

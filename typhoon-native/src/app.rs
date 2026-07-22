@@ -1054,6 +1054,7 @@ impl TyphooNApp {
             show_omon: false,
             omon_symbol: String::new(),
             omon_snapshot: typhoon_engine::core::research::OptionsChainSnapshot::default(),
+            omon_prepared: typhoon_research_ui::render::PreparedOmonSnapshot::default(),
             omon_loading: false,
             show_ivol: false,
             ivol_symbol: String::new(),

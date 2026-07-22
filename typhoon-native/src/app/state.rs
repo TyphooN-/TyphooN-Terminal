@@ -1678,6 +1678,7 @@ pub struct TyphooNApp {
     pub(crate) show_omon: bool,
     pub(crate) omon_symbol: String,
     pub(crate) omon_snapshot: typhoon_engine::core::research::OptionsChainSnapshot,
+    pub(crate) omon_prepared: typhoon_research_ui::render::PreparedOmonSnapshot,
     pub(crate) omon_loading: bool,
 
     /// IVOL — implied-vol rank / percentile from cached OMON history.

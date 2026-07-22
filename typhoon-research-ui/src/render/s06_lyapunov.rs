@@ -5,6 +5,80 @@ use crate::theme::{AXIS_TEXT, BTN_GREEN_TEXT, BTN_RED_TEXT, DOWN, UP};
 #[allow(unused_imports)]
 use typhoon_engine::core::research::*;
 
+#[cfg(test)]
+#[path = "s06_lyapunov/omon_strike_rows_tests.rs"]
+mod omon_strike_rows_tests;
+
+#[derive(Debug, Clone)]
+struct PreparedOmonStrikeRow {
+    strike: f64,
+    call_index: Option<usize>,
+    put_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PreparedOmonExpiry {
+    expiration: String,
+    rows: Vec<PreparedOmonStrikeRow>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PreparedOmonSnapshot {
+    expirations: Vec<PreparedOmonExpiry>,
+}
+
+fn prepare_omon_strike_rows(expiry: &OptionExpiry) -> Vec<PreparedOmonStrikeRow> {
+    let strike_key = |strike: f64| (strike * 1_000_000.0).round() as i64;
+    let call_by_strike: std::collections::HashMap<i64, usize> = expiry
+        .calls
+        .iter()
+        .enumerate()
+        .map(|(index, contract)| (strike_key(contract.strike), index))
+        .collect();
+    let put_by_strike: std::collections::HashMap<i64, usize> = expiry
+        .puts
+        .iter()
+        .enumerate()
+        .map(|(index, contract)| (strike_key(contract.strike), index))
+        .collect();
+    let mut seen_strikes: std::collections::HashSet<i64> = call_by_strike.keys().copied().collect();
+    let mut strikes: Vec<f64> = expiry
+        .calls
+        .iter()
+        .map(|contract| contract.strike)
+        .collect();
+    for contract in &expiry.puts {
+        if seen_strikes.insert(strike_key(contract.strike)) {
+            strikes.push(contract.strike);
+        }
+    }
+    strikes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    strikes
+        .into_iter()
+        .map(|strike| {
+            let key = strike_key(strike);
+            PreparedOmonStrikeRow {
+                strike,
+                call_index: call_by_strike.get(&key).copied(),
+                put_index: put_by_strike.get(&key).copied(),
+            }
+        })
+        .collect()
+}
+
+pub fn prepare_omon_snapshot(snapshot: &OptionsChainSnapshot) -> PreparedOmonSnapshot {
+    PreparedOmonSnapshot {
+        expirations: snapshot
+            .expirations
+            .iter()
+            .map(|expiry| PreparedOmonExpiry {
+                expiration: expiry.expiration.clone(),
+                rows: prepare_omon_strike_rows(expiry),
+            })
+            .collect(),
+    }
+}
+
 pub fn render_lyapunov_snapshot(ui: &mut egui::Ui, snap: &LyapunovSnapshot) {
     ui.separator();
     if snap.symbol.is_empty() || snap.lyapunov_label == "INSUFFICIENT_DATA" {
@@ -1015,7 +1089,11 @@ pub fn render_omega_snapshot(ui: &mut egui::Ui, snap: &OmegaRatioSnapshot) {
     }
 }
 
-pub fn render_omon_snapshot(ui: &mut egui::Ui, snap: &OptionsChainSnapshot) {
+pub fn render_omon_snapshot(
+    ui: &mut egui::Ui,
+    snap: &OptionsChainSnapshot,
+    prepared: &PreparedOmonSnapshot,
+) {
     ui.separator();
     if snap.symbol.is_empty() || snap.expirations.is_empty() {
         ui.label(
@@ -1039,7 +1117,12 @@ pub fn render_omon_snapshot(ui: &mut egui::Ui, snap: &OptionsChainSnapshot) {
         );
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for exp in &snap.expirations {
+            for (expiry_index, exp) in snap.expirations.iter().enumerate() {
+                let prepared_expiry = prepared.expirations.get(expiry_index);
+                debug_assert_eq!(
+                    prepared_expiry.map(|prepared| prepared.expiration.as_str()),
+                    Some(exp.expiration.as_str())
+                );
                 ui.label(
                     egui::RichText::new(format!(
                         "Expiry {} ({} days) — {} calls / {} puts",
@@ -1099,30 +1182,15 @@ pub fn render_omon_snapshot(ui: &mut egui::Ui, snap: &OptionsChainSnapshot) {
                                 .strong(),
                         );
                         ui.end_row();
-                        let strike_key = |strike: f64| (strike * 1_000_000.0).round() as i64;
-                        let call_by_strike: std::collections::HashMap<i64, _> = exp
-                            .calls
-                            .iter()
-                            .map(|c| (strike_key(c.strike), c))
-                            .collect();
-                        let put_by_strike: std::collections::HashMap<i64, _> =
-                            exp.puts.iter().map(|p| (strike_key(p.strike), p)).collect();
-                        let mut seen_strikes: std::collections::HashSet<i64> =
-                            call_by_strike.keys().copied().collect();
-                        let mut strikes: Vec<f64> = exp.calls.iter().map(|c| c.strike).collect();
-                        for p in &exp.puts {
-                            if seen_strikes.insert(strike_key(p.strike)) {
-                                strikes.push(p.strike);
-                            }
-                        }
-                        strikes
-                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                        for k in strikes.iter().take(40) {
-                            let key = strike_key(*k);
-                            let call = call_by_strike.get(&key).copied();
-                            let put = put_by_strike.get(&key).copied();
+                        for row in prepared_expiry
+                            .into_iter()
+                            .flat_map(|prepared| prepared.rows.iter())
+                            .take(40)
+                        {
+                            let call = row.call_index.and_then(|index| exp.calls.get(index));
+                            let put = row.put_index.and_then(|index| exp.puts.get(index));
                             ui.label(
-                                egui::RichText::new(format!("{:.2}", k))
+                                egui::RichText::new(format!("{:.2}", row.strike))
                                     .small()
                                     .monospace()
                                     .strong(),
