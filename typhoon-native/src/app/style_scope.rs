@@ -8,17 +8,68 @@ pub(super) fn refresh_arc_slice_cache<T, K, F>(
     cached_key: &mut Option<K>,
     next_key: K,
     build: F,
-) where
+) -> bool
+where
     K: PartialEq,
     F: FnOnce() -> Vec<T>,
 {
-    if cached_key.as_ref() != Some(&next_key) {
-        *cached = build().into();
-        *cached_key = Some(next_key);
+    if cached_key.as_ref() == Some(&next_key) {
+        return false;
     }
+
+    *cached = build().into();
+    *cached_key = Some(next_key);
+    true
+}
+
+pub(super) fn position_symbol_membership_signature(positions: &[PositionInfo]) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut symbols: Vec<&str> = positions
+        .iter()
+        .map(|position| position.symbol.as_str())
+        .collect();
+    symbols.sort_unstable();
+    symbols.dedup();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    symbols.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) fn broker_scope_membership_signature(
+    scope: EventSource,
+    alpaca_positions_rev: u64,
+    kraken_positions_rev: u64,
+    kraken_catalog_rev: u64,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match scope {
+        EventSource::All => return 0,
+        EventSource::Alpaca => alpaca_positions_rev.hash(&mut hasher),
+        EventSource::Kraken => {
+            kraken_positions_rev.hash(&mut hasher);
+            kraken_catalog_rev.hash(&mut hasher);
+        }
+        EventSource::Positions => {
+            alpaca_positions_rev.hash(&mut hasher);
+            kraken_positions_rev.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 impl TyphooNApp {
+    pub(super) fn broker_scope_membership_signature(&self) -> u64 {
+        broker_scope_membership_signature(
+            self.broker_scope,
+            self.alpaca_position_membership_rev,
+            self.kraken_position_membership_rev,
+            self.kraken_scope_catalog_rev,
+        )
+    }
+
     pub(super) fn dark_visuals() -> egui::Visuals {
         let mut v = egui::Visuals::dark();
         // ── TOTAL AESTHETIC OVERHAUL: square, compact, dark like Godel Terminal ──

@@ -786,20 +786,29 @@ impl TyphooNApp {
         // ── Sector Heatmap ────────────────────────────────────────────
         if self.show_sector_heatmap {
             let scope_label = self.broker_scope_label();
-            // PERF: share the immutable scope snapshot instead of cloning every Fundamentals row.
-            let scoped = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
+            let scoped_count = self.cached_scoped_fundamentals.len();
+            if let Some(scope_key) = self.cached_scoped_fundamentals_key {
+                let scoped = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
+                style_scope::refresh_arc_slice_cache(
+                    &mut self.cached_sector_heatmap,
+                    &mut self.cached_sector_heatmap_key,
+                    scope_key,
+                    || typhoon_engine::core::screener::compute_sector_heatmap(&scoped),
+                );
+            }
+            // PERF: grouping and sorting happen only when the scoped snapshot changes.
+            let sectors = std::sync::Arc::clone(&self.cached_sector_heatmap);
             egui::Window::new("Sector Heatmap")
                 .open(&mut self.show_sector_heatmap)
                 .resizable(true)
                 .default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    let sectors = typhoon_engine::core::screener::compute_sector_heatmap(&scoped);
                     ui.label(
                         egui::RichText::new(format!(
                             "{} sectors • scope: {} ({} symbols)",
                             sectors.len(),
                             scope_label,
-                            scoped.len()
+                            scoped_count
                         ))
                         .strong(),
                     );
@@ -816,7 +825,7 @@ impl TyphooNApp {
                                     ui.strong("Total MCap");
                                     ui.strong("Avg P/E");
                                     ui.end_row();
-                                    for s in &sectors {
+                                    for s in sectors.iter() {
                                         ui.label(&s.sector);
                                         ui.label(format!("{}", s.symbol_count));
                                         ui.label(fundamentals::format_large_number(
@@ -833,14 +842,22 @@ impl TyphooNApp {
         // ── Dividend Yield Screener ───────────────────────────────────
         if self.show_dividends {
             let scope_label = self.broker_scope_label();
-            // PERF: share the immutable scope snapshot instead of cloning every Fundamentals row.
-            let scoped = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
+            if let Some(scope_key) = self.cached_scoped_fundamentals_key {
+                let scoped = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
+                style_scope::refresh_arc_slice_cache(
+                    &mut self.cached_dividend_screen,
+                    &mut self.cached_dividend_screen_key,
+                    scope_key,
+                    || typhoon_engine::core::screener::screen_dividend_stocks(&scoped),
+                );
+            }
+            // PERF: screening and sorting happen only when the scoped snapshot changes.
+            let divs = std::sync::Arc::clone(&self.cached_dividend_screen);
             let mut div_pending_action = SymbolAction::None;
             // UX7: Pre-fetch sparklines for dividend stocks
-            let divs_for_sl = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
             let mut div_sparklines: std::collections::HashMap<String, std::sync::Arc<Vec<f64>>> =
                 std::collections::HashMap::new();
-            for d in divs_for_sl.iter().take(100) {
+            for d in divs.iter().take(100) {
                 let closes = self.get_sparkline(&d.symbol);
                 if !closes.is_empty() {
                     div_sparklines.insert(d.symbol.to_uppercase(), closes);
@@ -851,7 +868,6 @@ impl TyphooNApp {
                 .resizable(true)
                 .default_size([700.0, 400.0])
                 .show(ctx, |ui| {
-                    let divs = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
                     ui.label(
                         egui::RichText::new(format!(
                             "{} dividend stocks • scope: {}",

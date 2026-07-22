@@ -418,10 +418,18 @@ impl TyphooNApp {
             })
             .collect();
         self.kraken_balances = balances;
+        let previous_position_membership =
+            style_scope::position_symbol_membership_signature(&self.kr_positions);
         let next_positions = kraken_positions_with_balance_equities(
             std::mem::take(&mut self.kr_positions),
             &self.kraken_balances,
         );
+        if previous_position_membership
+            != style_scope::position_symbol_membership_signature(&next_positions)
+        {
+            self.kraken_position_membership_rev =
+                self.kraken_position_membership_rev.wrapping_add(1);
+        }
         let has_balance_equity_positions = next_positions
             .iter()
             .any(|pos| pos.asset_id.starts_with("equity_balance:"));
@@ -581,6 +589,7 @@ impl TyphooNApp {
         )));
         self.kraken_pairs_requested = true;
         self.kraken_pairs = pairs;
+        self.kraken_scope_catalog_rev = self.kraken_scope_catalog_rev.wrapping_add(1);
         self.kraken_pairs_normalized.clear();
         self.kraken_pairs_normalized
             .reserve(self.kraken_pairs.len() * 2);
@@ -619,6 +628,7 @@ impl TyphooNApp {
         )));
         self.kraken_futures_requested = true;
         self.kraken_futures_symbols = symbols;
+        self.kraken_scope_catalog_rev = self.kraken_scope_catalog_rev.wrapping_add(1);
         self.refill_market_data_sync_slots();
     }
 

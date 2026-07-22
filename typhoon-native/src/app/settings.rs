@@ -222,6 +222,10 @@ impl TyphooNApp {
                         if alpaca_before && !self.alpaca_enabled {
                             self.broker_connected = false;
                             self.live_account = None;
+                            if !self.live_positions.is_empty() {
+                                self.alpaca_position_membership_rev =
+                                    self.alpaca_position_membership_rev.wrapping_add(1);
+                            }
                             self.live_positions.clear(); self.live_positions_by_symbol.clear();
                             self.live_orders.clear(); self.live_orders_by_id.clear();
                             self.pending_alpaca_fetches.clear();
@@ -234,10 +238,15 @@ impl TyphooNApp {
                         settings_save_after = true;
                         if kr_before && !self.kraken_enabled {
                             self.kraken_connected = false;
+                            if !self.kr_positions.is_empty() {
+                                self.kraken_position_membership_rev =
+                                    self.kraken_position_membership_rev.wrapping_add(1);
+                            }
                             self.kr_positions.clear(); self.kr_positions_by_symbol.clear(); self.kr_position_asset_tails.clear();
                             self.kraken_balances.clear(); self.kraken_balance_assets_by_display.clear();
                             self.kraken_open_orders.clear();
                             self.kraken_pairs.clear();
+                            self.kraken_scope_catalog_rev = self.kraken_scope_catalog_rev.wrapping_add(1);
                             self.kraken_pairs_normalized.clear();
                             self.kraken_equity_pair_by_base.clear();
                             self.pending_kraken_fetches.clear();

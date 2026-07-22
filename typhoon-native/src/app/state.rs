@@ -809,11 +809,16 @@ pub struct TyphooNApp {
     /// (OUTLIERS, EVOUTLIERS, DIVSCREEN, SECTOR_HEATMAP, HV_CONE, EV viewer, etc.).
     /// All = no filter. Use `SCOPE [ALL|ALPACA|KRAKEN]` command to change.
     pub(crate) broker_scope: EventSource,
-    /// Cached broker scope HashSet. Invalidated by `(bg_rev, broker_scope)` pair —
-    /// only recomputed when fundamentals/specs load (bg_rev bumped) or scope changes.
+    /// Cached broker scope HashSet. Invalidated when background data, scope selection,
+    /// position membership, or the broad Kraken catalog changes.
     /// O(1) reads for the 5+ windows that need scope filtering.
     pub(crate) cached_scope_syms: Option<std::collections::HashSet<String>>,
-    pub(crate) cached_scope_key: Option<(u64, EventSource)>,
+    pub(crate) cached_scope_key: Option<(u64, EventSource, u64)>,
+    pub(crate) alpaca_position_membership_rev: u64,
+    pub(crate) kraken_position_membership_rev: u64,
+    /// Bumped when the broad Kraken pair/futures membership feeding Kraken scope changes.
+    /// Position membership has separate revisions because those lists change independently.
+    pub(crate) kraken_scope_catalog_rev: u64,
     /// Monotonic counter bumped each time `self.bg` is replaced from the BG thread.
     /// Used as a dirty-flag for any cache derived from `bg.*` state.
     pub(crate) bg_rev: u64,
@@ -841,7 +846,15 @@ pub struct TyphooNApp {
     /// Dividend Yield Screener, Outlier Scanner.
     pub(crate) cached_scoped_fundamentals:
         std::sync::Arc<[typhoon_engine::core::fundamentals::Fundamentals]>,
-    pub(crate) cached_scoped_fundamentals_key: Option<(u64, EventSource)>,
+    /// Derived models rebuilt lazily when their window is open and the scoped snapshot
+    /// key changes. Closed windows pay no derivation cost; steady repaints reuse these arcs.
+    pub(crate) cached_sector_heatmap:
+        std::sync::Arc<[typhoon_engine::core::screener::SectorHeatmapEntry]>,
+    pub(crate) cached_sector_heatmap_key: Option<(u64, EventSource, u64)>,
+    pub(crate) cached_dividend_screen:
+        std::sync::Arc<[typhoon_engine::core::screener::DividendScreenEntry]>,
+    pub(crate) cached_dividend_screen_key: Option<(u64, EventSource, u64)>,
+    pub(crate) cached_scoped_fundamentals_key: Option<(u64, EventSource, u64)>,
     /// Cached Alpaca bar-state map (symbol, timeframe) -> sync metadata.
     /// Rebuilt only when `bg_rev` changes so the sync scheduler doesn't rescan
     /// `bg.detailed_stats` every rotation.

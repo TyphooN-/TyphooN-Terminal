@@ -108,6 +108,12 @@ impl TyphooNApp {
         if let Ok(json) = serde_json::to_string(&pos) {
             self.put_kv_dedup("broker:kr_positions", &json);
         }
+        if style_scope::position_symbol_membership_signature(&self.kr_positions)
+            != style_scope::position_symbol_membership_signature(&pos)
+        {
+            self.kraken_position_membership_rev =
+                self.kraken_position_membership_rev.wrapping_add(1);
+        }
         self.kr_positions = pos;
         self.kr_positions_by_symbol = self
             .kr_positions
@@ -173,6 +179,12 @@ impl TyphooNApp {
             .cloned()
             .or_else(|| primary_account.cloned())
         {
+            if style_scope::position_symbol_membership_signature(&self.kr_positions)
+                != style_scope::position_symbol_membership_signature(&primary.positions)
+            {
+                self.kraken_position_membership_rev =
+                    self.kraken_position_membership_rev.wrapping_add(1);
+            }
             self.kr_positions = primary.positions.clone();
             self.kr_positions_by_symbol = self
                 .kr_positions

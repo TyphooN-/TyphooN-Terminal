@@ -106,9 +106,13 @@ impl eframe::App for TyphooNApp {
             self.scrape_sec_running,
             self.auto_compact_in_progress,
         );
-        // PERF: rebuild scope HashSet only when bg data loaded or scope changed,
-        // not every frame. Steady state = zero work.
-        let scope_key = (self.bg_rev, self.broker_scope);
+        // PERF: rebuild scope caches only when fundamentals, scope selection, position
+        // membership, or the broad Kraken catalog changes.
+        let scope_key = (
+            self.bg_rev,
+            self.broker_scope,
+            self.broker_scope_membership_signature(),
+        );
         if self.cached_scope_key != Some(scope_key) {
             self.cached_scope_syms = self.broker_scope_symbols();
             self.cached_scope_key = Some(scope_key);

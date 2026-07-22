@@ -37,6 +37,12 @@ impl TyphooNApp {
         if let Ok(json) = serde_json::to_string(&pos) {
             self.put_kv_dedup("broker:positions", &json);
         }
+        if style_scope::position_symbol_membership_signature(&self.live_positions)
+            != style_scope::position_symbol_membership_signature(&pos)
+        {
+            self.alpaca_position_membership_rev =
+                self.alpaca_position_membership_rev.wrapping_add(1);
+        }
         self.live_positions = pos;
         self.rebuild_live_positions_by_symbol();
     }
@@ -66,6 +72,12 @@ impl TyphooNApp {
         {
             if let Ok(json) = serde_json::to_string(&primary.positions) {
                 self.put_kv_dedup("broker:positions", &json);
+            }
+            if style_scope::position_symbol_membership_signature(&self.live_positions)
+                != style_scope::position_symbol_membership_signature(&primary.positions)
+            {
+                self.alpaca_position_membership_rev =
+                    self.alpaca_position_membership_rev.wrapping_add(1);
             }
             self.live_positions = primary.positions.clone();
             self.rebuild_live_positions_by_symbol();
