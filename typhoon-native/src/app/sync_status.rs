@@ -438,6 +438,13 @@ pub(crate) struct BarSyncResult {
     total: u64,
 }
 
+fn detailed_sync_key_set(detailed_stats: &[(String, i64, i64)]) -> std::collections::HashSet<&str> {
+    detailed_stats
+        .iter()
+        .map(|(key, _, _)| key.as_str())
+        .collect()
+}
+
 impl BarSyncInputs {
     /// Run the full bar-sync matrix scan. Pure CPU over the owned snapshot — no
     /// app state, no I/O — so it is safe to call from a blocking worker thread.
@@ -546,13 +553,10 @@ impl BarSyncInputs {
         rows: &mut Vec<SyncStatsRow>,
         checked_or_complete_lookup: &dyn Fn(&str) -> bool,
     ) {
-        let timeframes = self.timeframes.clone();
-        if timeframes.is_empty() {
+        if self.timeframes.is_empty() {
             return;
         }
-        let catalog_symbols = self.catalog_symbols.clone();
-        let demand_symbols = self.demand_symbols.clone();
-        if catalog_symbols.is_empty() && demand_symbols.is_empty() {
+        if self.catalog_symbols.is_empty() && self.demand_symbols.is_empty() {
             return;
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -562,18 +566,14 @@ impl BarSyncInputs {
             detailed.insert(key.as_str(), (*bar_count, *write_ts_s));
         }
 
-        for raw_tf in timeframes {
-            let Some(tf) = normalize_sync_timeframe_key(&raw_tf) else {
+        for raw_tf in &self.timeframes {
+            let Some(tf) = normalize_sync_timeframe_key(raw_tf) else {
                 continue;
             };
             if !self.kraken_equities_merged_source_supported(tf) {
                 continue;
             }
-            let symbols = self.kraken_equities_merged_symbols_for_timeframe(
-                &catalog_symbols,
-                &demand_symbols,
-                tf,
-            );
+            let symbols = self.kraken_equities_merged_symbols_for_timeframe(tf);
             if symbols.is_empty() {
                 continue;
             }
@@ -581,7 +581,7 @@ impl BarSyncInputs {
             let mut stale = 0u64;
             let mut empty = 0u64;
             let mut unreachable = 0u64;
-            for symbol in &symbols {
+            for symbol in symbols.iter() {
                 let symbol = normalize_market_data_symbol(symbol)
                     .replace('/', "")
                     .trim_end_matches(".EQ")
@@ -631,23 +631,24 @@ impl BarSyncInputs {
 
     fn kraken_equities_merged_symbols_for_timeframe(
         &self,
-        catalog_symbols: &[String],
-        demand_symbols: &[String],
         tf: &str,
-    ) -> Vec<String> {
+    ) -> std::borrow::Cow<'_, [String]> {
         // Full-catalog M1/M5 is not reachable today: Alpaca assist is disabled
         // for those rows, Yahoo assist is unsupported, and native Kraken WS only
         // exists for tokenized xStocks. Keep the Merged denominator honest so
         // Sync Status does not show a permanent 1% red row and tempt the
         // scheduler into wasting assist-provider RPM on ignored low-TF rows.
         if matches!(tf, "1Min" | "5Min") {
-            let ws_symbols = self.ws_sweep_symbols.clone();
-            if !ws_symbols.is_empty() {
-                return ws_symbols;
+            if !self.ws_sweep_symbols.is_empty() {
+                return std::borrow::Cow::Borrowed(&self.ws_sweep_symbols);
             }
-            return demand_symbols.to_vec();
+            return std::borrow::Cow::Borrowed(&self.demand_symbols);
         }
-        kraken_equity_symbols_for_timeframe(catalog_symbols, demand_symbols, tf)
+        std::borrow::Cow::Owned(kraken_equity_symbols_for_timeframe(
+            &self.catalog_symbols,
+            &self.demand_symbols,
+            tf,
+        ))
     }
 
     fn kraken_equities_merged_source_supported(&self, tf: &str) -> bool {
@@ -769,24 +770,17 @@ impl BarSyncInputs {
         rows: &mut Vec<SyncStatsRow>,
         checked_or_complete_lookup: &dyn Fn(&str) -> bool,
     ) {
-        let timeframes = self.timeframes.clone();
+        let timeframes = &self.timeframes;
         if timeframes.is_empty() || (!self.cache_stats_present && self.detailed_stats.is_empty()) {
             return;
         }
-        let existing: std::collections::HashSet<String> = self
-            .detailed_stats
-            .iter()
-            .map(|(key, _, _)| key.clone())
-            .collect();
+        let existing = detailed_sync_key_set(&self.detailed_stats);
         let mut row_index: std::collections::HashMap<(String, String), usize> = rows
             .iter()
             .enumerate()
             .map(|(idx, row)| ((row.broker.clone(), row.tf.clone()), idx))
             .collect();
-        let spot_symbols: Vec<String> = self.spot_symbols.clone();
-        let futures_symbols = self.futures_symbols.clone();
-        let kraken_equity_catalog_symbols = self.catalog_symbols.clone();
-        let kraken_equity_demand_symbols = self.demand_symbols.clone();
+
         let mut expected_sources: Vec<(&str, &str)> = vec![
             ("kraken", "Kraken Spot"),
             ("kraken-equities", "Kraken Equities"),
@@ -800,7 +794,7 @@ impl BarSyncInputs {
         }
 
         for (source, broker) in expected_sources {
-            for tf in &timeframes {
+            for tf in timeframes {
                 let Some(tf) = normalize_sync_timeframe_key(tf) else {
                     continue;
                 };
@@ -824,28 +818,32 @@ impl BarSyncInputs {
                 if source == "yahoo-chart" && !yahoo_chart_supports_timeframe(tf) {
                     continue;
                 }
-                let symbols: Vec<String> = match source {
-                    "kraken" => spot_symbols.clone(),
-                    "kraken-futures" => futures_symbols.clone(),
-                    "kraken-equities" => kraken_equity_native_symbols_for_timeframe(
-                        &kraken_equity_catalog_symbols,
-                        &kraken_equity_demand_symbols,
-                        tf,
-                    ),
-                    "alpaca" | "yahoo-chart" => kraken_equity_symbols_for_timeframe(
-                        &kraken_equity_catalog_symbols,
-                        &kraken_equity_demand_symbols,
-                        tf,
-                    ),
-                    _ => Vec::new(),
+                let symbols: std::borrow::Cow<'_, [String]> = match source {
+                    "kraken" => std::borrow::Cow::Borrowed(&self.spot_symbols),
+                    "kraken-futures" => std::borrow::Cow::Borrowed(&self.futures_symbols),
+                    "kraken-equities" => {
+                        std::borrow::Cow::Owned(kraken_equity_native_symbols_for_timeframe(
+                            &self.catalog_symbols,
+                            &self.demand_symbols,
+                            tf,
+                        ))
+                    }
+                    "alpaca" | "yahoo-chart" => {
+                        std::borrow::Cow::Owned(kraken_equity_symbols_for_timeframe(
+                            &self.catalog_symbols,
+                            &self.demand_symbols,
+                            tf,
+                        ))
+                    }
+                    _ => std::borrow::Cow::Borrowed(&[]),
                 };
                 let row_key = (broker.to_string(), tf.to_string());
-                for symbol in symbols {
+                for symbol in symbols.iter() {
                     let expected_key = format!("{source}:{symbol}:{tf}");
-                    if existing.contains(&expected_key) {
+                    if existing.contains(expected_key.as_str()) {
                         continue;
                     }
-                    let fetch_key = alpaca_fetch_key(&symbol, tf);
+                    let fetch_key = alpaca_fetch_key(symbol, tf);
                     let provider_settled = checked_or_complete_lookup(&expected_key);
                     let provider_unreachable = self
                         .no_data_keys_by_source
@@ -1181,5 +1179,14 @@ mod tests {
         assert_eq!(totals[0], ("Merged".to_string(), 2, 2, 100.0));
         assert_eq!(totals[1], ("Yahoo".to_string(), 4, 2, 50.0));
         assert!(std::sync::Arc::ptr_eq(&totals, &shared_totals));
+    }
+
+    #[test]
+    fn detailed_sync_key_set_borrows_input_keys() {
+        let detailed = vec![("kraken:BTC/USD:1Min".to_string(), 10, 20)];
+        let keys = detailed_sync_key_set(&detailed);
+        let stored = keys.get("kraken:BTC/USD:1Min").unwrap();
+
+        assert!(std::ptr::eq(stored.as_ptr(), detailed[0].0.as_ptr()));
     }
 }
