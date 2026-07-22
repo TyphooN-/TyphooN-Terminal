@@ -771,8 +771,81 @@ fn sqlite_cache_merge_bars_dedup() {
         ]"#;
     let merged_json = cache.merge_bars("MRG:1D", json2, 10000).unwrap();
     let merged: Vec<serde_json::Value> = serde_json::from_str(&merged_json).unwrap();
-    // Should have 3 bars (deduped on timestamp, newer wins via dedup_by which keeps first)
+    // Should have 3 bars; the incoming overlap replaces the cached candle.
     assert_eq!(merged.len(), 3);
+    assert_eq!(merged[1]["close"].as_f64(), Some(2.6));
+}
+
+#[test]
+fn linear_bar_merge_sorts_inputs_and_prefers_incoming_collisions() {
+    let existing = vec![
+        serde_json::json!({"timestamp":"2024-01-03T00:00:00+00:00","close":3.0}),
+        serde_json::json!({"timestamp":"2024-01-01T00:00:00+00:00","close":1.0}),
+    ];
+    let incoming = vec![
+        serde_json::json!({"timestamp":"2024-01-04T00:00:00+00:00","close":4.0}),
+        serde_json::json!({"timestamp":"2024-01-03T00:00:00+00:00","close":30.0}),
+        serde_json::json!({"timestamp":"2024-01-02T00:00:00+00:00","close":2.0}),
+    ];
+
+    let merged = merge_normalized_bar_values("TEST:1Hour", existing, incoming, 0);
+
+    assert_eq!(merged.len(), 4);
+    assert_eq!(merged[2]["close"].as_f64(), Some(30.0));
+    let timestamps: Vec<_> = merged
+        .iter()
+        .map(|bar| bar["timestamp"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        timestamps,
+        vec![
+            "2024-01-01T00:00:00+00:00",
+            "2024-01-02T00:00:00+00:00",
+            "2024-01-03T00:00:00+00:00",
+            "2024-01-04T00:00:00+00:00",
+        ]
+    );
+}
+
+#[test]
+fn linear_bar_merge_keeps_last_duplicate_within_each_input() {
+    let existing = vec![
+        serde_json::json!({"timestamp":"2024-01-01T00:00:00+00:00","close":1.0}),
+        serde_json::json!({"timestamp":"2024-01-01T00:00:00+00:00","close":10.0}),
+    ];
+    let incoming = vec![
+        serde_json::json!({"timestamp":"2024-01-02T00:00:00+00:00","close":2.0}),
+        serde_json::json!({"timestamp":"2024-01-02T00:00:00+00:00","close":20.0}),
+    ];
+
+    let merged = merge_normalized_bar_values("TEST:1Hour", existing, incoming, 0);
+
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0]["close"].as_f64(), Some(10.0));
+    assert_eq!(merged[1]["close"].as_f64(), Some(20.0));
+}
+
+#[test]
+fn linear_bar_merge_normalizes_buckets_discards_bad_timestamps_and_trims_oldest() {
+    let existing = vec![
+        serde_json::json!({"timestamp":"invalid","close":99.0}),
+        serde_json::json!({"timestamp":"2024-01-01T05:00:00+00:00","close":1.0}),
+        serde_json::json!({"timestamp":"2024-01-02T04:00:00+00:00","close":2.0}),
+    ];
+    let incoming = vec![
+        serde_json::json!({"timestamp":"2024-01-02T23:00:00+00:00","close":20.0}),
+        serde_json::json!({"timestamp":"2024-01-03T05:00:00+00:00","close":3.0}),
+    ];
+
+    let merged = merge_normalized_bar_values("TEST:1Day", existing, incoming, 2);
+
+    assert_eq!(merged.len(), 2);
+    assert_eq!(merged[0]["close"].as_f64(), Some(20.0));
+    assert_eq!(merged[1]["close"].as_f64(), Some(3.0));
+    assert_eq!(
+        merged[0]["timestamp"].as_str(),
+        Some("2024-01-02T00:00:00+00:00")
+    );
 }
 
 #[test]

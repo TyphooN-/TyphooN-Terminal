@@ -567,6 +567,82 @@ fn normalized_bar_timestamp_ms(key: &str, ts_ms: i64) -> Option<i64> {
     }
 }
 
+fn normalize_bar_values(key: &str, bars: Vec<serde_json::Value>) -> Vec<(i64, serde_json::Value)> {
+    let mut keyed = Vec::with_capacity(bars.len());
+    for mut bar in bars {
+        let Some(ts_ms) = bar["timestamp"]
+            .as_str()
+            .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
+            .and_then(|dt| normalized_bar_timestamp_ms(key, dt.timestamp_millis()))
+        else {
+            continue;
+        };
+        if ts_ms <= 0 {
+            continue;
+        }
+        if let Some(dt) = chrono::DateTime::from_timestamp_millis(ts_ms) {
+            bar["timestamp"] = serde_json::Value::String(dt.to_rfc3339());
+        }
+        keyed.push((ts_ms, bar));
+    }
+
+    // Cache rows and provider batches are normally already chronological. Only
+    // pay for sorting when a legacy row or provider response violates that
+    // invariant. Stable sorting preserves the existing "last duplicate wins"
+    // rule for equal normalized buckets.
+    if !keyed.windows(2).all(|pair| pair[0].0 <= pair[1].0) {
+        keyed.sort_by_key(|(timestamp, _)| *timestamp);
+    }
+
+    let mut deduplicated: Vec<(i64, serde_json::Value)> = Vec::with_capacity(keyed.len());
+    for entry in keyed {
+        if deduplicated
+            .last()
+            .is_some_and(|(timestamp, _)| *timestamp == entry.0)
+        {
+            *deduplicated.last_mut().expect("last entry checked above") = entry;
+        } else {
+            deduplicated.push(entry);
+        }
+    }
+    deduplicated
+}
+
+fn merge_normalized_bar_values(
+    key: &str,
+    existing: Vec<serde_json::Value>,
+    incoming: Vec<serde_json::Value>,
+    max_bars: usize,
+) -> Vec<serde_json::Value> {
+    let existing = normalize_bar_values(key, existing);
+    let incoming = normalize_bar_values(key, incoming);
+    let mut existing = existing.into_iter().peekable();
+    let mut incoming = incoming.into_iter().peekable();
+    let mut merged = Vec::with_capacity(existing.len() + incoming.len());
+
+    while let (Some(existing_bar), Some(incoming_bar)) = (existing.peek(), incoming.peek()) {
+        match existing_bar.0.cmp(&incoming_bar.0) {
+            std::cmp::Ordering::Less => merged.push(existing.next().expect("peeked existing bar")),
+            std::cmp::Ordering::Greater => {
+                merged.push(incoming.next().expect("peeked incoming bar"));
+            }
+            std::cmp::Ordering::Equal => {
+                existing.next();
+                merged.push(incoming.next().expect("peeked incoming replacement"));
+            }
+        }
+    }
+    merged.extend(existing);
+    merged.extend(incoming);
+
+    let skip = if max_bars > 0 {
+        merged.len().saturating_sub(max_bars)
+    } else {
+        0
+    };
+    merged.into_iter().skip(skip).map(|(_, bar)| bar).collect()
+}
+
 #[cfg(test)]
 fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
     pack_bars_for_key("", json_data)
@@ -3578,7 +3654,7 @@ impl SqliteCache {
         }
 
         // Load existing cache
-        let mut all_bars: Vec<serde_json::Value> = match self.get_bars(key)? {
+        let existing_bars: Vec<serde_json::Value> = match self.get_bars(key)? {
             Some((json, _)) => serde_json::from_str(&json).unwrap_or_default(),
             None => Vec::new(),
         };
@@ -3587,37 +3663,9 @@ impl SqliteCache {
         // from Yahoo/Alpaca/Kraken can represent the same candle at 00:00,
         // 04:00, 05:00, or a live-close timestamp; keep one canonical bucket
         // and let the newer incoming/refetched bar replace older cache content.
-        all_bars.reserve(new_bars.len());
-        all_bars.extend(new_bars);
-        let mut keyed_bars: std::collections::BTreeMap<i64, serde_json::Value> =
-            std::collections::BTreeMap::new();
-        for mut bar in all_bars {
-            let Some(ts_ms) = bar["timestamp"]
-                .as_str()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .and_then(|dt| normalized_bar_timestamp_ms(key, dt.timestamp_millis()))
-            else {
-                continue;
-            };
-            if ts_ms <= 0 {
-                continue;
-            }
-            if let Some(dt) = chrono::DateTime::from_timestamp_millis(ts_ms) {
-                bar["timestamp"] = serde_json::Value::String(dt.to_rfc3339());
-            }
-            keyed_bars.insert(ts_ms, bar);
-        }
-
-        // Trim only when a bounded caller explicitly requests it. Full-depth sync passes 0.
-        if max_bars > 0 && keyed_bars.len() > max_bars {
-            let remove = keyed_bars.len() - max_bars;
-            let stale_keys: Vec<i64> = keyed_bars.keys().copied().take(remove).collect();
-            for stale_key in stale_keys {
-                keyed_bars.remove(&stale_key);
-            }
-        }
-
-        let all_bars: Vec<serde_json::Value> = keyed_bars.into_values().collect();
+        // Chronological inputs take O(existing + incoming); malformed unsorted
+        // inputs pay a one-time stable-sort repair before the same two-way merge.
+        let all_bars = merge_normalized_bar_values(key, existing_bars, new_bars, max_bars);
         let merged_json =
             serde_json::to_string(&all_bars).map_err(|e| format!("JSON serialize failed: {e}"))?;
         self.put_bars_with_level(key, &merged_json, zstd_level)?;
