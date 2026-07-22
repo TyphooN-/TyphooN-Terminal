@@ -72,37 +72,37 @@ fn alpaca_order_is_working(status: &str) -> bool {
     )
 }
 
-fn push_or_merge_order_line(out: &mut Vec<OrderLine>, line: OrderLine) {
-    // O(1) dedup/merge using temp map keyed by (is_buy, source, price rounded)
-    use std::collections::HashMap;
-    let key = (
-        line.is_buy,
-        line.source.clone(),
-        (line.price * 1_000_000_000.0).round() as i64,
-    );
-    let map: HashMap<_, usize> = out
-        .iter()
-        .enumerate()
-        .map(|(i, e)| {
-            let k = (
-                e.is_buy,
-                e.source.clone(),
-                (e.price * 1_000_000_000.0).round() as i64,
-            );
-            (k, i)
-        })
-        .collect();
-    if let Some(&idx) = map.get(&key) {
-        let existing = &mut out[idx];
-        existing.qty += line.qty;
-        existing.notional_delta += line.notional_delta;
-        existing.account_pct_delta = match (existing.account_pct_delta, line.account_pct_delta) {
-            (Some(a), Some(b)) => Some(a + b),
-            _ => None,
-        };
-        return;
+#[derive(Default)]
+struct OrderLineAccumulator {
+    lines: Vec<OrderLine>,
+    by_group: std::collections::HashMap<(bool, String, i64), usize>,
+}
+
+impl OrderLineAccumulator {
+    fn push(&mut self, line: OrderLine) {
+        let key = (
+            line.is_buy,
+            line.source.clone(),
+            (line.price * 1_000_000_000.0).round() as i64,
+        );
+        if let Some(&idx) = self.by_group.get(&key) {
+            let existing = &mut self.lines[idx];
+            existing.qty += line.qty;
+            existing.notional_delta += line.notional_delta;
+            existing.account_pct_delta = match (existing.account_pct_delta, line.account_pct_delta)
+            {
+                (Some(a), Some(b)) => Some(a + b),
+                _ => None,
+            };
+            return;
+        }
+        self.by_group.insert(key, self.lines.len());
+        self.lines.push(line);
     }
-    out.push(line);
+
+    fn into_lines(self) -> Vec<OrderLine> {
+        self.lines
+    }
 }
 
 fn collect_alpaca_order_lines_for_symbol(
@@ -111,7 +111,7 @@ fn collect_alpaca_order_lines_for_symbol(
     current_price: f64,
     tick_size: f64,
     account_balance: Option<f64>,
-    out: &mut Vec<OrderLine>,
+    out: &mut OrderLineAccumulator,
 ) {
     fn walk(
         order: &OrderInfo,
@@ -119,7 +119,7 @@ fn collect_alpaca_order_lines_for_symbol(
         current_price: f64,
         tick_size: f64,
         account_balance: Option<f64>,
-        out: &mut Vec<OrderLine>,
+        out: &mut OrderLineAccumulator,
     ) {
         let order_sym = order.symbol.replace('/', "").to_ascii_uppercase();
         if !order_sym.is_empty()
@@ -141,23 +141,20 @@ fn collect_alpaca_order_lines_for_symbol(
                     let is_buy = order.side.eq_ignore_ascii_case("buy");
                     let notional = qty * price;
                     let signed_notional = if is_buy { -notional } else { notional };
-                    push_or_merge_order_line(
-                        out,
-                        OrderLine {
-                            price,
-                            qty,
-                            is_buy,
-                            source: "Alpaca".to_string(),
-                            notional_delta: signed_notional,
-                            account_pct_delta: account_balance
-                                .filter(|balance| *balance > f64::EPSILON)
-                                .map(|balance| signed_notional / balance * 100.0),
-                            pips_from_current: (tick_size > f64::EPSILON
-                                && current_price.is_finite()
-                                && current_price > 0.0)
-                                .then_some((price - current_price) / tick_size),
-                        },
-                    );
+                    out.push(OrderLine {
+                        price,
+                        qty,
+                        is_buy,
+                        source: "Alpaca".to_string(),
+                        notional_delta: signed_notional,
+                        account_pct_delta: account_balance
+                            .filter(|balance| *balance > f64::EPSILON)
+                            .map(|balance| signed_notional / balance * 100.0),
+                        pips_from_current: (tick_size > f64::EPSILON
+                            && current_price.is_finite()
+                            && current_price > 0.0)
+                            .then_some((price - current_price) / tick_size),
+                    });
                 }
             }
         }
@@ -193,7 +190,7 @@ fn collect_kraken_order_lines_for_symbol(
     current_price: f64,
     tick_size: f64,
     account_balance: Option<f64>,
-    out: &mut Vec<OrderLine>,
+    out: &mut OrderLineAccumulator,
 ) {
     for order in orders {
         if !alpaca_order_is_working(&order.status) {
@@ -226,23 +223,20 @@ fn collect_kraken_order_lines_for_symbol(
         let is_buy = order.r#type.eq_ignore_ascii_case("buy");
         let notional = qty * price;
         let signed_notional = if is_buy { -notional } else { notional };
-        push_or_merge_order_line(
-            out,
-            OrderLine {
-                price,
-                qty,
-                is_buy,
-                source: "Kraken".to_string(),
-                notional_delta: signed_notional,
-                account_pct_delta: account_balance
-                    .filter(|balance| *balance > f64::EPSILON)
-                    .map(|balance| signed_notional / balance * 100.0),
-                pips_from_current: (tick_size > f64::EPSILON
-                    && current_price.is_finite()
-                    && current_price > 0.0)
-                    .then_some((price - current_price) / tick_size),
-            },
-        );
+        out.push(OrderLine {
+            price,
+            qty,
+            is_buy,
+            source: "Kraken".to_string(),
+            notional_delta: signed_notional,
+            account_pct_delta: account_balance
+                .filter(|balance| *balance > f64::EPSILON)
+                .map(|balance| signed_notional / balance * 100.0),
+            pips_from_current: (tick_size > f64::EPSILON
+                && current_price.is_finite()
+                && current_price > 0.0)
+                .then_some((price - current_price) / tick_size),
+        });
     }
 }
 
@@ -1872,6 +1866,7 @@ impl TyphooNApp {
         // Live Alpaca working order lines. Alpaca `nested=true` includes
         // bracket/OCO child legs; flatten them so fixed-price exits show too.
         // Market/trailing orders have no fixed chart price and are skipped.
+        let mut order_lines = OrderLineAccumulator::default();
         if self.show_alpaca_positions {
             let current_price = chart
                 .fresh_live_quote_mid()
@@ -1889,7 +1884,7 @@ impl TyphooNApp {
                 current_price,
                 tick_size,
                 account_balance,
-                &mut overlay.order_lines,
+                &mut order_lines,
             );
         }
 
@@ -1909,9 +1904,10 @@ impl TyphooNApp {
                 current_price,
                 tick_size,
                 account_balance,
-                &mut overlay.order_lines,
+                &mut order_lines,
             );
         }
+        overlay.order_lines = order_lines.into_lines();
 
         // Live broker position lines (Alpaca + Kraken).
         // Kraken spot crypto balances are inventory rather than broker

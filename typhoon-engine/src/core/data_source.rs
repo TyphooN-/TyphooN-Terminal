@@ -103,17 +103,36 @@ impl Default for DataSourceManager {
 
 impl DataSourceManager {
     fn rebuild_sources_index(&mut self) {
-        self.sources_by_id = self.sources
+        self.sources_by_id = self
+            .sources
             .iter()
             .enumerate()
             .map(|(i, s)| (s.id.clone(), i))
             .collect();
     }
 
+    fn resolution_source_index(
+        &self,
+    ) -> std::borrow::Cow<'_, std::collections::HashMap<String, usize>> {
+        if self.sources_by_id.is_empty() {
+            std::borrow::Cow::Owned(
+                self.sources
+                    .iter()
+                    .enumerate()
+                    .map(|(i, source)| (source.id.clone(), i))
+                    .collect(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(&self.sources_by_id)
+        }
+    }
+
     /// Record a successful data delivery from a source.
     pub fn mark_success(&mut self, source_id: &str) {
         let now = chrono::Utc::now().timestamp();
-        if self.sources_by_id.is_empty() { self.rebuild_sources_index(); }
+        if self.sources_by_id.is_empty() {
+            self.rebuild_sources_index();
+        }
         if let Some(&idx) = self.sources_by_id.get(source_id) {
             if let Some(s) = self.sources.get_mut(idx) {
                 s.healthy = true;
@@ -124,7 +143,9 @@ impl DataSourceManager {
 
     /// Record a failed data delivery from a source.
     pub fn mark_failure(&mut self, source_id: &str) {
-        if self.sources_by_id.is_empty() { self.rebuild_sources_index(); }
+        if self.sources_by_id.is_empty() {
+            self.rebuild_sources_index();
+        }
         if let Some(&idx) = self.sources_by_id.get(source_id) {
             if let Some(s) = self.sources.get_mut(idx) {
                 s.healthy = false;
@@ -149,11 +170,7 @@ impl DataSourceManager {
     pub fn resolve_candidates(&self, symbol: &str, timeframe: &str) -> Vec<String> {
         let sym_upper = symbol.to_uppercase();
         // Check per-symbol overrides first
-        let src_by_id: std::collections::HashMap<String, usize> = if self.sources_by_id.is_empty() {
-            self.sources.iter().enumerate().map(|(i, s)| (s.id.clone(), i)).collect()
-        } else {
-            self.sources_by_id.clone()
-        };
+        let src_by_id = self.resolution_source_index();
 
         // Exact match O(1) style (early break), then prefix for wildcards (small list)
         let mut override_sources = None;
@@ -314,6 +331,31 @@ mod tests {
         let back: DataSourceManager = serde_json::from_str(&json).unwrap();
         assert_eq!(back.sources.len(), 3);
         assert_eq!(back.health_timeout_secs, 900);
+    }
+
+    #[test]
+    fn resolution_borrows_populated_index_and_owns_deserialized_fallback() {
+        let mgr = DataSourceManager::default();
+        assert!(matches!(
+            mgr.resolution_source_index(),
+            std::borrow::Cow::Borrowed(_)
+        ));
+
+        let json = serde_json::to_string(&mgr).unwrap();
+        let back: DataSourceManager = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.resolution_source_index(),
+            std::borrow::Cow::Owned(_)
+        ));
+        assert_eq!(
+            back.resolve_candidates("EURUSD", "1Hour"),
+            vec![
+                "EURUSD:1Hour",
+                "kraken:EURUSD:1Hour",
+                "kraken-futures:EURUSD:1Hour",
+                "alpaca:EURUSD:1Hour",
+            ]
+        );
     }
 
     #[test]

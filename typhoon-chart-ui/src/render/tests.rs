@@ -1,4 +1,16 @@
 #[test]
+fn live_depth_summary_combines_sides_without_materializing_a_book() {
+    let bids = vec![(99.0, 2.0), (98.0, 4.0)];
+    let asks = vec![(101.0, 3.0), (102.0, 1.0), (103.0, 2.5)];
+
+    let summary = super::live_depth_summary(&bids, &asks).unwrap();
+
+    assert_eq!(summary.level_count, 5);
+    assert_eq!(summary.max_size, 4.0);
+    assert!(super::live_depth_summary(&[], &[]).is_none());
+}
+
+#[test]
 fn price_view_geometry_round_trips_linear_and_log() {
     let rect = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(800.0, 400.0));
     for log_scale in [false, true] {

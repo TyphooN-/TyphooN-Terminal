@@ -16,6 +16,7 @@
 //! parsing into typed [`KrakenWsOhlcBar`]. The connection driver lives in
 //! `connection.rs` alongside the reconnect / heartbeat logic.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -418,6 +419,19 @@ pub async fn run_ohlc_streamer(
 pub async fn run_ohlc_streamer_with_snapshot(
     interval_min: u32,
     pairs: Vec<String>,
+    snapshot: bool,
+    bar_tx: mpsc::Sender<KrakenWsOhlcBar>,
+    event_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,
+) {
+    run_ohlc_streamer_shared_with_snapshot(interval_min, pairs.into(), snapshot, bar_tx, event_tx)
+        .await;
+}
+
+/// Shared-universe variant used when multiple interval streamers subscribe to
+/// the same immutable catalog.
+pub async fn run_ohlc_streamer_shared_with_snapshot(
+    interval_min: u32,
+    pairs: Arc<[String]>,
     snapshot: bool,
     bar_tx: mpsc::Sender<KrakenWsOhlcBar>,
     event_tx: mpsc::UnboundedSender<KrakenOhlcStreamerEvent>,

@@ -31,9 +31,17 @@ fn test_order(
 #[test]
 fn alpaca_order_lines_use_open_qty_signed_notional_pct_and_pips() {
     let orders = vec![test_order("AAPL", "buy", "10", "2", Some("99.50"), "new")];
-    let mut lines = Vec::new();
+    let mut accumulator = OrderLineAccumulator::default();
 
-    collect_alpaca_order_lines_for_symbol(&orders, "AAPL", 100.0, 0.01, Some(10_000.0), &mut lines);
+    collect_alpaca_order_lines_for_symbol(
+        &orders,
+        "AAPL",
+        100.0,
+        0.01,
+        Some(10_000.0),
+        &mut accumulator,
+    );
+    let lines = accumulator.into_lines();
 
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
@@ -51,9 +59,17 @@ fn alpaca_order_lines_merge_same_side_source_and_price() {
         test_order("AAPL", "sell", "10", "0", Some("105.00"), "new"),
         test_order("AAPL", "sell", "15", "5", Some("105.00"), "new"),
     ];
-    let mut lines = Vec::new();
+    let mut accumulator = OrderLineAccumulator::default();
 
-    collect_alpaca_order_lines_for_symbol(&orders, "AAPL", 100.0, 0.01, Some(10_000.0), &mut lines);
+    collect_alpaca_order_lines_for_symbol(
+        &orders,
+        "AAPL",
+        100.0,
+        0.01,
+        Some(10_000.0),
+        &mut accumulator,
+    );
+    let lines = accumulator.into_lines();
 
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
@@ -62,6 +78,28 @@ fn alpaca_order_lines_merge_same_side_source_and_price() {
     assert_eq!(line.price, 105.0);
     assert!((line.notional_delta - 2100.0).abs() < 1e-9);
     assert!((line.account_pct_delta.unwrap() - 21.0).abs() < 1e-9);
+}
+
+#[test]
+fn order_line_accumulator_reuses_one_group_index_for_many_duplicates() {
+    let mut accumulator = OrderLineAccumulator::default();
+    for _ in 0..100 {
+        accumulator.push(OrderLine {
+            price: 105.0,
+            qty: 1.0,
+            is_buy: false,
+            source: "Alpaca".to_string(),
+            notional_delta: 105.0,
+            account_pct_delta: Some(1.05),
+            pips_from_current: Some(500.0),
+        });
+    }
+
+    let lines = accumulator.into_lines();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].qty, 100.0);
+    assert!((lines[0].notional_delta - 10_500.0).abs() < 1e-9);
+    assert!((lines[0].account_pct_delta.unwrap() - 105.0).abs() < 1e-9);
 }
 
 #[test]
@@ -75,7 +113,7 @@ fn alpaca_order_lines_flatten_nested_working_legs_and_skip_filled_parent() {
         Some("480"),
         "new",
     )]);
-    let mut lines = Vec::new();
+    let mut accumulator = OrderLineAccumulator::default();
 
     collect_alpaca_order_lines_for_symbol(
         &[parent],
@@ -83,8 +121,9 @@ fn alpaca_order_lines_flatten_nested_working_legs_and_skip_filled_parent() {
         475.0,
         0.01,
         Some(20_000.0),
-        &mut lines,
+        &mut accumulator,
     );
+    let lines = accumulator.into_lines();
 
     assert_eq!(lines.len(), 1);
     assert!(!lines[0].is_buy);

@@ -1647,21 +1647,13 @@ pub fn draw_chart(
     // Bins live_depth_bids/asks (price, size) into horizontal volume-at-price bars.
     // L3 per-order data (when wired) produces richer bins + explicit "L3" label.
     // Complements historical volume profile.
-    let all_depth: Vec<_> = chart
-        .live_depth_bids
-        .iter()
-        .chain(chart.live_depth_asks.iter())
-        .cloned()
-        .collect();
-    if !all_depth.is_empty() {
-        let max_size = all_depth
-            .iter()
-            .map(|(_, s)| *s)
-            .fold(0.0_f64, f64::max)
-            .max(1.0);
+    if let Some(depth_summary) = live_depth_summary(&chart.live_depth_bids, &chart.live_depth_asks)
+    {
+        let max_size = depth_summary.max_size;
         let max_w = (chart_rect.width() * 0.15).max(40.0);
         // Heuristic: treat as L3 if many levels (>4) or from recent L3 feed (status wired via orderbook)
-        let looks_l3 = all_depth.len() > 4 || (chart.live_bid_size > 0.0 && all_depth.len() > 2);
+        let looks_l3 = depth_summary.level_count > 4
+            || (chart.live_bid_size > 0.0 && depth_summary.level_count > 2);
         let label = if looks_l3 { "L3 depth" } else { "" };
         let col = if looks_l3 {
             egui::Color32::from_rgb(80, 200, 120)
@@ -1678,7 +1670,11 @@ pub fn draw_chart(
             );
         }
         // Simple binning: treat each level as its own 'bucket' for now (full binning by price can expand later)
-        for (price, size) in &all_depth {
+        for (price, size) in chart
+            .live_depth_bids
+            .iter()
+            .chain(chart.live_depth_asks.iter())
+        {
             if *size <= 0.0 || *price <= 0.0 {
                 continue;
             }
@@ -1989,6 +1985,28 @@ fn draw_previous_candle_level_lines_foreground(
 
 #[cfg(test)]
 mod tests;
+
+struct LiveDepthSummary {
+    level_count: usize,
+    max_size: f64,
+}
+
+fn live_depth_summary(bids: &[(f64, f64)], asks: &[(f64, f64)]) -> Option<LiveDepthSummary> {
+    let level_count = bids.len() + asks.len();
+    if level_count == 0 {
+        return None;
+    }
+    let max_size = bids
+        .iter()
+        .chain(asks)
+        .map(|(_, size)| *size)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    Some(LiveDepthSummary {
+        level_count,
+        max_size,
+    })
+}
 
 #[cfg(test)]
 mod company_name_overlay_tests {

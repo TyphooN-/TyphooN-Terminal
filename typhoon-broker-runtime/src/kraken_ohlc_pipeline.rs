@@ -11,11 +11,14 @@ use tokio::sync::mpsc;
 use typhoon_engine::broker::kraken::{
     KrakenOhlcStreamerEvent, KrakenWsOhlcBar, kraken_ws_bar_to_json,
     kraken_ws_interval_to_tf_label, kraken_ws_symbol_to_cache_key, run_ohlc_snapshot_sweep_once,
-    run_ohlc_streamer_with_snapshot, ws_bar_is_closed,
+    run_ohlc_streamer_shared_with_snapshot, ws_bar_is_closed,
 };
 use typhoon_engine::core::cache::SqliteCache;
 
 use crate::memory_pressure::{BrokerMemoryPressure, current_broker_memory_pressure};
+
+#[cfg(test)]
+mod tests;
 
 pub fn format_xstock_ws_symbol(symbol: &str) -> Option<String> {
     let bare = symbol
@@ -103,6 +106,10 @@ type GroupedWsBarEntry = (
 );
 pub type GroupedWsBars = HashMap<(String, String, &'static str), (Vec<serde_json::Value>, i64)>;
 
+fn share_pair_universe(pairs: Vec<String>) -> Arc<[String]> {
+    pairs.into()
+}
+
 pub fn chunk_grouped_ws_bar_entries(
     grouped: GroupedWsBars,
     chunk_size: usize,
@@ -139,18 +146,26 @@ pub fn spawn_kraken_ohlc_pipeline(
     if pairs.is_empty() || intervals_min.is_empty() {
         return;
     }
+    let pairs = share_pair_universe(pairs);
     let (bar_tx, bar_rx) = mpsc::channel::<KrakenWsOhlcBar>(WS_BAR_CHANNEL_CAPACITY);
     for (interval_min, snapshot, startup_delay) in
         plan_kraken_ws_streamers(pairs.len(), &intervals_min)
     {
-        let pairs = pairs.clone();
+        let pairs = Arc::clone(&pairs);
         let bar_tx = bar_tx.clone();
         let status_tx = status_tx.clone();
         tokio::spawn(async move {
             if !startup_delay.is_zero() {
                 tokio::time::sleep(startup_delay).await;
             }
-            run_ohlc_streamer_with_snapshot(interval_min, pairs, snapshot, bar_tx, status_tx).await;
+            run_ohlc_streamer_shared_with_snapshot(
+                interval_min,
+                pairs,
+                snapshot,
+                bar_tx,
+                status_tx,
+            )
+            .await;
         });
     }
     // Drop the original sender so the writer's rx.recv() resolves to None
