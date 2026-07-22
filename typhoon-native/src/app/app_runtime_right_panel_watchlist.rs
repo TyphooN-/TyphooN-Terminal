@@ -131,7 +131,7 @@ impl TyphooNApp {
                         if updated_from_cache {
                             self.watchlist_rows = rows;
                             self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
-                            self.rebuild_live_indices();
+                            self.rebuild_watchlist_live_index();
                         }
                     }
                 }
@@ -771,7 +771,7 @@ impl TyphooNApp {
                                 .to_ascii_uppercase();
                             if let Some(&row_idx) = self.watchlist_by_bare.get(&bare) {
                                 self.watchlist_rows.swap(row_idx, row_idx - 1);
-                                self.rebuild_live_indices();
+                                self.rebuild_watchlist_live_index();
                             }
                         }
                     }
@@ -787,7 +787,7 @@ impl TyphooNApp {
                                 .to_ascii_uppercase();
                             if let Some(&row_idx) = self.watchlist_by_bare.get(&bare) {
                                 self.watchlist_rows.swap(row_idx, row_idx + 1);
-                                self.rebuild_live_indices();
+                                self.rebuild_watchlist_live_index();
                             }
                         }
                     }
@@ -805,7 +805,7 @@ impl TyphooNApp {
                             if let Some(&row_idx) = self.watchlist_by_bare.get(&bare) {
                                 let row = self.watchlist_rows.remove(row_idx);
                                 self.watchlist_rows.insert(0, row);
-                                self.rebuild_live_indices();
+                                self.rebuild_watchlist_live_index();
                             }
                         }
                     }
@@ -815,7 +815,7 @@ impl TyphooNApp {
                     self.user_watchlist.retain(|s| s != sym);
                     self.user_watchlist_set.remove(sym);
                     self.watchlist_rows.retain(|r| &r.symbol != sym);
-                    self.rebuild_live_indices();
+                    self.rebuild_watchlist_live_index();
                 }
                 // Handle + button → open new chart tab
                 if let Some(sym) = open_new_sym {
@@ -860,6 +860,9 @@ impl TyphooNApp {
                                 }
                             }
                         }
+                    }
+                    if loaded {
+                        self.rebuild_chart_live_index();
                     }
                     // Fetch from Alpaca if no cached data and broker is connected
                     if !loaded && self.broker_connected {

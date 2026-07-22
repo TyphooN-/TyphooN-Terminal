@@ -253,3 +253,17 @@ The performance contract is unchanged: do not shrink the Kraken Spot/Securities/
 - A broker receive-loop time budget does not bound work performed after the loop. Coalesced broad refill is now skipped while heavy sync is saturated (`pending > 200`) and left to the periodic scheduler until capacity is genuinely available.
 - The duplicate 60-second session autosave was rebuilding session JSON and synchronously writing sync preferences before spawning credential work. It produced 2–13 second `render_residual_ms` stalls at a one-minute cadence and has been reduced to credential-only maintenance; `maybe_incremental_session_save` is the single session-persistence path.
 - `BgData` publication is again `sync_channel(1)` + `try_send`. The accidental unbounded channel retained multi-GB snapshot clones whenever egui stalled and drove measured `VmHWM` above 45 GB. Superseded snapshot destruction remains off the UI thread.
+
+### Update (2026-07-22): quote dispatch and chart-header indices
+
+- Watchlist quote application now rebuilds only the watchlist index; chart-only
+  mutations rebuild only the chart index. Exact symbol dispatch reuses
+  `chart_by_bare` and reserves a linear alias scan for the compatibility fallback.
+- Chart company names use an invalidation-driven provider index plus an
+  `Arc<HashMap>` fundamentals index built on the background refresh thread.
+  Central-panel paint performs two O(1) lookups and never rebuilds or scans full
+  catalogs.
+- Market-map quote joins reuse `watchlist_by_bare`, removing the fundamentals ×
+  watchlist nested scan. Previous-close axis coloring reads the maintained
+  provider `ChartState::prev_daily_close` or its full-recompute bar fallback
+  instead of scanning bar history per frame.

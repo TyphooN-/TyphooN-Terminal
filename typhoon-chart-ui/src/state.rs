@@ -85,6 +85,10 @@ pub struct ChartState {
     /// extended-hours badge "Day %" so a W1/MN chart shows the day move, not a
     /// week/month-ago comparison from its own previous bar.
     pub prev_daily_close: f64,
+    /// Previous daily close derived during a full bar/indicator rebuild. This is
+    /// the O(1) render fallback until a provider quote supplies the authoritative
+    /// `prev_daily_close`; zero for weekly/monthly charts or insufficient history.
+    pub bars_prev_daily_close: f64,
     /// Raw bar data loaded from cache.
     pub bars: Vec<Bar>,
     /// Reusable buffers for full GPU upload path (avoids repeated allocations).
@@ -616,6 +620,7 @@ impl ChartState {
             ext_close: 0.0,
             ext_active: false,
             prev_daily_close: 0.0,
+            bars_prev_daily_close: 0.0,
             bars: Vec::new(),
             upload_opens: Vec::new(),
             upload_closes: Vec::new(),

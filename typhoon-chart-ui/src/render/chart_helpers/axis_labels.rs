@@ -57,7 +57,16 @@ pub(crate) fn draw_right_axis_price_labels(
                 // against the previous daily close, not the current intraday
                 // candle open; otherwise a down day can look green just because
                 // the close finished above that bar's open while EXT is active.
-                close_reference_color(current_price, last.open, &chart.bars)
+                close_reference_color(
+                    current_price,
+                    last.open,
+                    (chart.prev_daily_close > 0.0)
+                        .then_some(chart.prev_daily_close)
+                        .or_else(|| {
+                            (chart.bars_prev_daily_close > 0.0)
+                                .then_some(chart.bars_prev_daily_close)
+                        }),
+                )
             } else if current_price >= last.open {
                 UP
             } else {

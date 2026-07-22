@@ -1994,61 +1994,60 @@ mod tests;
 mod company_name_overlay_tests {
     use super::chart_overlay_company_name;
     use std::collections::HashMap;
-    use typhoon_engine::core::fundamentals::Fundamentals;
 
-    fn fund(symbol: &str, name: &str) -> Fundamentals {
-        Fundamentals {
-            symbol: symbol.to_string(),
-            company_name: name.to_string(),
-            ..Default::default()
-        }
-    }
-
-    fn no_names() -> HashMap<String, String> {
-        HashMap::new()
+    fn names(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(symbol, name)| ((*symbol).to_string(), (*name).to_string()))
+            .collect()
     }
 
     #[test]
     fn resolves_company_name_case_insensitively() {
-        let funds = vec![fund("MS", "Morgan Stanley"), fund("FI", "Fiserv, Inc.")];
-        let names = no_names();
+        let names = names(&[("MS", "Morgan Stanley"), ("FI", "Fiserv, Inc.")]);
         assert_eq!(
-            chart_overlay_company_name(&funds, &names, "MS").as_deref(),
+            chart_overlay_company_name(&names, &HashMap::new(), "MS").as_deref(),
             Some("Morgan Stanley")
         );
         assert_eq!(
-            chart_overlay_company_name(&funds, &names, "ms").as_deref(),
+            chart_overlay_company_name(&names, &HashMap::new(), "ms").as_deref(),
             Some("Morgan Stanley")
         );
         assert_eq!(
-            chart_overlay_company_name(&funds, &names, "FI").as_deref(),
+            chart_overlay_company_name(&names, &HashMap::new(), "FI").as_deref(),
             Some("Fiserv, Inc.")
         );
     }
 
     #[test]
     fn returns_none_for_unknown_or_blank() {
-        let funds = vec![fund("MS", "Morgan Stanley"), fund("ZZZ", "   ")];
-        let names = no_names();
-        assert_eq!(chart_overlay_company_name(&funds, &names, "NVDA"), None);
+        let names = names(&[("MS", "Morgan Stanley"), ("ZZZ", "   ")]);
+        assert_eq!(
+            chart_overlay_company_name(&names, &HashMap::new(), "NVDA"),
+            None
+        );
         // Whitespace-only name is treated as missing.
-        assert_eq!(chart_overlay_company_name(&funds, &names, "ZZZ"), None);
-        // Empty fundamentals table.
-        assert_eq!(chart_overlay_company_name(&[], &names, "MS"), None);
+        assert_eq!(
+            chart_overlay_company_name(&names, &HashMap::new(), "ZZZ"),
+            None
+        );
+        assert_eq!(
+            chart_overlay_company_name(&HashMap::new(), &HashMap::new(), "MS"),
+            None
+        );
     }
 
     #[test]
     fn normalizes_slash_and_eq_suffix() {
-        let funds = vec![fund("BTCUSD", "Bitcoin"), fund("AAPL", "Apple Inc")];
-        let names = no_names();
+        let names = names(&[("BTCUSD", "Bitcoin"), ("AAPL", "Apple Inc")]);
         // Crypto pair "BTC/USD" collapses to "BTCUSD".
         assert_eq!(
-            chart_overlay_company_name(&funds, &names, "BTC/USD").as_deref(),
+            chart_overlay_company_name(&names, &HashMap::new(), "BTC/USD").as_deref(),
             Some("Bitcoin")
         );
         // Kraken-equity ".EQ" suffix is trimmed before matching.
         assert_eq!(
-            chart_overlay_company_name(&funds, &names, "AAPL.EQ").as_deref(),
+            chart_overlay_company_name(&names, &HashMap::new(), "AAPL.EQ").as_deref(),
             Some("Apple Inc")
         );
     }
@@ -2060,19 +2059,27 @@ mod company_name_overlay_tests {
             "WOK".to_string(),
             "WORK Medical Technology Group".to_string(),
         );
-        // No fundamentals row — the lightweight Kraken equity catalog resolves it.
         assert_eq!(
-            chart_overlay_company_name(&[], &names, "WOK.EQ").as_deref(),
+            chart_overlay_company_name(&names, &HashMap::new(), "WOK.EQ").as_deref(),
             Some("WORK Medical Technology Group")
         );
     }
 
     #[test]
-    fn trims_surrounding_whitespace_in_name() {
-        let funds = vec![fund("MS", "  Morgan Stanley  ")];
-        let names = no_names();
+    fn fundamentals_override_provider_placeholders() {
+        let provider = names(&[("CC", "Provider Placeholder")]);
+        let fundamentals = names(&[("CC", "The Chemours Company")]);
         assert_eq!(
-            chart_overlay_company_name(&funds, &names, "MS").as_deref(),
+            chart_overlay_company_name(&provider, &fundamentals, "CC"),
+            Some("The Chemours Company")
+        );
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace_in_name() {
+        let names = names(&[("MS", "  Morgan Stanley  ")]);
+        assert_eq!(
+            chart_overlay_company_name(&names, &HashMap::new(), "MS").as_deref(),
             Some("Morgan Stanley")
         );
     }

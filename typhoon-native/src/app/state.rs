@@ -62,7 +62,6 @@ pub(crate) enum SanityConfirmAction {
     RebuildMerged,
 }
 
-
 /// Pre-populated mark data loaded in the cache-open blocking thread and sent
 /// with the cache so the UI thread only does cheap assignment (avoids 500-800ms
 /// stalls from deserializing 60k+ mark entries + HashMap build on the first
@@ -70,9 +69,12 @@ pub(crate) enum SanityConfirmAction {
 #[derive(Default, Clone)]
 pub(crate) struct PreloadedCacheMarks {
     pub alpaca_no_data_pairs: std::collections::HashMap<String, AlpacaNoDataPair>,
-    pub alpaca_backfill_complete_pairs: std::collections::HashMap<String, AlpacaBackfillCompletePair>,
-    pub kraken_backfill_complete_pairs: std::collections::HashMap<String, AlpacaBackfillCompletePair>,
-    pub kraken_futures_backfill_complete_pairs: std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+    pub alpaca_backfill_complete_pairs:
+        std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+    pub kraken_backfill_complete_pairs:
+        std::collections::HashMap<String, AlpacaBackfillCompletePair>,
+    pub kraken_futures_backfill_complete_pairs:
+        std::collections::HashMap<String, AlpacaBackfillCompletePair>,
 }
 
 pub struct TyphooNApp {
@@ -84,7 +86,6 @@ pub struct TyphooNApp {
     pub(crate) cache_loaded: bool,
     /// Cache open error (shown in log if set).
     pub(crate) cache_err: Option<String>,
-
 
     /// Symbol input text in the toolbar.
     pub(crate) symbol_input: String,
@@ -750,6 +751,9 @@ pub struct TyphooNApp {
     /// Full asset list from broker (symbol, name, asset_class) for Symbol Explorer.
     pub(crate) all_broker_assets: Vec<(String, String, String)>,
     pub(crate) all_broker_assets_fetched: bool,
+    /// Provider-priority-resolved company names used by chart overlays. Rebuilt
+    /// Rebuilt outside paint only when a provider catalog or primary broker changes.
+    pub(crate) chart_company_names: Arc<std::collections::HashMap<String, String>>,
     pub(crate) show_optimizer: bool,
     pub(crate) show_news: bool,
     pub(crate) show_calendar: bool,

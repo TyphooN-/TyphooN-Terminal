@@ -30,6 +30,41 @@ fn bare_chart_symbol(symbol: &str) -> String {
     }
 }
 
+fn apply_watchlist_row_to_chart(chart: &mut ChartState, row: &WatchlistRow, weekend_closed: bool) {
+    if row.prev_close > 0.0 {
+        chart.prev_daily_close = row.prev_close;
+    }
+    if row.ext_change_pct.abs() > 0.001 && row.last > 0.0 {
+        let ext_price = row.last;
+        if !chart.ext_active {
+            let regular_close = if row.regular_close > 0.0 {
+                row.regular_close
+            } else {
+                chart.bars.last().map(|bar| bar.close).unwrap_or(ext_price)
+            };
+            chart.ext_open = regular_close;
+            chart.ext_high = ext_price.max(regular_close);
+            chart.ext_low = ext_price.min(regular_close);
+            chart.ext_close = ext_price;
+            chart.ext_active = true;
+        } else {
+            chart.ext_close = ext_price;
+            chart.ext_high = chart.ext_high.max(ext_price);
+            chart.ext_low = chart.ext_low.min(ext_price);
+        }
+    } else if !weekend_closed {
+        chart.ext_active = false;
+    }
+
+    let realtime_fresh = !chart.live_quote_delayed
+        && chart
+            .live_quote_at
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
+    if !chart.ext_active && !realtime_fresh {
+        chart.apply_forming_price_update(row.last);
+    }
+}
+
 impl TyphooNApp {
     pub(super) fn tick_watchlist_quote_refresh(&mut self, now_instant: std::time::Instant) {
         // Watchlist quotes used to be fetched only when the user manually added a
@@ -90,16 +125,8 @@ impl TyphooNApp {
         // unnecessary clone/alloc on every live watchlist quote update. Re-add via cmd
         // channel if real persistence needed.
 
-        // Update forming bars on all charts from watchlist prices. Exact symbol matches are
-        // O(1); the partial contains fallback only runs for rare alias cases like BTC/BTCUSD.
-        let mut wl_sym_to_charts: HashMap<String, Vec<usize>> =
-            HashMap::with_capacity(self.charts.len());
-        let mut wl_chart_bares: Vec<String> = Vec::with_capacity(self.charts.len());
-        for (ci, chart) in self.charts.iter().enumerate() {
-            let bare = bare_chart_symbol(&chart.symbol);
-            wl_sym_to_charts.entry(bare.clone()).or_default().push(ci);
-            wl_chart_bares.push(bare);
-        }
+        // Exact chart dispatch reuses the maintained O(1) index. The partial
+        // contains fallback scans only for rare aliases such as BTC/BTCUSD.
         // During the xStocks weekend close, retain Friday's last extended-hours
         // snapshot instead of clearing it (Yahoo returns no extended change over the
         // weekend, which would otherwise flip ext_active off and drop the Ext% badge).
@@ -126,73 +153,21 @@ impl TyphooNApp {
             let row_symbol = normalize_quote_symbol(&row.symbol);
             row_symbols.insert(row_symbol.clone());
 
-            let mut matched_indices: Vec<usize> = Vec::new();
-            let mut seen: HashSet<usize> = HashSet::new();
-            if let Some(indices) = wl_sym_to_charts.get(row_symbol.as_str()) {
-                for &ci in indices {
-                    if seen.insert(ci) {
-                        matched_indices.push(ci);
+            if let Some(indices) = self.chart_by_bare.get(&row_symbol) {
+                for &chart_index in indices {
+                    if let Some(chart) = self.charts.get_mut(chart_index) {
+                        apply_watchlist_row_to_chart(chart, row, kraken_weekend_closed);
                     }
                 }
-            }
-            if matched_indices.is_empty() {
-                for (ci, bare) in wl_chart_bares.iter().enumerate() {
-                    if (bare.contains(row_symbol.as_str()) || row_symbol.contains(bare.as_str()))
-                        && seen.insert(ci)
+            } else {
+                for chart in &mut self.charts {
+                    let bare = bare_chart_symbol(&chart.symbol);
+                    if !bare.is_empty()
+                        && (bare.contains(row_symbol.as_str())
+                            || row_symbol.contains(bare.as_str()))
                     {
-                        matched_indices.push(ci);
+                        apply_watchlist_row_to_chart(chart, row, kraken_weekend_closed);
                     }
-                }
-            }
-            for ci in matched_indices {
-                let chart = &mut self.charts[ci];
-                // Carry the authoritative previous-day close from the shared quote so the
-                // ext badge "Day %" is timeframe-independent (a W1/MN chart's own previous
-                // bar is a week/month ago, not yesterday).
-                if row.prev_close > 0.0 {
-                    chart.prev_daily_close = row.prev_close;
-                }
-                // Update ext-hours candle if ext data is available. row.last is already set to
-                // the ext price by Yahoo enrichment when ext_change_pct != 0.
-                if row.ext_change_pct.abs() > 0.001 && row.last > 0.0 {
-                    let ext_price = row.last;
-                    if !chart.ext_active {
-                        // Prefer the timeframe-independent regular-session close from the
-                        // shared quote; the chart's own last-bar close differs across
-                        // H1/H4/W1. Fall back to it only when the authoritative close is
-                        // unavailable.
-                        let reg_close = if row.regular_close > 0.0 {
-                            row.regular_close
-                        } else {
-                            chart.bars.last().map(|bar| bar.close).unwrap_or(ext_price)
-                        };
-                        chart.ext_open = reg_close;
-                        chart.ext_high = ext_price.max(reg_close);
-                        chart.ext_low = ext_price.min(reg_close);
-                        chart.ext_close = ext_price;
-                        chart.ext_active = true;
-                    } else {
-                        chart.ext_close = ext_price;
-                        if ext_price > chart.ext_high {
-                            chart.ext_high = ext_price;
-                        }
-                        if ext_price < chart.ext_low {
-                            chart.ext_low = ext_price;
-                        }
-                    }
-                } else if !kraken_weekend_closed {
-                    chart.ext_active = false;
-                }
-
-                // Update forming bar — but never let a delayed watchlist quote clobber a fresh
-                // real-time WS bar. Real-time wins for 30s; the watchlist fills only when WS is
-                // absent or quiet.
-                let realtime_fresh = !chart.live_quote_delayed
-                    && chart
-                        .live_quote_at
-                        .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30));
-                if !chart.ext_active && !realtime_fresh {
-                    chart.apply_forming_price_update(row.last);
                 }
             }
         }
@@ -244,7 +219,7 @@ impl TyphooNApp {
                 || self.kr_position_asset_tails.contains(symbol)
         });
         self.watchlist_rows = rows;
-        self.rebuild_live_indices();
+        self.rebuild_watchlist_live_index();
 
         // Watchlist quotes are the freshest equity valuation input during extended hours. Reprice
         // Kraken Securities balances from them so Positions/Cur does not lag by iapi's delayed feed.

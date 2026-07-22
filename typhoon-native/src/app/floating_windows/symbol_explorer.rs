@@ -582,6 +582,7 @@ impl TyphooNApp {
                                 self.gpu_indicators = gpu;
                             }
                         }
+                        self.rebuild_chart_live_index();
                         self.log
                             .push_back(LogEntry::info(format!("Chart: {}", symbol)));
                     }

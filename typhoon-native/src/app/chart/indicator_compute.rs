@@ -91,6 +91,29 @@ impl ChartIndicatorCompute for ChartState {
             return;
         }
 
+        self.bars_prev_daily_close = if matches!(
+            self.timeframe,
+            Timeframe::M1
+                | Timeframe::M5
+                | Timeframe::M15
+                | Timeframe::M30
+                | Timeframe::H1
+                | Timeframe::H4
+                | Timeframe::D1
+        ) {
+            self.bars.last().and_then(|last| {
+                let latest_day = last.ts_ms / 86_400_000;
+                self.bars
+                    .iter()
+                    .rev()
+                    .find(|bar| bar.ts_ms / 86_400_000 < latest_day)
+                    .map(|bar| bar.close)
+            })
+        } else {
+            None
+        }
+        .unwrap_or(0.0);
+
         // ── GPU path: upload bars to VRAM, compute on GPU, read back ──
         if let Some(gpu) = gpu {
             if n > 0 {

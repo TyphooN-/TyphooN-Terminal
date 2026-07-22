@@ -59,7 +59,11 @@ impl TyphooNApp {
             .get(&self.alpaca_primary_account_id)
             .map(|r| r.id.as_str())
             .unwrap_or(self.alpaca_primary_account_id.as_str());
-        if let Some(primary) = positions_map.get(pid).cloned().or_else(|| primary_account.cloned()) {
+        if let Some(primary) = positions_map
+            .get(pid)
+            .cloned()
+            .or_else(|| primary_account.cloned())
+        {
             if let Ok(json) = serde_json::to_string(&primary.positions) {
                 self.put_kv_dedup("broker:positions", &json);
             }
@@ -80,6 +84,7 @@ impl TyphooNApp {
         }
         self.all_broker_assets = assets;
         self.all_broker_assets_fetched = true;
+        self.rebuild_chart_company_name_catalog();
         // Defer refill — the drain arm will set market_data_refill_requested
         // so heavy schedule_* work (rotations, kraken universes, alpaca pairs)
         // runs once at end of batch, outside individual msg timing.

@@ -235,6 +235,7 @@ impl TyphooNApp {
         if self.show_screener {
             let mut pending_action = SymbolAction::None;
             let mut fund_action = SymbolAction::None;
+            let mut chart_symbol_changed = false;
             let mut open = self.show_screener;
             egui::Window::new("Symbol Screener")
                 .open(&mut open)
@@ -414,6 +415,7 @@ impl TyphooNApp {
                                                                 key
                                                             ),
                                                         ));
+                                                        chart_symbol_changed = true;
                                                     }
                                                     Ok(None) => {
                                                         self.log.push_back(LogEntry::warn(
@@ -433,6 +435,9 @@ impl TyphooNApp {
                                 });
                         });
                 });
+            if chart_symbol_changed {
+                self.rebuild_chart_live_index();
+            }
             self.show_screener = open;
             self.apply_symbol_action(pending_action);
             self.apply_symbol_action(fund_action);

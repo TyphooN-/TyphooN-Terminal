@@ -507,6 +507,14 @@ fn symbol_matches_no_alloc(raw: &str, target_upper: &str) -> bool {
 }
 
 impl TyphooNApp {
+    pub(super) fn rebuild_chart_company_name_catalog(&mut self) {
+        self.chart_company_names = Arc::new(chart_company_name_catalog(
+            &self.all_broker_assets,
+            &self.kraken_equity_names,
+            self.primary_broker,
+        ));
+    }
+
     pub(crate) fn tick_chart_background_results(&mut self) {
         // ── MTF Grid background fill: clear the in-flight guard when the worker
         // finishes (it writes the unified result cache directly, so there are no
@@ -1212,6 +1220,7 @@ impl TyphooNApp {
                 }
             }
             // Refresh MTF Grid status for all timeframes
+            self.rebuild_chart_live_index();
             self.compute_mtf_grid_status();
         } else {
             self.log.push_back(LogEntry::warn("Cache not available"));
@@ -1629,7 +1638,7 @@ impl TyphooNApp {
                 chart.show_in_tab_bar = false;
                 self.charts.push(chart);
                 let idx = self.charts.len().saturating_sub(1);
-                self.rebuild_live_indices();
+                self.rebuild_chart_live_index();
                 self.queue_chart_reload(idx);
                 let _ = self.queue_symbol_fetch_for_source(symbol, tf.cache_suffix());
                 idx

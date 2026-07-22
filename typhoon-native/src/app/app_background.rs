@@ -2,10 +2,7 @@ use super::*;
 
 const BG_SNAPSHOT_CHANNEL_CAPACITY: usize = 1;
 
-fn try_publish_bg_snapshot(
-    tx: &std::sync::mpsc::SyncSender<BgData>,
-    data: &BgData,
-) -> bool {
+fn try_publish_bg_snapshot(tx: &std::sync::mpsc::SyncSender<BgData>, data: &BgData) -> bool {
     tx.try_send(data.clone()).is_ok()
 }
 
@@ -21,8 +18,7 @@ pub(super) fn spawn_background_refresh(
     // drove VmHWM above 45 GB and amplified allocator/UI stalls. A stale queued
     // snapshot is sufficient; the next cycle republishes after the UI catches up.
     {
-        let (bg_tx, bg_rx) =
-            std::sync::mpsc::sync_channel::<BgData>(BG_SNAPSHOT_CHANNEL_CAPACITY);
+        let (bg_tx, bg_rx) = std::sync::mpsc::sync_channel::<BgData>(BG_SNAPSHOT_CHANNEL_CAPACITY);
         app.bg_rx = bg_rx;
         let shared_cache_bg = shared_cache.clone();
         let _ = std::thread::Builder::new()
@@ -320,6 +316,21 @@ pub(super) fn spawn_background_refresh(
                     // Fundamentals come from research tables (synced via LAN) — query locally on both
                     data.all_fundamentals =
                         fundamentals::get_all_fundamentals(conn).unwrap_or_default();
+                    data.fundamentals_company_names = Arc::new(
+                        data.all_fundamentals
+                            .iter()
+                            .filter_map(|row| {
+                                let symbol = bare_symbol_from_key(row.symbol.trim())
+                                    .replace('/', "")
+                                    .trim_end_matches(".EQ")
+                                    .trim_end_matches(".eq")
+                                    .to_ascii_uppercase();
+                                let name = row.company_name.trim();
+                                (!symbol.is_empty() && !name.is_empty())
+                                    .then(|| (symbol, name.to_string()))
+                            })
+                            .collect(),
+                    );
                     data.upcoming_earnings =
                         fundamentals::get_upcoming_earnings(conn, 50).unwrap_or_default();
                     data.upcoming_dividends =

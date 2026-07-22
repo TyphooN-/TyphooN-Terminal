@@ -1158,6 +1158,34 @@ fn stale_live_quote_is_not_folded_into_reloaded_bar() {
 }
 
 #[test]
+fn full_recompute_caches_previous_daily_close_for_constant_time_rendering() {
+    let day = 86_400_000_i64;
+    let mut chart = ChartState::new("TEST", Timeframe::M1);
+    chart.bars = vec![
+        Bar {
+            ts_ms: day + 60_000,
+            open: 99.0,
+            high: 102.0,
+            low: 98.0,
+            close: 101.25,
+            volume: 1.0,
+        },
+        Bar {
+            ts_ms: day * 2 + 60_000,
+            open: 103.0,
+            high: 105.0,
+            low: 102.0,
+            close: 104.0,
+            volume: 1.0,
+        },
+    ];
+
+    chart.compute_indicators();
+
+    assert_eq!(chart.bars_prev_daily_close, 101.25);
+}
+
+#[test]
 fn news_dedup_placeholder_test() {
     // Placeholder test for article deduplication logic.
     // Real implementation will use article_exists_by_url_hash.

@@ -55,11 +55,16 @@ impl TyphooNApp {
                     } else {
                         f.sector.trim().to_string()
                     };
+                    let watchlist_key = bare_symbol_from_key(&f.symbol)
+                        .replace('/', "")
+                        .trim_end_matches(".EQ")
+                        .trim_end_matches(".eq")
+                        .to_ascii_uppercase();
                     let change = self
-                        .watchlist_rows
-                        .iter()
-                        .find(|w| w.symbol.eq_ignore_ascii_case(&f.symbol))
-                        .map(|w| w.change_pct)
+                        .watchlist_by_bare
+                        .get(&watchlist_key)
+                        .and_then(|&index| self.watchlist_rows.get(index))
+                        .map(|row| row.change_pct)
                         .unwrap_or(0.0);
                     by_sector
                         .entry(sector)

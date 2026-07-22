@@ -502,6 +502,7 @@ impl TyphooNApp {
             symbols_expanded: std::collections::HashSet::new(),
             all_broker_assets: Vec::new(),
             all_broker_assets_fetched: false,
+            chart_company_names: Arc::new(std::collections::HashMap::new()),
             show_optimizer: false,
             show_news: false,
             show_calendar: false,
@@ -3037,6 +3038,7 @@ impl TyphooNApp {
         // Restore user workspace immediately so defaults don't leak into startup state.
         // Cache-backed chart bars and credentials are still hydrated later in update().
         app.load_session();
+        app.rebuild_live_indices();
         app.mark_session_snapshot_clean();
         app
     }

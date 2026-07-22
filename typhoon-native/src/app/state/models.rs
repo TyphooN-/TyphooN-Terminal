@@ -87,6 +87,9 @@ pub(crate) struct BgData {
 
     // ── Fundamentals (cached from background thread) ──
     pub(crate) all_fundamentals: Vec<fundamentals::Fundamentals>,
+    /// Background-built company-name index. Cloning `BgData` shares it O(1), so
+    /// chart rendering never rebuilds or scans the full fundamentals catalog.
+    pub(crate) fundamentals_company_names: Arc<std::collections::HashMap<String, String>>,
     pub(crate) upcoming_earnings: Vec<(String, String, String)>,
     pub(crate) upcoming_dividends: Vec<(String, String, String, Option<f64>)>,
     /// Active symbol-level regulatory warnings keyed by normalized ticker.

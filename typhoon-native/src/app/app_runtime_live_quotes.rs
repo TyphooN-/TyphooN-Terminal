@@ -346,10 +346,8 @@ impl TyphooNApp {
         }
     }
 
-    /// Rebuild O(1) indices after any mutation to charts or watchlist_rows.
-    /// Called after user actions, session restore, watchlist load etc.
-    /// Hot quote paths use these instead of linear scans.
-    pub(super) fn rebuild_live_indices(&mut self) {
+    /// Rebuild the chart-side O(1) quote dispatch index after chart mutations.
+    pub(super) fn rebuild_chart_live_index(&mut self) {
         self.chart_by_bare.clear();
         for (i, chart) in self.charts.iter().enumerate() {
             let bare = bare_symbol_from_key(&chart.symbol)
@@ -361,7 +359,10 @@ impl TyphooNApp {
                 self.chart_by_bare.entry(bare).or_default().push(i);
             }
         }
+    }
 
+    /// Rebuild the watchlist-side O(1) lookup after watchlist mutations.
+    pub(super) fn rebuild_watchlist_live_index(&mut self) {
         self.watchlist_by_bare.clear();
         for (i, row) in self.watchlist_rows.iter().enumerate() {
             let bare = bare_symbol_from_key(&row.symbol)
@@ -377,5 +378,11 @@ impl TyphooNApp {
         // Invalidate watchlist sort cache — structural change to rows order/len
         // means display sort order must be recomputed on next render.
         self.watchlist_sorted_indices.clear();
+    }
+
+    /// Rebuild both live indices after session restore or other combined mutations.
+    pub(super) fn rebuild_live_indices(&mut self) {
+        self.rebuild_chart_live_index();
+        self.rebuild_watchlist_live_index();
     }
 }

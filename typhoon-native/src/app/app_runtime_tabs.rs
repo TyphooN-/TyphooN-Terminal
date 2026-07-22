@@ -285,7 +285,7 @@ impl TyphooNApp {
                         let new_chart = ChartState::new(&self.symbol_input, tf);
                         self.charts.push(new_chart);
                         self.active_tab = self.charts.len() - 1;
-                        self.rebuild_live_indices();
+                        self.rebuild_chart_live_index();
                         // Defer the expensive load (cache read + GPU indicators + MTF
                         // overlays) to the paced loader so opening a tab never blocks the
                         // render thread on a heavy symbol (multi-second stalls — ADR-098).
@@ -371,7 +371,7 @@ impl TyphooNApp {
                         if self.active_tab >= self.charts.len() {
                             self.active_tab = self.charts.len().saturating_sub(1);
                         }
-                        self.rebuild_live_indices();
+                        self.rebuild_chart_live_index();
                     }
                     if let Some((drag_src, insert_at)) = drop_target {
                         if drag_src < self.charts.len() {
@@ -385,7 +385,7 @@ impl TyphooNApp {
                             let adjusted = adjusted.min(self.charts.len());
                             self.charts.insert(adjusted, chart);
                             self.active_tab = adjusted;
-                            self.rebuild_live_indices();
+                            self.rebuild_chart_live_index();
                         }
                     }
                 });

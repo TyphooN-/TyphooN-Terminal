@@ -149,7 +149,7 @@ pub(super) fn draw_extended_hours_header_badge(
     };
     let prev_close = (chart.prev_daily_close > 0.0)
         .then_some(chart.prev_daily_close)
-        .or_else(|| previous_daily_close_from_bars(&chart.bars));
+        .or_else(|| (chart.bars_prev_daily_close > 0.0).then_some(chart.bars_prev_daily_close));
     let ext_text =
         super::time_axis::format_ext_hours_symbol_badge(daily_close, chart.ext_close, prev_close);
     let ext_col = egui::Color32::from_rgb(200, 50, 200);
@@ -965,20 +965,12 @@ pub(super) fn nnfx_trend_legend_labels(
     (ma_label, kama_label)
 }
 
-pub(super) fn previous_daily_close_from_bars(bars: &[Bar]) -> Option<f64> {
-    let latest_day = bars.last()?.ts_ms / 86_400_000;
-    bars.iter()
-        .rev()
-        .find(|bar| bar.ts_ms / 86_400_000 < latest_day)
-        .map(|bar| bar.close)
-}
-
 pub(super) fn close_reference_color(
     current_close: f64,
     fallback_open: f64,
-    bars: &[Bar],
+    previous_daily_close: Option<f64>,
 ) -> egui::Color32 {
-    let reference = previous_daily_close_from_bars(bars).unwrap_or(fallback_open);
+    let reference = previous_daily_close.unwrap_or(fallback_open);
     if current_close >= reference { UP } else { DOWN }
 }
 
@@ -1038,39 +1030,31 @@ pub(super) fn place_level_label(
     center
 }
 
-/// Resolve the display company name for a chart's symbol from the in-memory
-/// fundamentals table (`self.bg.all_fundamentals`). The chart symbol is
+/// Resolve the display company name for a chart's symbol from the prebuilt
+/// provider/fundamentals name index. The chart symbol is
 /// normalized to the bare ticker the table keys on — drop a forward slash
 /// (crypto pairs like "BTC/USD") and trim a trailing ".EQ" Kraken-equity
 /// suffix — then matched case-insensitively, the same way the research packet's
 /// company header resolves it. Returns None when there is no row or the name is
 /// blank, so the caller falls back to the plain "SYM [TF]" header.
-pub fn chart_overlay_company_name(
-    fundamentals: &[typhoon_engine::core::fundamentals::Fundamentals],
-    equity_names: &std::collections::HashMap<String, String>,
+pub fn chart_overlay_company_name<'a>(
+    provider_names: &'a std::collections::HashMap<String, String>,
+    fundamentals_names: &'a std::collections::HashMap<String, String>,
     chart_symbol: &str,
-) -> Option<String> {
+) -> Option<&'a str> {
     let stripped = chart_symbol.replace('/', "");
     let bare = stripped
         .trim_end_matches(".EQ")
         .trim_end_matches(".eq")
         .to_ascii_uppercase();
 
-    // 1. Full fundamentals (highest quality)
-    if let Some(name) = fundamentals
-        .iter()
-        .find(|f| f.symbol.eq_ignore_ascii_case(&bare))
-        .map(|f| f.company_name.trim().to_string())
-        .filter(|name| !name.is_empty())
+    if let Some(name) = fundamentals_names
+        .get(&bare)
+        .or_else(|| provider_names.get(&bare))
     {
-        return Some(name);
-    }
-
-    // 2. Lightweight Kraken equity catalog name (fast path for xStocks)
-    if let Some(name) = equity_names.get(&bare) {
         let trimmed = name.trim();
         if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
+            return Some(trimmed);
         }
     }
 

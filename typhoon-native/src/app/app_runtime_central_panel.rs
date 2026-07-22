@@ -1,8 +1,8 @@
 use super::*;
 
 use crate::app::chart_ops::{
-    chart_company_name_catalog, low_timeframe_no_data_symbols, mtf_canvas_grid_cols,
-    mtf_canvas_grid_rows, mtf_flat_chart_indices, mtf_visible_chart_groups_filtered,
+    low_timeframe_no_data_symbols, mtf_canvas_grid_cols, mtf_canvas_grid_rows,
+    mtf_flat_chart_indices, mtf_visible_chart_groups_filtered,
 };
 use typhoon_chart_ui::drawing_interaction::{
     drawing_anchors, drawing_hit_distance, drawing_set_anchor, translate_drawing,
@@ -36,11 +36,8 @@ impl TyphooNApp {
         pointer_over_floating: bool,
     ) {
         let available = ui.available_rect_before_wrap();
-        let chart_company_names = chart_company_name_catalog(
-            &self.all_broker_assets,
-            &self.kraken_equity_names,
-            self.primary_broker,
-        );
+        let chart_company_names = self.chart_company_names.clone();
+        let fundamentals_company_names = self.bg.fundamentals_company_names.clone();
 
         // ── Price axis rect (right 70px of chart — TradingView-style scale) ──
         let price_axis_w = typhoon_chart_ui::render::PRICE_AXIS_W;
@@ -830,8 +827,8 @@ impl TyphooNApp {
                     &chart.regulatory_alerts,
                     &self.draw_mode,
                     chart_overlay_company_name(
-                        &self.bg.all_fundamentals,
                         &chart_company_names,
+                        &fundamentals_company_names,
                         &chart.symbol,
                     )
                     .as_deref(),
@@ -1128,8 +1125,8 @@ impl TyphooNApp {
                     &chart.regulatory_alerts,
                     &self.draw_mode,
                     chart_overlay_company_name(
-                        &self.bg.all_fundamentals,
                         &chart_company_names,
+                        &fundamentals_company_names,
                         &chart.symbol,
                     )
                     .as_deref(),

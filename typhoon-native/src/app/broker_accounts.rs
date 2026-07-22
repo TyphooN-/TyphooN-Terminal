@@ -474,6 +474,7 @@ impl TyphooNApp {
         let broker_changed = broker != self.primary_broker;
         if broker_changed {
             self.primary_broker = broker;
+            self.rebuild_chart_company_name_catalog();
             // Routing follows the primary immediately; the per-trade Broker
             // combo can still override.
             self.order_broker = broker;

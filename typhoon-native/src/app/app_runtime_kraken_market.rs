@@ -290,6 +290,7 @@ impl TyphooNApp {
         self.kraken_equity_universe_set = digest.universe_set;
         self.kraken_equity_universe_symbols = digest.symbols;
         self.kraken_equity_names = digest.names;
+        self.rebuild_chart_company_name_catalog();
         if let Some(map) = digest.regulatory_alerts {
             self.bg.regulatory_alerts_by_symbol = map;
         }

@@ -82,6 +82,7 @@ impl TyphooNApp {
             .and_then(OrderBroker::from_persist_str)
         {
             self.primary_broker = primary;
+            self.rebuild_chart_company_name_catalog();
             // Routing default follows the persisted primary; resolve_order_broker
             // re-points only if the primary is unavailable once brokers connect.
             self.order_broker = primary;
