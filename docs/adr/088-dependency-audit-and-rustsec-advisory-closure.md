@@ -1,7 +1,7 @@
 # ADR-088: Dependency Audit and RustSec Advisory Closure
 
 **Date:** 2026-04-25
-**Updated:** 2026-07-12
+**Updated:** 2026-07-22
 **Status:** Implemented
 **Related:** active workspace `Cargo.toml` files, `Cargo.lock`, ADR-031 (dependency alignment), ADR-044 (performance security audit). Historical CLI/vendor manifests referenced by the original audit are no longer on active master.
 
@@ -301,3 +301,40 @@ Security-first comb-over: centralized remaining direct dep pins into
 
 See ADR-031 for the parallel entry. All direct TyphooN deps now route
 through the single workspace table for common versions.
+
+
+## Follow-up audit (2026-07-21)
+
+Security-first workspace comb-over (per ADR-031/088):
+
+- Bumped direct `wasm-encoder` 0.253 → 0.254 in workspace table; transpiler
+  continues to build and function with no code changes.
+- Centralized `rand = { version = "0.10", ... }` and `serial_test` (dev) into
+  `[workspace.dependencies]` so all (future) consumers share one pin.
+- Re-audited feature surfaces for all centralized crates against live call
+  sites; no trims or expansions this pass (prior minimal sets hold: see
+  engine/broker/native manifests and comments).
+- `cargo check --workspace` and `cargo tree -d --workspace` clean; no direct
+  version splits, no new RustSec (audit still only has the two documented
+  build-time quick-xml ignores).
+- `cargo update --workspace` confirmed at ceiling for declared ranges.
+- Root Cargo.toml and member manifests now have zero repeated version strings
+  for shared crates; rand/serial_test unified.
+
+This pass reinforces: latest within policy, one version source, minimal
+features only, duplicates only from upstream (documented).
+
+See ADR-031 for the companion entry.
+
+## Follow-up audit (2026-07-22)
+
+Security-first lockfile refresh (per ADR-031/088):
+
+- Serial targeted updates pulled:
+  async-trait 0.1.89→0.1.91, bytemuck 1.25.1→1.25.2, regex+automata to 1.13.1/0.4.16, thiserror to 2.0.19, tokio to 1.53.1, serde family to 1.0.229/1.0.151.
+- Introduced syn v3.0.3 (via async-trait); now two syn lines (v2 from other derives, v3 from async-trait). Documented as upstream; build and udeps clean.
+- Verification identical to companion ADR-031 entry: udeps "all used", check clean, tree dups only upstream+new syn, audit clean, drift OK.
+- Lockfile refreshed; manifests unchanged (already centralized/minimal in prior pass).
+- Reconfirmed no avoidable direct multi-versions, features remain the audited minimal sets.
+
+See ADR-031 for full command list and blocker details.

@@ -31,21 +31,24 @@ zeroize = { version = "1.9", default-features = false, features = ["alloc"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 keyring-core = { version = "1", default-features = false }
 sha2 = { version = "0.11", default-features = false }
-hmac = "0.13"
+hmac = { version = "0.13", default-features = false }
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # Additional direct dependencies centralized here for single-version policy,
 # minimal feature surface, and easy security refreshes (per ADR-031/088).
-# Versions are latest stable at time of this pass; features kept to exactly
+# Versions are latest stable at time of 2026-07-22 pass; features kept to exactly
 # what each consuming crate enables (see per-crate manifests for call-site
 # additions and rationale comments).
-async-trait = "0.1"
-bytemuck = "1.25"
+# Lockfile carries latest compatible patches within declared ranges.
+async-trait = { version = "0.1", default-features = false }
+bytemuck = { version = "1.25", default-features = false }
 crc32fast = { version = "1.5", default-features = false, features = ["std"] }
+rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
+serial_test = { version = "3.5", default-features = false }
 eframe = { version = "0.35", default-features = false }
 egui_commonmark = { version = "0.24", default-features = false }
 egui_extras = { version = "0.35", default-features = false }
-egui_plot = "0.36"
+egui_plot = { version = "0.36", default-features = false }
 image = { version = "0.25", default-features = false }
 mimalloc = { version = "0.1", default-features = false }
 pest = { version = "2.8", default-features = false, features = ["std", "memchr"] }
@@ -53,11 +56,11 @@ pest_derive = { version = "2.8", default-features = false, features = ["std"] }
 prometheus = { version = "0.14", default-features = false }
 regex = { version = "1.13", default-features = false }
 rfd = { version = "0.17", default-features = false }
-rmp-serde = "1.3"
+rmp-serde = { version = "1.3", default-features = false }
 rustls = { version = "0.23", default-features = false }
 scraper = { version = "0.27", default-features = false }
 tokio-tungstenite = { version = "0.30", default-features = false }
-wasm-encoder = { version = "0.253", default-features = false }
+wasm-encoder = { version = "0.254", default-features = false }
 wgpu = { version = "29", default-features = false }
 windows-sys = { version = "0.61", default-features = false }
 typhoon-transpiler = { path = "typhoon-transpiler" }

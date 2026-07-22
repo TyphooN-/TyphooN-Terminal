@@ -47,7 +47,7 @@ keyring-core = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
 pbkdf2 = { workspace = true }
-rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
+rand = { workspace = true }
 base64 = { workspace = true }
 # DOM-aware article body extractor: picks the publisher's main content node
 # (article/main/.caas-body/.article-body/etc.) and drops nav/header/footer/aside
@@ -59,4 +59,4 @@ dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 
 [dev-dependencies]
 tempfile = "3"
-serial_test = { version = "3.5.0", default-features = false }
+serial_test = { workspace = true }

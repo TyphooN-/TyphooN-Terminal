@@ -398,3 +398,62 @@ initiative documented across ADR-031 and ADR-088).
 
 This pass keeps the policy: latest stable, minimal direct features, no
 workspace version splits, document blockers.
+
+
+## Follow-up alignment (2026-07-21)
+
+Security-first comb-over per the initiative (ADR-031/088): update to latest
+compatible upstream, centralize remaining, minimal features only, no direct
+version drift.
+
+- Bumped `wasm-encoder` 0.253 → 0.254 (typhoon-transpiler only). API surface
+  used (Module, TypeSection, Function, Instruction, etc.) is compatible; no
+  source edits required. Core WASM only (component-model disabled via
+  default-features=false).
+- Centralized `rand` and `serial_test` into `[workspace.dependencies]` (with
+  their prior minimal feature sets). Engine now inherits; eliminates any future
+  drift risk for these (even though single-consumer).
+- Reviewed all feature declarations against call sites (grep + tree):
+  - futures-util: engine ["std","sink"], broker ["alloc"] — exact usage
+    (StreamExt/SinkExt for WS, join_all for fanouts).
+  - rand: ["thread_rng"] for rand::random() in cache/backup path.
+  - tokio, reqwest, rustls, egui_*, image, etc. splits and trims from prior
+    passes re-verified; no unnecessary defaults pulled at direct level.
+- `cargo update --workspace` applied (compatible patches within ranges; 0 new
+  lock changes this pass as tree already at ceiling for declared).
+- `cargo tree -d --workspace` — no new or direct-version duplicates introduced.
+  Remaining splits are upstream-owned (aes 0.8/0.9, calloop 0.13/0.14,
+  block-buffer/digest families via Secret Service vs our RustCrypto 0.11, etc.)
+  as documented previously.
+- `cargo check --workspace` clean. Full validation: manifests use workspace=
+  everywhere for shared; only per-crate feature additions in members.
+- `cargo audit` expectations unchanged (only the documented build-time
+  quick-xml ignores).
+
+Updated root comment and per-crate manifests to reflect the pass. This keeps
+the single-source version + minimal surface rule for easy future refreshes.
+
+## Follow-up alignment (2026-07-22)
+
+Security-first lockfile refresh per the initiative (ADR-031/088):
+
+- Targeted `cargo update -p` pulled latest compatible within ranges (serial to avoid index races):
+  - async-trait 0.1.89 → 0.1.91 (pulls syn 3.x; upstream change, now documented dup alongside syn 2)
+  - bytemuck 1.25.1 → 1.25.2
+  - regex 1.13.0 → 1.13.1 + regex-automata 0.4.15 → 0.4.16
+  - thiserror 2.0.18 → 2.0.19 + thiserror-impl
+  - tokio 1.53.0 → 1.53.1
+  - serde 1.0.228 → 1.0.229 + serde_core/derive
+  - serde_json 1.0.150 → 1.0.151
+- `cargo udeps --workspace`: "All deps seem to have been used."
+- `cargo check --workspace` clean (1m04s).
+- `cargo tree -d --workspace`: new syn v2/v3 dup from async-trait update; thiserror now unified on v2.0.19; all other dups are the documented upstream-owned families (aes 0.8/0.9, block-buffer/digest 0.10/0.12, calloop 0.13/0.14, smithay-client-toolkit 0.19/0.20, thiserror 1/2).
+- `cargo audit`: clean (551 crates scanned; only the two build-time quick-xml RUSTSEC ignores in .cargo/audit.toml).
+- `python .../cargo_manifest_drift.py`: drift_check=OK.
+- No new direct version requirements or manifest feature expansions. Lockfile-only compatible security/bugfix refreshes.
+- Blockers reconfirmed unchanged (cannot be fixed locally):
+  - wgpu 29 (must track egui-wgpu 0.35 pin; 30 would create dual-major GPU tree)
+  - generic-array 0.14.7 (exact pin from latest dbus-secret-service-keyring-store's old RustCrypto line)
+- Updated root Cargo.toml comment + this ADR. Cargo.lock carries the patches.
+
+Policy held: latest stable compatible, minimal direct features only, no workspace drift, upstream dups documented not removed locally.

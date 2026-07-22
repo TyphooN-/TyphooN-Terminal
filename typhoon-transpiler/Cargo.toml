@@ -8,7 +8,7 @@ license = "BUSL-1.1"
 [dependencies]
 pest = { workspace = true }
 pest_derive = { workspace = true }
-# Core-module codegen only; the component-model API is not used.
+# Core-module codegen only (wasm-encoder 0.254); component-model disabled.
 wasm-encoder = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
