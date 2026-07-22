@@ -843,6 +843,15 @@ pub struct TyphooNApp {
     pub(super) cached_alpaca_sync_state:
         std::collections::HashMap<(String, String), SyncCacheState>,
     pub(crate) cached_alpaca_sync_state_rev: Option<u64>,
+    /// Cached merged Alpaca no-data workset (tombstone map keys + alpaca
+    /// unresolvable index + retry-queue fetch keys). The tombstone map alone is
+    /// ~12k entries and both broad Alpaca dispatch lanes previously rebuilt this
+    /// set from scratch every pass; `alpaca_no_data_workset` now rebuilds only
+    /// when the source lengths change. Paired with its length signature below.
+    pub(super) cached_alpaca_no_data_workset: std::collections::HashSet<String>,
+    /// `(no_data_pairs.len, alpaca unresolvable.len, retry_queue.len)` at the
+    /// last `cached_alpaca_no_data_workset` rebuild. `None` forces a rebuild.
+    pub(super) cached_alpaca_no_data_workset_sig: Option<(usize, usize, usize)>,
     /// Cached Kraken bar-state map keyed by normalized `(symbol, timeframe)`.
     pub(super) cached_kraken_sync_state:
         std::collections::HashMap<(String, String), SyncCacheState>,

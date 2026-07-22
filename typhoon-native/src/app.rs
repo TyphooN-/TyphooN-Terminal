@@ -568,6 +568,8 @@ impl TyphooNApp {
             cached_scoped_fundamentals_key: None,
             cached_alpaca_sync_state: std::collections::HashMap::new(),
             cached_alpaca_sync_state_rev: None,
+            cached_alpaca_no_data_workset: std::collections::HashSet::new(),
+            cached_alpaca_no_data_workset_sig: None,
             cached_kraken_sync_state: std::collections::HashMap::new(),
             cached_kraken_sync_state_rev: None,
             cached_kraken_equity_catalog: std::sync::Arc::new(Vec::new()),

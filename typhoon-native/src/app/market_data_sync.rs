@@ -1485,17 +1485,7 @@ impl TyphooNApp {
                     capacity.foreground_reserve,
                 );
                 if available_slots > 0 {
-                    let mut no_data: std::collections::HashSet<String> =
-                        self.alpaca_no_data_pairs.keys().cloned().collect();
-                    if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca")
-                    {
-                        no_data.extend(unresolvable.iter().cloned());
-                    }
-                    no_data.extend(
-                        self.alpaca_retry_queue
-                            .iter()
-                            .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
-                    );
+                    self.refresh_alpaca_no_data_workset();
                     let mut cursor = self.kraken_equities_alpaca_sync_cursor;
                     // Mirrors queue_alpaca_fetch's symbol normalization.
                     let alpaca_dispatch_blocked = |symbol: &str, tf: &str| {
@@ -1507,7 +1497,7 @@ impl TyphooNApp {
                         &alpaca_timeframes,
                         &self.cached_alpaca_sync_state,
                         &focus_symbols,
-                        &no_data,
+                        &self.cached_alpaca_no_data_workset,
                         &self.alpaca_backfill_complete_pairs,
                         &self.pending_alpaca_fetches,
                         available_slots,
@@ -2299,6 +2289,44 @@ impl TyphooNApp {
             .insert(key, chrono::Utc::now().timestamp());
     }
 
+    /// Refresh `cached_alpaca_no_data_workset` in place: the merged set both
+    /// broad Alpaca dispatch lanes use to skip cells no source can serve —
+    /// `alpaca_no_data_pairs` keys, the alpaca entries of the unresolvable
+    /// index, and the current retry-queue fetch keys. The tombstone map alone is
+    /// ~12k entries; rebuilding it from scratch on every dispatch (2x/s under
+    /// full-tilt) was pure allocation churn, so this rebuilds only when the
+    /// source lengths change. Returns `()` (not `&set`) so callers can still take
+    /// the other shared `&self` borrows the selector needs — a `&mut self -> &T`
+    /// return would pin `self` mutably. The retry-queue term is a soft dedup (the
+    /// pending-fetch and cooldown gates are the real duplicate guard), so a rare
+    /// same-length retry swap that briefly reuses the cache is harmless.
+    pub(super) fn refresh_alpaca_no_data_workset(&mut self) {
+        let unresolvable_len = self
+            .unresolvable_fetch_keys_by_broker
+            .get("alpaca")
+            .map_or(0, |set| set.len());
+        let sig = (
+            self.alpaca_no_data_pairs.len(),
+            unresolvable_len,
+            self.alpaca_retry_queue.len(),
+        );
+        if self.cached_alpaca_no_data_workset_sig == Some(sig) {
+            return;
+        }
+        let mut set = std::collections::HashSet::with_capacity(sig.0 + sig.1 + sig.2);
+        set.extend(self.alpaca_no_data_pairs.keys().cloned());
+        if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca") {
+            set.extend(unresolvable.iter().cloned());
+        }
+        set.extend(
+            self.alpaca_retry_queue
+                .iter()
+                .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
+        );
+        self.cached_alpaca_no_data_workset = set;
+        self.cached_alpaca_no_data_workset_sig = Some(sig);
+    }
+
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
         if !self.broad_sync_state_ready() {
             return 0;
@@ -2347,16 +2375,7 @@ impl TyphooNApp {
             self.alpaca_backfill_complete_load();
         }
         self.ensure_unresolvable_fetch_key_index();
-        let mut no_data_keys: std::collections::HashSet<String> =
-            self.alpaca_no_data_pairs.keys().cloned().collect();
-        if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca") {
-            no_data_keys.extend(unresolvable.iter().cloned());
-        }
-        no_data_keys.extend(
-            self.alpaca_retry_queue
-                .iter()
-                .map(|retry| alpaca_fetch_key(&retry.symbol, &retry.timeframe)),
-        );
+        self.refresh_alpaca_no_data_workset();
         let mut cursor = self.alpaca_sync_cursor;
         let scan_limit = if full_tilt {
             ALPACA_FULL_TILT_BACKGROUND_SCAN_LIMIT
@@ -2379,7 +2398,7 @@ impl TyphooNApp {
             &timeframes,
             &self.cached_alpaca_sync_state,
             &focus_symbols,
-            &no_data_keys,
+            &self.cached_alpaca_no_data_workset,
             &self.alpaca_backfill_complete_pairs,
             &self.pending_alpaca_fetches,
             main_slots,
@@ -2403,7 +2422,7 @@ impl TyphooNApp {
                 &timeframes,
                 &self.cached_alpaca_sync_state,
                 &focus_symbols,
-                &no_data_keys,
+                &self.cached_alpaca_no_data_workset,
                 &self.alpaca_backfill_complete_pairs,
                 &self.pending_alpaca_fetches,
                 low_tf_reserve,
