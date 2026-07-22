@@ -134,6 +134,10 @@ pub struct OptionsChainSnapshot {
 /// (Σ call OI·max(S−K,0) + Σ put OI·max(K−S,0) over candidate strikes).
 /// Returns `(strike, total_payout_at_strike)`; `None` without open interest.
 pub fn max_pain_strike(expiry: &OptionExpiry) -> Option<(f64, f64)> {
+    max_pain_strike_optimized(expiry)
+}
+
+fn max_pain_candidate_strikes(expiry: &OptionExpiry) -> Vec<f64> {
     let mut strikes: Vec<f64> = expiry
         .calls
         .iter()
@@ -143,35 +147,148 @@ pub fn max_pain_strike(expiry: &OptionExpiry) -> Option<(f64, f64)> {
         .collect();
     strikes.sort_by(|a, b| a.total_cmp(b));
     strikes.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
-    if strikes.is_empty() {
-        return None;
-    }
-    let has_oi = expiry
+    strikes
+}
+
+fn has_positive_open_interest(expiry: &OptionExpiry) -> bool {
+    expiry
         .calls
         .iter()
         .chain(expiry.puts.iter())
-        .any(|c| c.open_interest > 0.0);
-    if !has_oi {
+        .any(|contract| contract.open_interest > 0.0)
+}
+
+fn max_pain_payout_at_strike(expiry: &OptionExpiry, strike: f64) -> f64 {
+    let call_pay: f64 = expiry
+        .calls
+        .iter()
+        .map(|contract| contract.open_interest * (strike - contract.strike).max(0.0))
+        .sum();
+    let put_pay: f64 = expiry
+        .puts
+        .iter()
+        .map(|contract| contract.open_interest * (contract.strike - strike).max(0.0))
+        .sum();
+    call_pay + put_pay
+}
+
+fn weighted_subtraction_is_ill_conditioned(result: f64, left: f64, right: f64) -> bool {
+    let scale = left.abs() + right.abs();
+    scale > 0.0 && result.abs() <= scale * f64::EPSILON * 16.0
+}
+
+fn max_pain_strike_brute_force(expiry: &OptionExpiry) -> Option<(f64, f64)> {
+    let strikes = max_pain_candidate_strikes(expiry);
+    if strikes.is_empty() || !has_positive_open_interest(expiry) {
         return None;
     }
     let mut best: Option<(f64, f64)> = None;
     for &s in &strikes {
-        let call_pay: f64 = expiry
-            .calls
-            .iter()
-            .map(|c| c.open_interest * (s - c.strike).max(0.0))
-            .sum();
-        let put_pay: f64 = expiry
-            .puts
-            .iter()
-            .map(|c| c.open_interest * (c.strike - s).max(0.0))
-            .sum();
-        let total = call_pay + put_pay;
+        let total = max_pain_payout_at_strike(expiry, s);
         if best.map(|(_, b)| total < b).unwrap_or(true) {
             best = Some((s, total));
         }
     }
     best
+}
+
+fn max_pain_strike_optimized(expiry: &OptionExpiry) -> Option<(f64, f64)> {
+    let strikes = max_pain_candidate_strikes(expiry);
+    if strikes.is_empty() || !has_positive_open_interest(expiry) {
+        return None;
+    }
+
+    // The sweep relies on finite arithmetic. Preserve the legacy calculation for
+    // malformed provider values and for any aggregate overflow below.
+    if expiry
+        .calls
+        .iter()
+        .chain(expiry.puts.iter())
+        .any(|contract| {
+            !contract.strike.is_finite()
+                || !contract.open_interest.is_finite()
+                || contract.open_interest < 0.0
+        })
+    {
+        return max_pain_strike_brute_force(expiry);
+    }
+
+    let mut calls: Vec<&OptionContract> = expiry.calls.iter().collect();
+    let mut puts: Vec<&OptionContract> = expiry.puts.iter().collect();
+    calls.sort_by(|a, b| a.strike.total_cmp(&b.strike));
+    puts.sort_by(|a, b| a.strike.total_cmp(&b.strike));
+
+    let mut call_prefix_oi = vec![0.0; calls.len() + 1];
+    let mut call_prefix_weighted_strike = vec![0.0; calls.len() + 1];
+    for (index, contract) in calls.iter().enumerate() {
+        call_prefix_oi[index + 1] = call_prefix_oi[index] + contract.open_interest;
+        call_prefix_weighted_strike[index + 1] =
+            call_prefix_weighted_strike[index] + contract.open_interest * contract.strike;
+    }
+    let mut put_suffix_oi = vec![0.0; puts.len() + 1];
+    let mut put_suffix_weighted_strike = vec![0.0; puts.len() + 1];
+    for index in (0..puts.len()).rev() {
+        let contract = puts[index];
+        put_suffix_oi[index] = put_suffix_oi[index + 1] + contract.open_interest;
+        put_suffix_weighted_strike[index] =
+            put_suffix_weighted_strike[index + 1] + contract.open_interest * contract.strike;
+    }
+    if call_prefix_oi.iter().any(|value| !value.is_finite())
+        || call_prefix_weighted_strike
+            .iter()
+            .any(|value| !value.is_finite())
+        || put_suffix_oi.iter().any(|value| !value.is_finite())
+        || put_suffix_weighted_strike
+            .iter()
+            .any(|value| !value.is_finite())
+    {
+        return max_pain_strike_brute_force(expiry);
+    }
+
+    let mut call_index = 0;
+    let mut put_index = 0;
+    let mut best: Option<(f64, f64, f64)> = None;
+    let rounding_factor = f64::EPSILON * (calls.len() + puts.len() + 8) as f64 * 8.0;
+
+    for strike in strikes {
+        while call_index < calls.len() && calls[call_index].strike < strike {
+            call_index += 1;
+        }
+        while put_index < puts.len() && puts[put_index].strike <= strike {
+            put_index += 1;
+        }
+
+        let call_left = strike * call_prefix_oi[call_index];
+        let call_right = call_prefix_weighted_strike[call_index];
+        let call_pay = call_left - call_right;
+        let put_left = put_suffix_weighted_strike[put_index];
+        let put_right = strike * put_suffix_oi[put_index];
+        let put_pay = put_left - put_right;
+        if call_pay < 0.0
+            || put_pay < 0.0
+            || weighted_subtraction_is_ill_conditioned(call_pay, call_left, call_right)
+            || weighted_subtraction_is_ill_conditioned(put_pay, put_left, put_right)
+        {
+            return max_pain_strike_brute_force(expiry);
+        }
+        let total = call_pay + put_pay;
+        if !total.is_finite() {
+            return max_pain_strike_brute_force(expiry);
+        }
+        let error_bound = rounding_factor
+            * (call_left.abs() + call_right.abs() + put_left.abs() + put_right.abs());
+        if let Some((_, best_payout, best_error_bound)) = best {
+            if (total - best_payout).abs() <= error_bound + best_error_bound {
+                return max_pain_strike_brute_force(expiry);
+            }
+            if total < best_payout {
+                best = Some((strike, total, error_bound));
+            }
+        } else {
+            best = Some((strike, total, error_bound));
+        }
+    }
+    best.map(|(strike, _, _)| (strike, max_pain_payout_at_strike(expiry, strike)))
 }
 
 /// Max-pain strike per cached expiration: `(expiration, strike)`.
@@ -186,6 +303,49 @@ pub fn max_pain_by_expiration(chain: &OptionsChainSnapshot) -> Vec<(String, f64)
 #[cfg(test)]
 mod max_pain_tests {
     use super::*;
+
+    fn brute_force_max_pain(expiry: &OptionExpiry) -> Option<(f64, f64)> {
+        let mut strikes: Vec<f64> = expiry
+            .calls
+            .iter()
+            .chain(expiry.puts.iter())
+            .map(|contract| contract.strike)
+            .filter(|strike| strike.is_finite() && *strike > 0.0)
+            .collect();
+        strikes.sort_by(|a, b| a.total_cmp(b));
+        strikes.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        if strikes.is_empty()
+            || !expiry
+                .calls
+                .iter()
+                .chain(expiry.puts.iter())
+                .any(|contract| contract.open_interest > 0.0)
+        {
+            return None;
+        }
+        strikes
+            .into_iter()
+            .map(|strike| {
+                let call_pay: f64 = expiry
+                    .calls
+                    .iter()
+                    .map(|contract| contract.open_interest * (strike - contract.strike).max(0.0))
+                    .sum();
+                let put_pay: f64 = expiry
+                    .puts
+                    .iter()
+                    .map(|contract| contract.open_interest * (contract.strike - strike).max(0.0))
+                    .sum();
+                (strike, call_pay + put_pay)
+            })
+            .reduce(|best, candidate| {
+                if candidate.1 < best.1 {
+                    candidate
+                } else {
+                    best
+                }
+            })
+    }
 
     fn contract(kind: &str, strike: f64, oi: f64) -> OptionContract {
         OptionContract {
@@ -219,6 +379,150 @@ mod max_pain_tests {
             ..Default::default()
         };
         assert!(max_pain_strike(&empty).is_none());
+    }
+
+    #[test]
+    fn optimized_max_pain_matches_brute_force_oracle() {
+        let mut state = 0x4d59_5df4_d0f3_3173_u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            state
+        };
+
+        for case in 0..256 {
+            let call_count = (next() % 24 + 1) as usize;
+            let put_count = (next() % 24 + 1) as usize;
+            let mut calls = Vec::with_capacity(call_count);
+            let mut puts = Vec::with_capacity(put_count);
+            for index in 0..call_count {
+                let base = 50.0 + (next() % 41) as f64 * 2.5;
+                let strike = if index % 7 == 0 { base + 5e-10 } else { base };
+                let oi = if (case + index) % 17 == 0 {
+                    1e16
+                } else {
+                    (next() % 10_000) as f64 / 10.0
+                };
+                calls.push(contract("CALL", strike, oi));
+            }
+            for index in 0..put_count {
+                let base = 50.0 + (next() % 41) as f64 * 2.5;
+                let strike = if index % 9 == 0 { base + 5e-10 } else { base };
+                let oi = if (case + index) % 19 == 0 {
+                    1e16
+                } else {
+                    (next() % 10_000) as f64 / 10.0
+                };
+                puts.push(contract("PUT", strike, oi));
+            }
+            let expiry = OptionExpiry {
+                calls,
+                puts,
+                ..Default::default()
+            };
+
+            let expected = brute_force_max_pain(&expiry).unwrap();
+            let actual = max_pain_strike_optimized(&expiry).unwrap();
+            assert_eq!(
+                actual.0, expected.0,
+                "candidate mismatch in case {case}: {expiry:#?}; expected {expected:?}, got {actual:?}"
+            );
+            let tolerance = expected.1.abs().max(1.0) * 1e-10;
+            assert!(
+                (actual.1 - expected.1).abs() <= tolerance,
+                "payout mismatch in case {case}: expected {}, got {}",
+                expected.1,
+                actual.1
+            );
+        }
+    }
+
+    #[test]
+    fn max_pain_preserves_edge_case_provider_semantics() {
+        let cases = [
+            OptionExpiry {
+                calls: vec![contract("CALL", -10.0, 25.0), contract("CALL", 100.0, 50.0)],
+                puts: vec![contract("PUT", 110.0, 40.0)],
+                ..Default::default()
+            },
+            OptionExpiry {
+                calls: vec![contract("CALL", 90.0, -5.0), contract("CALL", 100.0, 50.0)],
+                puts: vec![contract("PUT", 110.0, 40.0)],
+                ..Default::default()
+            },
+            OptionExpiry {
+                calls: vec![
+                    contract("CALL", f64::NAN, 10.0),
+                    contract("CALL", 100.0, 50.0),
+                ],
+                puts: vec![contract("PUT", 110.0, 40.0)],
+                ..Default::default()
+            },
+            OptionExpiry {
+                calls: vec![contract("CALL", 100.0, f64::NAN)],
+                puts: vec![contract("PUT", 110.0, 40.0)],
+                ..Default::default()
+            },
+        ];
+
+        for expiry in cases {
+            let expected = brute_force_max_pain(&expiry).unwrap();
+            let actual = max_pain_strike(&expiry).unwrap();
+            assert_eq!(actual.0, expected.0);
+            if expected.1.is_nan() {
+                assert!(actual.1.is_nan());
+            } else {
+                assert_eq!(actual.1, expected.1);
+            }
+        }
+
+        let zero_oi = OptionExpiry {
+            calls: vec![contract("CALL", 100.0, 0.0)],
+            puts: vec![contract("PUT", 110.0, 0.0)],
+            ..Default::default()
+        };
+        assert!(max_pain_strike(&zero_oi).is_none());
+    }
+
+    #[test]
+    fn max_pain_preserves_small_suffix_after_huge_expired_put() {
+        let expiry = OptionExpiry {
+            calls: vec![contract("CALL", 1.0, 2.0)],
+            puts: vec![contract("PUT", 100.0, 1e16), contract("PUT", 110.0, 3.0)],
+            ..Default::default()
+        };
+
+        let expected = brute_force_max_pain(&expiry).unwrap();
+        assert_eq!(expected, (110.0, 218.0));
+        assert_eq!(max_pain_strike(&expiry), Some(expected));
+    }
+
+    #[test]
+    fn max_pain_falls_back_when_weighted_sums_cannot_rank_close_strikes() {
+        let expiry = OptionExpiry {
+            calls: vec![
+                contract("CALL", 99.99999998, 1.0),
+                contract("CALL", 99.99999998, 3.0),
+                contract("CALL", 99.99999993, 0.0),
+                contract("CALL", 99.99999993, 1.0),
+                contract("CALL", 99.99999993, 1.0),
+                contract("CALL", 99.99999998, 0.0),
+                contract("CALL", 99.99999993, 1e16),
+            ],
+            puts: vec![
+                contract("PUT", 99.99999993, 1.0),
+                contract("PUT", 99.99999992, 1000.0),
+                contract("PUT", 99.99999993, 0.0),
+                contract("PUT", 99.99999998, 1e16),
+                contract("PUT", 99.99999993, 3.0),
+            ],
+            ..Default::default()
+        };
+
+        let expected = brute_force_max_pain(&expiry).unwrap();
+        assert_eq!(expected.0, 99.99999993);
+        assert_eq!(max_pain_strike(&expiry), Some(expected));
     }
 }
 
