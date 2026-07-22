@@ -947,6 +947,7 @@ impl TyphooNApp {
         }
         found.sort_by(|a, b| b.1.cmp(&a.1));
         self.screenshots_list = found;
+        self.screenshots_sorted_indices.invalidate();
         self.screenshots_last_refresh = chrono::Utc::now().timestamp();
     }
 }

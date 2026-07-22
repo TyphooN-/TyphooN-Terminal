@@ -131,30 +131,20 @@ impl TyphooNApp {
                                     );
                                     ui.label("");
                                     ui.end_row();
-                                    let mut rows = self.screenshots_list.clone();
-                                    rows.sort_by(|a, b| {
-                                        let ord = match self.screenshots_sort_col {
-                                            0 => {
-                                                a.0.file_name()
-                                                    .and_then(|s| s.to_str())
-                                                    .unwrap_or("")
-                                                    .cmp(
-                                                        b.0.file_name()
-                                                            .and_then(|s| s.to_str())
-                                                            .unwrap_or(""),
-                                                    )
-                                            }
-                                            1 => a.2.cmp(&b.2),
-                                            2 => a.1.cmp(&b.1),
-                                            _ => a.1.cmp(&b.1),
-                                        };
-                                        if self.screenshots_sort_asc {
-                                            ord
-                                        } else {
-                                            ord.reverse()
-                                        }
-                                    });
-                                    for (path, mtime, size) in rows.iter() {
+                                    let order = self.screenshots_sorted_indices.order_then_reverse(
+                                        &self.screenshots_list,
+                                        self.screenshots_sort_col,
+                                        self.screenshots_sort_asc,
+                                        |left, right| {
+                                            research_sort_indices::screenshot_order(
+                                                left,
+                                                right,
+                                                self.screenshots_sort_col,
+                                            )
+                                        },
+                                    );
+                                    for &index in order.iter() {
+                                        let (path, mtime, size) = &self.screenshots_list[index];
                                         let name = path
                                             .file_name()
                                             .and_then(|s| s.to_str())

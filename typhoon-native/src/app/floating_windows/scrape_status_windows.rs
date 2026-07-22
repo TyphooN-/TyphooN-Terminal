@@ -947,11 +947,6 @@ impl TyphooNApp {
 
         // EV Scanner
         if self.show_ev_scanner {
-            let ev_active = if self.ev_active_only {
-                self.cached_active_symbols.clone()
-            } else {
-                Vec::new()
-            };
             // PERF2: read from per-frame caches — scope filter applied once already
             let scope_label = self.broker_scope_label();
             let mut ev_pending_action = SymbolAction::None;
@@ -970,6 +965,16 @@ impl TyphooNApp {
                     sparklines.insert(sym.to_uppercase(), closes);
                 }
             }
+            let ev_fundamentals = std::sync::Arc::clone(&self.cached_scoped_fundamentals);
+            let ev_order = self.ev_sorted_indices.order_then_reverse(
+                &ev_fundamentals,
+                self.ev_sort.column,
+                self.ev_sort.ascending,
+                |left, right| {
+                    research_sort_indices::fundamentals_order(left, right, self.ev_sort.column)
+                },
+            );
+            let filter_active = self.ev_active_only && !self.cached_active_symbols.is_empty();
             egui::Window::new("Enterprise Value Scanner")
                 .open(&mut self.show_ev_scanner)
                 .resizable(true)
@@ -1012,68 +1017,6 @@ impl TyphooNApp {
                         );
                     });
                     ui.separator();
-                    // PERF: cached_scoped_fundamentals already applied scope filter — only need active filter
-                    // O(1) HashSet lookup instead of O(n) iter().any()
-                    let mut fund_sorted: Vec<&_> = self
-                        .cached_scoped_fundamentals
-                        .iter()
-                        .filter(|f| {
-                            ev_active.is_empty()
-                                || {
-                                    let bare = bare_symbol_from_key(&f.symbol).to_uppercase();
-                                    let n = match bare.rsplit_once(".") {
-                                        Some((head, suffix)) if (2..=4).contains(&suffix.len()) && suffix.chars().all(|c| c.is_ascii_uppercase()) => head.to_string(),
-                                        _ => bare,
-                                    }.replace("/", "");
-                                    self.cached_active_symbols_set.contains(&n)
-                                }
-                        })
-                        .collect();
-                    match self.ev_sort.column {
-                        0 => fund_sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
-                        1 => fund_sorted.sort_by(|a, b| a.company_name.cmp(&b.company_name)),
-                        2 => fund_sorted.sort_by(|a, b| {
-                            a.enterprise_value
-                                .unwrap_or(0.0)
-                                .partial_cmp(&b.enterprise_value.unwrap_or(0.0))
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        }),
-                        3 => fund_sorted.sort_by(|a, b| {
-                            a.market_cap
-                                .unwrap_or(0.0)
-                                .partial_cmp(&b.market_cap.unwrap_or(0.0))
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        }),
-                        4 => fund_sorted.sort_by(|a, b| {
-                            a.mcap_ev_ratio
-                                .unwrap_or(0.0)
-                                .partial_cmp(&b.mcap_ev_ratio.unwrap_or(0.0))
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        }),
-                        5 => fund_sorted.sort_by(|a, b| {
-                            a.pe_ratio
-                                .unwrap_or(0.0)
-                                .partial_cmp(&b.pe_ratio.unwrap_or(0.0))
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        }),
-                        6 => fund_sorted.sort_by(|a, b| {
-                            a.next_earnings_date
-                                .as_deref()
-                                .unwrap_or("")
-                                .cmp(b.next_earnings_date.as_deref().unwrap_or(""))
-                        }),
-                        7 => fund_sorted.sort_by(|a, b| {
-                            a.dividend_yield
-                                .unwrap_or(0.0)
-                                .partial_cmp(&b.dividend_yield.unwrap_or(0.0))
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        }),
-                        8 => fund_sorted.sort_by(|a, b| a.sector.cmp(&b.sector)),
-                        _ => {}
-                    }
-                    if !self.ev_sort.ascending {
-                        fund_sorted.reverse();
-                    }
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .show(ui, |ui| {
@@ -1110,7 +1053,16 @@ impl TyphooNApp {
                                         self.ev_sort.toggle(8);
                                     }
                                     ui.end_row();
-                                    for f in &fund_sorted {
+                                    for &index in ev_order.iter() {
+                                        let f = &ev_fundamentals[index];
+                                        if filter_active
+                                            && !research_sort_indices::fundamental_matches_active_set(
+                                                &f.symbol,
+                                                &self.cached_active_symbols_set,
+                                            )
+                                        {
+                                            continue;
+                                        }
                                         let (_, ev_action) = symbol_label_with_menu(
                                             ui,
                                             &f.symbol,

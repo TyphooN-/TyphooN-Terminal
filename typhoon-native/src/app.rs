@@ -795,6 +795,7 @@ impl TyphooNApp {
             sec_filters: [true; 7],
             sec_page: 0,
             ev_sort: SortState::default(),
+            ev_sorted_indices: research_sort_indices::SortedRowIndices::default(),
             outlier_sort: SortState {
                 column: 3,
                 ascending: false,
@@ -2986,6 +2987,7 @@ impl TyphooNApp {
             screenshots_list: Vec::new(),
             screenshots_sort_col: 2,
             screenshots_sort_asc: false,
+            screenshots_sorted_indices: research_sort_indices::SortedRowIndices::default(),
             screenshots_last_refresh: 0,
             show_screenshots_gallery: false,
             cached_primary_cycle: Vec::new(),

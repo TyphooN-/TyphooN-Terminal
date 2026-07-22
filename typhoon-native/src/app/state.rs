@@ -1294,6 +1294,7 @@ pub struct TyphooNApp {
 
     /// Sort states for data tables.
     pub(crate) ev_sort: SortState,
+    pub(crate) ev_sorted_indices: research_sort_indices::SortedRowIndices,
     pub(crate) sec_sort: SortState,
     pub(crate) insider_sort: SortState,
     pub(crate) outlier_sort: SortState,
@@ -3841,6 +3842,7 @@ pub struct TyphooNApp {
     pub(crate) screenshots_list: Vec<(std::path::PathBuf, i64, u64)>,
     pub(crate) screenshots_sort_col: usize,
     pub(crate) screenshots_sort_asc: bool,
+    pub(crate) screenshots_sorted_indices: research_sort_indices::SortedRowIndices,
     /// Wall-clock unix ts of last scan_screenshots() call; throttles
     /// redundant directory walks while the gallery window is open.
     pub(crate) screenshots_last_refresh: i64,

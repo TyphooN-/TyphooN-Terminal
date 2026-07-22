@@ -154,6 +154,7 @@ impl eframe::App for TyphooNApp {
                 scope_key,
                 || scoped_fundamentals,
             );
+            self.ev_sorted_indices.invalidate();
         }
         if self.cached_alpaca_sync_state_rev != Some(self.bg_rev) {
             let previous = std::mem::take(&mut self.cached_alpaca_sync_state);
