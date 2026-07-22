@@ -316,6 +316,9 @@ pub(super) fn spawn_background_refresh(
                     // Fundamentals come from research tables (synced via LAN) — query locally on both
                     data.all_fundamentals =
                         fundamentals::get_all_fundamentals(conn).unwrap_or_default();
+                    data.market_map_model = Arc::new(market_map_model::build_market_map_model(
+                        &data.all_fundamentals,
+                    ));
                     data.fundamentals_company_names = Arc::new(
                         data.all_fundamentals
                             .iter()

@@ -1,14 +1,5 @@
 use super::*;
 
-/// Sector band for the Finviz-style market map: total cap plus the symbols
-/// (cap, change %) sorted largest-first.
-struct SectorBand {
-    sector: String,
-    total_cap: f64,
-    avg_change: f64,
-    symbols: Vec<(String, f64, f64)>, // (symbol, market_cap, change_pct)
-}
-
 fn heat_color(change_pct: f64) -> egui::Color32 {
     let t = (change_pct / 3.0).clamp(-1.0, 1.0) as f32;
     if t >= 0.0 {
@@ -29,9 +20,9 @@ fn heat_color(change_pct: f64) -> egui::Color32 {
 impl TyphooNApp {
     /// Finviz-style market map (ADR-116 "Maps" + "Groups"): sector bands
     /// sized by total cached market cap, symbols within a band sized by cap
-    /// and colored by daily change (watchlist quote when available). Built
-    /// from `bg.all_fundamentals` — a per-frame walk over an already-cached
-    /// vec, no DB access (ADR-098).
+    /// and colored by daily change (watchlist quote when available). The static
+    /// sector/capitalization model is built on the background refresh thread;
+    /// each frame only joins current quote changes and paints it (ADR-098).
     pub(super) fn render_market_map_window(&mut self, ctx: &egui::Context) {
         if !self.show_market_map {
             return;
@@ -43,35 +34,8 @@ impl TyphooNApp {
             .resizable(true)
             .default_size([760.0, 520.0])
             .show(ctx, |ui| {
-                // Group cached fundamentals into sector bands.
-                let mut by_sector: std::collections::BTreeMap<String, Vec<(String, f64, f64)>> =
-                    std::collections::BTreeMap::new();
-                for f in &self.bg.all_fundamentals {
-                    let Some(cap) = f.market_cap.filter(|c| *c > 0.0) else {
-                        continue;
-                    };
-                    let sector = if f.sector.trim().is_empty() {
-                        "Other".to_string()
-                    } else {
-                        f.sector.trim().to_string()
-                    };
-                    let watchlist_key = bare_symbol_from_key(&f.symbol)
-                        .replace('/', "")
-                        .trim_end_matches(".EQ")
-                        .trim_end_matches(".eq")
-                        .to_ascii_uppercase();
-                    let change = self
-                        .watchlist_by_bare
-                        .get(&watchlist_key)
-                        .and_then(|&index| self.watchlist_rows.get(index))
-                        .map(|row| row.change_pct)
-                        .unwrap_or(0.0);
-                    by_sector
-                        .entry(sector)
-                        .or_default()
-                        .push((f.symbol.clone(), cap, change));
-                }
-                if by_sector.is_empty() {
+                let model = &self.bg.market_map_model;
+                if model.sectors.is_empty() {
                     ui.label(
                         egui::RichText::new(
                             "No cached fundamentals with market caps yet — run the \
@@ -81,23 +45,13 @@ impl TyphooNApp {
                     );
                     return;
                 }
-                let mut bands: Vec<SectorBand> = by_sector
-                    .into_iter()
-                    .map(|(sector, mut symbols)| {
-                        symbols.sort_by(|a, b| b.1.total_cmp(&a.1));
-                        let total_cap: f64 = symbols.iter().map(|s| s.1).sum();
-                        let cap_weighted: f64 =
-                            symbols.iter().map(|s| s.1 * s.2).sum::<f64>() / total_cap.max(1.0);
-                        SectorBand {
-                            sector,
-                            total_cap,
-                            avg_change: cap_weighted,
-                            symbols,
-                        }
-                    })
-                    .collect();
-                bands.sort_by(|a, b| b.total_cap.total_cmp(&a.total_cap));
-                let grand_total: f64 = bands.iter().map(|b| b.total_cap).sum();
+                let live_change = |watchlist_key: &str| {
+                    self.watchlist_by_bare
+                        .get(watchlist_key)
+                        .and_then(|&index| self.watchlist_rows.get(index))
+                        .map(|row| row.change_pct)
+                        .unwrap_or(0.0)
+                };
 
                 // Sector groups table (Finviz "Groups").
                 egui::CollapsingHeader::new("Sector groups (cap-weighted performance)")
@@ -110,13 +64,15 @@ impl TyphooNApp {
                                     ui.strong(h);
                                 }
                                 ui.end_row();
-                                for b in &bands {
-                                    ui.label(&b.sector);
-                                    ui.label(format!("{}", b.symbols.len()));
-                                    ui.label(format!("${:.1}B", b.total_cap / 1e9));
-                                    let col = heat_color(b.avg_change);
+                                for sector in &model.sectors {
+                                    let avg_change =
+                                        market_map_model::cap_weighted_change(sector, &live_change);
+                                    ui.label(&sector.sector);
+                                    ui.label(format!("{}", sector.symbols.len()));
+                                    ui.label(format!("${:.1}B", sector.total_cap / 1e9));
+                                    let col = heat_color(avg_change);
                                     ui.label(
-                                        egui::RichText::new(format!("{:+.2}%", b.avg_change))
+                                        egui::RichText::new(format!("{avg_change:+.2}%"))
                                             .color(col),
                                     );
                                     ui.end_row();
@@ -134,16 +90,19 @@ impl TyphooNApp {
                 );
                 let painter = ui.painter_at(rect);
                 let hover = response.hover_pos();
-                let mut hovered: Option<(String, f64, f64)> = None;
+                let mut hovered: Option<(&str, f64, f64)> = None;
                 let mut y = rect.top();
-                for band in &bands {
-                    let band_h = (band.total_cap / grand_total.max(1.0)) as f32 * rect.height();
+                for sector in &model.sectors {
+                    let band_h =
+                        (sector.total_cap / model.grand_total.max(1.0)) as f32 * rect.height();
                     if band_h < 3.0 {
                         break; // long tail too thin to draw
                     }
                     let mut x = rect.left();
-                    for (symbol, cap, change) in band.symbols.iter().take(40) {
-                        let w = (cap / band.total_cap.max(1.0)) as f32 * rect.width();
+                    for symbol in sector.symbols.iter().take(40) {
+                        let change = live_change(&symbol.watchlist_key);
+                        let w =
+                            (symbol.market_cap / sector.total_cap.max(1.0)) as f32 * rect.width();
                         if w < 2.0 {
                             break;
                         }
@@ -151,21 +110,21 @@ impl TyphooNApp {
                             egui::pos2(x, y),
                             egui::vec2(w - 1.0, band_h - 1.0),
                         );
-                        painter.rect_filled(cell, 1.0, heat_color(*change));
+                        painter.rect_filled(cell, 1.0, heat_color(change));
                         if w > 34.0 && band_h > 14.0 {
                             painter.text(
                                 cell.center(),
                                 egui::Align2::CENTER_CENTER,
-                                symbol,
+                                &symbol.symbol,
                                 egui::FontId::monospace(10.0),
                                 egui::Color32::WHITE,
                             );
                         }
                         if let Some(pos) = hover {
                             if cell.contains(pos) {
-                                hovered = Some((symbol.clone(), *cap, *change));
+                                hovered = Some((&symbol.symbol, symbol.market_cap, change));
                                 if response.clicked() {
-                                    pending_action = SymbolAction::OpenChart(symbol.clone());
+                                    pending_action = SymbolAction::OpenChart(symbol.symbol.clone());
                                 }
                             }
                         }
@@ -174,7 +133,7 @@ impl TyphooNApp {
                     painter.text(
                         egui::pos2(rect.left() + 2.0, y + 1.0),
                         egui::Align2::LEFT_TOP,
-                        &band.sector,
+                        &sector.sector,
                         egui::FontId::proportional(9.0),
                         AXIS_TEXT,
                     );

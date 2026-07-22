@@ -90,6 +90,9 @@ pub(crate) struct BgData {
     /// Background-built company-name index. Cloning `BgData` shares it O(1), so
     /// chart rendering never rebuilds or scans the full fundamentals catalog.
     pub(crate) fundamentals_company_names: Arc<std::collections::HashMap<String, String>>,
+    /// Static sector/capitalization structure rebuilt only when fundamentals refresh.
+    /// `BgData` snapshots share it O(1); rendering only joins current quote changes.
+    pub(crate) market_map_model: Arc<crate::app::market_map_model::MarketMapModel>,
     pub(crate) upcoming_earnings: Vec<(String, String, String)>,
     pub(crate) upcoming_dividends: Vec<(String, String, String, Option<f64>)>,
     /// Active symbol-level regulatory warnings keyed by normalized ticker.
