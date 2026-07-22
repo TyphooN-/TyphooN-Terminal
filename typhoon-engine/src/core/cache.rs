@@ -2139,15 +2139,71 @@ impl ReadConnPool {
     }
 }
 
+/// Total system RAM in MiB from `/proc/meminfo` (Linux), or 0 if unavailable.
+/// Used only to size SQLite page-cache / mmap pragmas up on machines with spare
+/// RAM; a 0 reading falls back to the conservative laptop-tier base values.
+fn sqlite_total_ram_mb() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|info| {
+            info.lines().find_map(|line| {
+                line.strip_prefix("MemTotal:")
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .and_then(|kb| kb.parse::<u64>().ok())
+                    .map(|kb| kb / 1024)
+            })
+        })
+        .unwrap_or(0)
+}
+
+/// Per-connection page-cache multiplier by installed RAM. The base pragma values
+/// are tuned for ~8-16GB laptops; a workstation with tens of GB free holds much
+/// more of the hot bar/kv working set in RAM, which cuts disk reads and the
+/// render-thread lock hold time those reads cause. 1x at/under 16GB keeps small
+/// machines byte-for-byte unchanged. Page cache is private per connection, so it
+/// is multiplied by the read-pool size — kept moderate here; the bigger, shared
+/// win is the mmap window below.
+fn sqlite_page_cache_ram_scale() -> i64 {
+    match sqlite_total_ram_mb() {
+        mb if mb == 0 || mb <= 16_384 => 1,
+        mb if mb <= 32_768 => 2,
+        mb if mb <= 65_536 => 4,
+        _ => 6,
+    }
+}
+
+/// Scale a `cache_size` pragma (negative = KiB) by installed RAM.
+fn sqlite_scaled_cache_kib(base_kib: i64) -> i64 {
+    base_kib.saturating_mul(sqlite_page_cache_ram_scale())
+}
+
+/// mmap window (bytes) scaled by installed RAM. The DB file is memory-mapped and
+/// reads come from the shared OS page cache instead of `read()` syscalls plus
+/// private per-connection page-cache copies, so this is the most RAM-efficient
+/// lever — it is shared across every connection, NOT multiplied by the pool.
+/// SQLite silently clamps the request to its compile-time SQLITE_MAX_MMAP_SIZE,
+/// so a generous value on a big box is safe (worst case it clamps lower).
+fn sqlite_scaled_mmap_bytes() -> i64 {
+    const MB: i64 = 1024 * 1024;
+    match sqlite_total_ram_mb() {
+        mb if mb == 0 || mb <= 16_384 => 256 * MB,
+        mb if mb <= 32_768 => 1_024 * MB,
+        mb if mb <= 65_536 => 4_096 * MB,
+        _ => 8_192 * MB,
+    }
+}
+
 /// Open `READ_CONN_POOL_SIZE` independent read-only connections for the read pool.
-/// `cache_size` is the per-connection page-cache pragma (negative = KiB). `with_mmap`
-/// enables the 256MB mmap, which the OS page-cache backs and shares across
-/// connections (so it is NOT multiplied by the pool size).
+/// `cache_size` is the per-connection page-cache pragma (negative = KiB), scaled
+/// up by installed RAM. `with_mmap` enables the RAM-scaled mmap window, which the
+/// OS page-cache backs and shares across connections (so it is NOT multiplied by
+/// the pool size).
 fn open_read_conn_pool(
     path: &PathBuf,
     cache_size: i64,
     with_mmap: bool,
 ) -> Result<ReadConnPool, String> {
+    let cache_size = sqlite_scaled_cache_kib(cache_size);
     let mut conns = Vec::with_capacity(READ_CONN_POOL_SIZE);
     for _ in 0..READ_CONN_POOL_SIZE {
         let conn = Connection::open_with_flags(
@@ -2158,9 +2214,9 @@ fn open_read_conn_pool(
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| format!("SQLite read conn busy_timeout failed: {e}"))?;
         let mmap = if with_mmap {
-            "PRAGMA mmap_size=268435456;"
+            format!("PRAGMA mmap_size={};", sqlite_scaled_mmap_bytes())
         } else {
-            ""
+            String::new()
         };
         let _ = conn.execute_batch(&format!(
             "PRAGMA cache_size={cache_size}; PRAGMA temp_store=FILE; {mmap}"
@@ -2265,19 +2321,31 @@ impl SqliteCache {
         // busy_timeout=5000ms: retry for 5s on SQLITE_BUSY instead of failing
         // immediately. Critical when compact_storage() holds the write lock in
         // batches and other threads (e.g. bar fetches, SEC scraping) need to write concurrently.
-        conn.execute_batch(
+        // cache_size (page cache) and mmap_size scale up with installed RAM so a
+        // workstation with spare memory holds far more of the hot working set in
+        // RAM; small machines keep the -64000/256MB base. See sqlite_scaled_*.
+        conn.execute_batch(&format!(
             "
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
-            PRAGMA cache_size=-64000;
+            PRAGMA cache_size={cache_size};
             PRAGMA temp_store=FILE;
-            PRAGMA mmap_size=268435456;
+            PRAGMA mmap_size={mmap_size};
             PRAGMA auto_vacuum=INCREMENTAL;
             PRAGMA wal_autocheckpoint=2000;
             PRAGMA busy_timeout=5000;
         ",
-        )
+            cache_size = sqlite_scaled_cache_kib(-64_000),
+            mmap_size = sqlite_scaled_mmap_bytes(),
+        ))
         .map_err(|e| format!("SQLite pragma failed: {e}"))?;
+        tracing::info!(
+            "SQLite cache opened: RAM={}MB → page_cache={}MB/conn (main + {} read-pool), mmap={}MB (shared)",
+            sqlite_total_ram_mb(),
+            sqlite_scaled_cache_kib(-64_000).unsigned_abs() / 1024,
+            READ_CONN_POOL_SIZE,
+            sqlite_scaled_mmap_bytes() / (1024 * 1024),
+        );
 
         // Create tables
         conn.execute_batch(
