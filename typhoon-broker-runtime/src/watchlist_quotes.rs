@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use typhoon_engine::broker::alpaca::{AlpacaBroker, SnapshotData};
@@ -7,6 +8,93 @@ use typhoon_engine::core::fundamentals;
 use typhoon_engine::core::watchlist::WatchlistRow;
 
 const ALPACA_SNAPSHOT_CONCURRENCY: usize = 4;
+const WATCHLIST_CACHE_FALLBACK_TIMEFRAMES: [&str; 6] =
+    ["quote", "1Day", "4Hour", "1Hour", "30Min", "15Min"];
+
+#[derive(Debug, PartialEq, Eq)]
+struct WatchlistCacheFallback {
+    row_index: usize,
+    candidate_key_indices: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WatchlistCacheCursor {
+    fallback_index: usize,
+    candidate_index: usize,
+}
+
+fn watchlist_cache_fallback_plan(
+    rows: &[WatchlistRow],
+) -> (Vec<WatchlistCacheFallback>, Vec<String>) {
+    let mut key_indices = HashMap::new();
+    let mut unique_keys = Vec::new();
+    let mut fallbacks = Vec::new();
+    for (row_index, row) in rows.iter().enumerate() {
+        if row.last > 0.0 && row.last.is_finite() {
+            continue;
+        }
+        let mut candidate_key_indices = Vec::new();
+        for timeframe in WATCHLIST_CACHE_FALLBACK_TIMEFRAMES {
+            for source in
+                typhoon_engine::core::watchlist::watchlist_cache_fallback_sources(&row.symbol)
+            {
+                for key in typhoon_engine::broker::cache_keys::chart_source_cache_keys(
+                    source,
+                    &row.symbol,
+                    timeframe,
+                ) {
+                    let key_index = if let Some(&index) = key_indices.get(&key) {
+                        index
+                    } else {
+                        let index = unique_keys.len();
+                        key_indices.insert(key.clone(), index);
+                        unique_keys.push(key);
+                        index
+                    };
+                    candidate_key_indices.push(key_index);
+                }
+            }
+        }
+        if !candidate_key_indices.is_empty() {
+            fallbacks.push(WatchlistCacheFallback {
+                row_index,
+                candidate_key_indices,
+            });
+        }
+    }
+    (fallbacks, unique_keys)
+}
+
+fn apply_watchlist_cache_fallback_round(
+    rows: &mut [WatchlistRow],
+    fallbacks: &[WatchlistCacheFallback],
+    keys: &[String],
+    cursors: &[WatchlistCacheCursor],
+    cached_by_key: &typhoon_engine::core::cache::RawBarsByKey,
+) -> Vec<WatchlistCacheCursor> {
+    let mut next = Vec::new();
+    for cursor in cursors {
+        let fallback = &fallbacks[cursor.fallback_index];
+        let row = &mut rows[fallback.row_index];
+        let key_index = fallback.candidate_key_indices[cursor.candidate_index];
+        let key = &keys[key_index];
+        let cached = cached_by_key
+            .get(key)
+            .and_then(|result| result.as_ref().ok())
+            .and_then(|raw| {
+                typhoon_engine::core::watchlist::watchlist_row_from_raw_bars(&row.symbol, key, raw)
+            });
+        if let Some(cached) = cached {
+            *row = cached;
+        } else if cursor.candidate_index + 1 < fallback.candidate_key_indices.len() {
+            next.push(WatchlistCacheCursor {
+                fallback_index: cursor.fallback_index,
+                candidate_index: cursor.candidate_index + 1,
+            });
+        }
+    }
+    next
+}
 
 fn alpaca_snapshot_symbol(symbol: &str) -> String {
     const CRYPTO_BASES: &[&str] = &[
@@ -246,38 +334,37 @@ pub fn spawn_watchlist_quotes_task(
         }
 
         if let Some(cache) = shared_cache.read().ok().and_then(|g| g.clone()) {
-            for row in &mut rows {
-                if row.last > 0.0 && row.last.is_finite() {
-                    continue;
-                }
-                let mut filled = false;
-                'cache_fallback: for tf in ["quote", "1Day", "4Hour", "1Hour", "30Min", "15Min"] {
-                    for source in typhoon_engine::core::watchlist::watchlist_cache_fallback_sources(
-                        &row.symbol,
-                    ) {
-                        for key in typhoon_engine::broker::cache_keys::chart_source_cache_keys(
-                            source,
-                            &row.symbol,
-                            tf,
-                        ) {
-                            let Ok(Some(raw)) = cache.get_bars_raw(&key) else {
-                                continue;
-                            };
-                            if let Some(cached) =
-                                typhoon_engine::core::watchlist::watchlist_row_from_raw_bars(
-                                    &row.symbol,
-                                    &key,
-                                    &raw,
-                                )
-                            {
-                                *row = cached;
-                                filled = true;
-                                break 'cache_fallback;
-                            }
-                        }
-                    }
-                }
-                if !filled {
+            let (fallbacks, keys) = watchlist_cache_fallback_plan(&rows);
+            let mut cursors: Vec<WatchlistCacheCursor> = (0..fallbacks.len())
+                .map(|fallback_index| WatchlistCacheCursor {
+                    fallback_index,
+                    candidate_index: 0,
+                })
+                .collect();
+            while !cursors.is_empty() {
+                let mut seen = std::collections::HashSet::with_capacity(cursors.len());
+                let round_keys: Vec<String> = cursors
+                    .iter()
+                    .filter_map(|cursor| {
+                        let fallback = &fallbacks[cursor.fallback_index];
+                        let key_index = fallback.candidate_key_indices[cursor.candidate_index];
+                        seen.insert(key_index).then(|| keys[key_index].clone())
+                    })
+                    .collect();
+                let Ok(cached_by_key) = cache.get_bars_raw_many(&round_keys) else {
+                    break;
+                };
+                cursors = apply_watchlist_cache_fallback_round(
+                    &mut rows,
+                    &fallbacks,
+                    &keys,
+                    &cursors,
+                    &cached_by_key,
+                );
+            }
+            for fallback in fallbacks {
+                let row = &rows[fallback.row_index];
+                if row.last <= 0.0 || !row.last.is_finite() {
                     tracing::debug!("watchlist: no broker/Yahoo/cache quote for {}", row.symbol);
                 }
             }
@@ -317,5 +404,101 @@ mod tests {
         assert_eq!(row.change, 5.0);
         assert!((row.change_pct - 5.0).abs() < 1e-12);
         assert!((row.ext_change_pct - (105.0 / 102.0 - 1.0) * 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cache_fallback_plan_deduplicates_queries_without_changing_row_order() {
+        let rows = vec![
+            typhoon_engine::core::watchlist::empty_watchlist_row("AAPL"),
+            typhoon_engine::core::watchlist::empty_watchlist_row("AAPL"),
+        ];
+
+        let (fallbacks, keys) = watchlist_cache_fallback_plan(&rows);
+
+        assert_eq!(fallbacks.len(), 2);
+        assert_eq!(fallbacks[0].row_index, 0);
+        assert_eq!(fallbacks[1].row_index, 1);
+        assert_eq!(
+            fallbacks[0].candidate_key_indices,
+            fallbacks[1].candidate_key_indices
+        );
+        assert_eq!(keys.len(), fallbacks[0].candidate_key_indices.len());
+    }
+
+    #[test]
+    fn cache_fallback_plan_preserves_legacy_candidate_precedence() {
+        for symbol in ["AAPL", "BTCUSD"] {
+            let rows = vec![typhoon_engine::core::watchlist::empty_watchlist_row(symbol)];
+            let (fallbacks, keys) = watchlist_cache_fallback_plan(&rows);
+            let planned: Vec<&str> = fallbacks[0]
+                .candidate_key_indices
+                .iter()
+                .map(|&index| keys[index].as_str())
+                .collect();
+            let expected: Vec<String> = WATCHLIST_CACHE_FALLBACK_TIMEFRAMES
+                .iter()
+                .flat_map(|timeframe| {
+                    typhoon_engine::core::watchlist::watchlist_cache_fallback_sources(symbol)
+                        .iter()
+                        .flat_map(move |source| {
+                            typhoon_engine::broker::cache_keys::chart_source_cache_keys(
+                                source, symbol, timeframe,
+                            )
+                        })
+                })
+                .collect();
+
+            assert_eq!(planned, expected);
+        }
+    }
+
+    #[test]
+    fn cache_fallback_continues_after_corrupt_preferred_candidate() {
+        let mut rows = vec![typhoon_engine::core::watchlist::empty_watchlist_row("AAPL")];
+        let (fallbacks, keys) = watchlist_cache_fallback_plan(&rows);
+        assert!(keys.len() >= 2);
+        let mut cached_by_key = typhoon_engine::core::cache::RawBarsByKey::new();
+        cached_by_key.insert(keys[0].clone(), Err("corrupt".to_string()));
+        let cursors = vec![WatchlistCacheCursor {
+            fallback_index: 0,
+            candidate_index: 0,
+        }];
+        let cursors = apply_watchlist_cache_fallback_round(
+            &mut rows,
+            &fallbacks,
+            &keys,
+            &cursors,
+            &cached_by_key,
+        );
+        assert_eq!(
+            cursors,
+            vec![WatchlistCacheCursor {
+                fallback_index: 0,
+                candidate_index: 1,
+            }]
+        );
+        assert_eq!(rows[0].last, 0.0);
+
+        let mut cached_by_key = typhoon_engine::core::cache::RawBarsByKey::new();
+        cached_by_key.insert(
+            keys[1].clone(),
+            Ok(vec![
+                (1_000, 99.0, 101.0, 98.0, 100.0, 10.0),
+                (2_000, 100.0, 106.0, 99.0, 105.0, 20.0),
+            ]),
+        );
+
+        let cursors = apply_watchlist_cache_fallback_round(
+            &mut rows,
+            &fallbacks,
+            &keys,
+            &cursors,
+            &cached_by_key,
+        );
+
+        assert!(cursors.is_empty());
+        assert_eq!(rows[0].cache_key, keys[1]);
+        assert_eq!(rows[0].last, 105.0);
+        assert_eq!(rows[0].prev_close, 100.0);
     }
 }

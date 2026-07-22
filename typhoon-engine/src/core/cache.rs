@@ -22,6 +22,10 @@ pub type BgConnection = Connection;
 const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
 /// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
 const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
+const RAW_BAR_BATCH_QUERY_CHUNK_SIZE: usize = 400;
+pub type RawBar = (i64, f64, f64, f64, f64, f64);
+pub type RawBars = Vec<RawBar>;
+pub type RawBarsByKey = std::collections::HashMap<String, Result<RawBars, String>>;
 pub const DEFAULT_BAR_ZSTD_LEVEL: i32 = 3;
 pub const MIN_ZSTD_LEVEL: i32 = 1;
 pub const MAX_ZSTD_LEVEL: i32 = 22;
@@ -535,6 +539,32 @@ fn maybe_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
         Ok(data) // Already raw TTBR — no decompression needed
     } else {
         zstd::decode_all(data.as_slice()).map_err(|e| format!("Decompress failed: {e}"))
+    }
+}
+
+fn decode_bars_raw(data: Vec<u8>) -> Result<RawBars, String> {
+    let bytes = maybe_decompress(data)?;
+    if bytes.len() >= 4 && &bytes[0..4] == BAR_BINARY_MAGIC {
+        unpack_bars_raw(&bytes)
+    } else {
+        let text = String::from_utf8_lossy(&bytes);
+        let bars: Vec<serde_json::Value> =
+            serde_json::from_str(&text).map_err(|e| format!("JSON parse failed: {e}"))?;
+        Ok(bars
+            .iter()
+            .filter_map(|bar| {
+                Some((
+                    chrono::DateTime::parse_from_rfc3339(bar["timestamp"].as_str()?)
+                        .ok()?
+                        .timestamp_millis(),
+                    bar["open"].as_f64()?,
+                    bar["high"].as_f64()?,
+                    bar["low"].as_f64()?,
+                    bar["close"].as_f64()?,
+                    bar["volume"].as_f64().unwrap_or(0.0),
+                ))
+            })
+            .collect())
     }
 }
 
@@ -2702,10 +2732,7 @@ impl SqliteCache {
 
     /// Get bars as raw OHLCV tuples (no JSON serialization).
     /// Binary hot path for native chart rendering: cache blob → decoded OHLCV tuples.
-    pub fn get_bars_raw(
-        &self,
-        key: &str,
-    ) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
+    pub fn get_bars_raw(&self, key: &str) -> Result<Option<RawBars>, String> {
         let row: Option<Vec<u8>> = {
             let conn = self
                 .read_conn
@@ -2718,33 +2745,65 @@ impl SqliteCache {
         };
         match row {
             None => Ok(None),
-            Some(data) => {
-                let bytes = maybe_decompress(data)?;
-                if bytes.len() >= 4 && &bytes[0..4] == BAR_BINARY_MAGIC {
-                    Ok(Some(unpack_bars_raw(&bytes)?))
-                } else {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let bars: Vec<serde_json::Value> = serde_json::from_str(&text)
-                        .map_err(|e| format!("JSON parse failed: {e}"))?;
-                    let result = bars
-                        .iter()
-                        .filter_map(|b| {
-                            Some((
-                                chrono::DateTime::parse_from_rfc3339(b["timestamp"].as_str()?)
-                                    .ok()?
-                                    .timestamp_millis(),
-                                b["open"].as_f64()?,
-                                b["high"].as_f64()?,
-                                b["low"].as_f64()?,
-                                b["close"].as_f64()?,
-                                b["volume"].as_f64().unwrap_or(0.0),
-                            ))
-                        })
-                        .collect();
-                    Ok(Some(result))
+            Some(data) => decode_bars_raw(data).map(Some),
+        }
+    }
+
+    /// Read many bar rows with bounded SQL queries. Compressed blobs are copied
+    /// while the pooled read connection is held, then decoded after releasing
+    /// the lock. Missing keys are omitted and decode failures remain isolated
+    /// per key so callers can continue through an ordered fallback chain.
+    pub fn get_bars_raw_many(&self, keys: &[String]) -> Result<RawBarsByKey, String> {
+        if keys.is_empty() {
+            return Ok(RawBarsByKey::new());
+        }
+
+        let mut seen = std::collections::HashSet::with_capacity(keys.len());
+        let unique_keys: Vec<&str> = keys
+            .iter()
+            .map(String::as_str)
+            .filter(|key| seen.insert(*key))
+            .collect();
+        let mut blobs = std::collections::HashMap::with_capacity(unique_keys.len());
+        {
+            let conn = self
+                .read_conn
+                .lock()
+                .map_err(|e| format!("Read lock failed: {e}"))?;
+            for chunk in unique_keys.chunks(RAW_BAR_BATCH_QUERY_CHUNK_SIZE) {
+                let placeholders = std::iter::repeat_n("?", chunk.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let sql = format!(
+                    "SELECT CAST(key AS TEXT), data FROM bar_cache WHERE key IN ({placeholders})"
+                );
+                let mut stmt = conn
+                    .prepare(&sql)
+                    .map_err(|e| format!("Prepare failed: {e}"))?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+                        let key = row.get::<_, String>(0)?;
+                        let data = match row.get_ref(1)? {
+                            rusqlite::types::ValueRef::Blob(data) => Ok(data.to_vec()),
+                            value => Err(format!(
+                                "Bar cache data for {key} is {}, expected blob",
+                                value.data_type()
+                            )),
+                        };
+                        Ok((key, data))
+                    })
+                    .map_err(|e| format!("SQLite batch query failed: {e}"))?;
+                for row in rows {
+                    let (key, data) = row.map_err(|e| format!("SQLite batch row failed: {e}"))?;
+                    blobs.insert(key, data);
                 }
             }
         }
+
+        Ok(blobs
+            .into_iter()
+            .map(|(key, data)| (key, data.and_then(decode_bars_raw)))
+            .collect())
     }
 
     /// Get the last `tail` bars from cache — much faster than get_bars() when tail << total.

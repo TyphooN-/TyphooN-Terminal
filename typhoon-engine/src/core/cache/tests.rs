@@ -612,6 +612,82 @@ fn sqlite_cache_get_bars_raw_roundtrip() {
 }
 
 #[test]
+fn sqlite_cache_get_bars_raw_many_is_per_key_and_format_compatible() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let json = r#"[{"timestamp":"2024-06-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10.0}]"#;
+    cache.put_bars("BINARY:1Hour", json).unwrap();
+    assert!(cache.get_bars_raw_many(&[]).unwrap().is_empty());
+
+    let legacy = zstd::encode_all(json.as_bytes(), 3).unwrap();
+    let conn = cache.connection().unwrap();
+    conn.execute(
+        "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params!["LEGACY:1Hour", legacy, 0i64, 1i64, 3i64],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params!["CORRUPT:1Hour", vec![1u8, 2, 3], 0i64, 1i64, 3i64],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params!["NON_BLOB:1Hour", "not a blob", 0i64, 1i64, 3i64],
+    )
+    .unwrap();
+    drop(conn);
+
+    let keys = vec![
+        "BINARY:1Hour".to_string(),
+        "LEGACY:1Hour".to_string(),
+        "CORRUPT:1Hour".to_string(),
+        "NON_BLOB:1Hour".to_string(),
+        "MISSING:1Hour".to_string(),
+        "BINARY:1Hour".to_string(),
+    ];
+    let rows = cache.get_bars_raw_many(&keys).unwrap();
+
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows["BINARY:1Hour"].as_ref().unwrap()[0].4, 1.5);
+    assert_eq!(rows["LEGACY:1Hour"].as_ref().unwrap()[0].4, 1.5);
+    assert!(rows["CORRUPT:1Hour"].is_err());
+    assert!(rows["NON_BLOB:1Hour"].is_err());
+    assert!(!rows.contains_key("MISSING:1Hour"));
+}
+
+#[test]
+fn sqlite_cache_get_bars_raw_many_crosses_query_chunk_boundary() {
+    let db_path = temp_db_path();
+    let cache = SqliteCache::open(&db_path).unwrap();
+    let packed = make_binary_bars(&[(1_000, 1.0, 2.0, 0.5, 1.5, 10.0)]);
+    let compressed = zstd::encode_all(packed.as_slice(), 3).unwrap();
+    let mut conn = cache.connection().unwrap();
+    let tx = conn.transaction().unwrap();
+    let keys: Vec<String> = (0..=RAW_BAR_BATCH_QUERY_CHUNK_SIZE)
+        .map(|index| format!("BATCH:{index}:1Hour"))
+        .collect();
+    for key in &keys {
+        tx.execute(
+            "INSERT INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![key, &compressed, 0i64, 1i64, 3i64],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+    drop(conn);
+
+    let rows = cache.get_bars_raw_many(&keys).unwrap();
+
+    assert_eq!(rows.len(), RAW_BAR_BATCH_QUERY_CHUNK_SIZE + 1);
+    assert!(rows.values().all(|row| row.as_ref().unwrap().len() == 1));
+}
+
+#[test]
 fn sqlite_cache_missing_key_returns_none() {
     let db_path = temp_db_path();
     let cache = SqliteCache::open(&db_path).unwrap();
