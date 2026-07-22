@@ -912,6 +912,7 @@ pub struct TyphooNApp {
     /// whole broker/timeframe matrix on every repaint during full sync is pure
     /// render-thread waste.
     pub(super) cached_bar_sync_rows: std::sync::Arc<[SyncStatsRow]>,
+    pub(super) cached_bar_sync_broker_totals: std::sync::Arc<[BarSyncBrokerTotal]>,
     pub(crate) cached_bar_sync_rows_initialized: bool,
     pub(crate) cached_bar_sync_rows_last: std::time::Instant,
     /// Receiver for an in-flight bar-sync matrix recompute running on a blocking

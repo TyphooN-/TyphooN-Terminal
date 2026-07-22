@@ -595,6 +595,7 @@ impl TyphooNApp {
             cached_yahoo_chart_sync_state: std::collections::HashMap::new(),
             cached_yahoo_chart_sync_state_rev: None,
             cached_bar_sync_rows: std::sync::Arc::from([]),
+            cached_bar_sync_broker_totals: std::sync::Arc::from([]),
             cached_bar_sync_rows_initialized: false,
             cached_bar_sync_rows_last: std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_secs(10))

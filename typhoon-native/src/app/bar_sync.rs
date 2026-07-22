@@ -259,9 +259,9 @@ pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowSta
 /// Aggregate per-broker totals from a Vec<SyncStatsRow> for the compact
 /// banner / one-liner display. Returns `(broker, total, healthy, pct)`
 /// tuples in display order (Kraken, Alpaca, then any others).
-pub(super) fn compute_bar_sync_broker_totals(
-    rows: &[SyncStatsRow],
-) -> Vec<(String, u64, u64, f32)> {
+pub(super) type BarSyncBrokerTotal = (String, u64, u64, f32);
+
+pub(super) fn compute_bar_sync_broker_totals(rows: &[SyncStatsRow]) -> Vec<BarSyncBrokerTotal> {
     use std::collections::BTreeMap;
 
     let mut totals: BTreeMap<String, (u64, u64)> = BTreeMap::new();

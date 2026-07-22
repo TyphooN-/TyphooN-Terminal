@@ -16,6 +16,16 @@ fn shared_bar_sync_rows(rows: Vec<SyncStatsRow>) -> std::sync::Arc<[SyncStatsRow
     rows.into()
 }
 
+fn shared_bar_sync_snapshot(
+    rows: Vec<SyncStatsRow>,
+) -> (
+    std::sync::Arc<[SyncStatsRow]>,
+    std::sync::Arc<[BarSyncBrokerTotal]>,
+) {
+    let broker_totals = compute_bar_sync_broker_totals(&rows).into();
+    (shared_bar_sync_rows(rows), broker_totals)
+}
+
 fn bar_sync_rows_refresh_due(
     initialized: bool,
     last_refresh: std::time::Instant,
@@ -175,6 +185,7 @@ impl TyphooNApp {
                     self.auto_full_tilt_active = true;
                 }
                 self.cached_bar_sync_rows = result.rows;
+                self.cached_bar_sync_broker_totals = result.broker_totals;
                 self.cached_bar_sync_rows_initialized = true;
                 self.cached_bar_sync_rows_last = std::time::Instant::now();
                 self.bar_sync_compute_rx = None;
@@ -188,17 +199,31 @@ impl TyphooNApp {
         }
     }
 
-    pub(super) fn compute_bar_sync_rows(&mut self) -> std::sync::Arc<[SyncStatsRow]> {
+    pub(super) fn compute_bar_sync_snapshot(
+        &mut self,
+    ) -> (
+        std::sync::Arc<[SyncStatsRow]>,
+        std::sync::Arc<[BarSyncBrokerTotal]>,
+    ) {
         self.refresh_bar_sync_rows_if_stale();
-        std::sync::Arc::clone(&self.cached_bar_sync_rows)
+        (
+            std::sync::Arc::clone(&self.cached_bar_sync_rows),
+            std::sync::Arc::clone(&self.cached_bar_sync_broker_totals),
+        )
+    }
+
+    pub(super) fn compute_bar_sync_totals_snapshot(
+        &mut self,
+    ) -> std::sync::Arc<[BarSyncBrokerTotal]> {
+        self.refresh_bar_sync_rows_if_stale();
+        std::sync::Arc::clone(&self.cached_bar_sync_broker_totals)
     }
 
     pub(super) fn render_sync_status_window(&mut self, ctx: &egui::Context) {
         if !self.show_sync_status {
             return;
         }
-        let rows = self.compute_bar_sync_rows();
-        let broker_totals = compute_bar_sync_broker_totals(rows.as_ref());
+        let (rows, broker_totals) = self.compute_bar_sync_snapshot();
         let mut sync_save_after = false;
         let mut show_sync_status = self.show_sync_status;
         egui::Window::new("Sync Status")
@@ -235,7 +260,7 @@ impl TyphooNApp {
                     m
                 };
                 ui.horizontal_wrapped(|ui| {
-                    for (broker, total, healthy, pct) in &broker_totals {
+                    for (broker, total, healthy, pct) in broker_totals.iter() {
                         let color = if *total == 0 {
                             egui::Color32::from_rgb(150, 150, 150)
                         } else if *pct >= 90.0 {
@@ -408,6 +433,7 @@ pub(super) struct BarSyncInputs {
 /// Result of an off-thread bar-sync recompute, applied by `poll_bar_sync_compute`.
 pub(crate) struct BarSyncResult {
     rows: std::sync::Arc<[SyncStatsRow]>,
+    broker_totals: std::sync::Arc<[BarSyncBrokerTotal]>,
     overall_pct: f32,
     total: u64,
 }
@@ -484,8 +510,10 @@ impl BarSyncInputs {
         } else {
             (healthy as f32 / total as f32) * 100.0
         };
+        let (rows, broker_totals) = shared_bar_sync_snapshot(rows);
         BarSyncResult {
-            rows: shared_bar_sync_rows(rows),
+            rows,
+            broker_totals,
             overall_pct,
             total,
         }
@@ -1129,5 +1157,29 @@ mod tests {
             now,
             interval
         ));
+    }
+
+    #[test]
+    fn shared_bar_sync_snapshot_caches_broker_totals_in_display_order() {
+        let (rows, totals) = shared_bar_sync_snapshot(vec![
+            SyncStatsRow {
+                broker: "Yahoo".to_string(),
+                total: 4,
+                healthy: 2,
+                ..Default::default()
+            },
+            SyncStatsRow {
+                broker: "Merged".to_string(),
+                total: 2,
+                healthy: 2,
+                ..Default::default()
+            },
+        ]);
+        let shared_totals = std::sync::Arc::clone(&totals);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(totals[0], ("Merged".to_string(), 2, 2, 100.0));
+        assert_eq!(totals[1], ("Yahoo".to_string(), 4, 2, 50.0));
+        assert!(std::sync::Arc::ptr_eq(&totals, &shared_totals));
     }
 }
