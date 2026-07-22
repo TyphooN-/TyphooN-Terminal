@@ -1116,40 +1116,70 @@ impl TyphooNApp {
                 }
             }
             let cache_ref = Arc::as_ref(&cache);
-            let mut gpu = self.gpu_indicators.take();
-            let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());
-            self.gpu_indicators = gpu;
-            if !load_succeeded {
-                // Read error (not contention — read_conn is UI-exclusive)
-                self.log
-                    .push_back(LogEntry::err("Cache read error — check logs"));
-            } else if chart.bars.is_empty() {
-                let tf_key = tf.cache_suffix();
-                let kraken_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
-                let kraken_supported =
-                    typhoon_engine::core::kraken::to_kraken_pair_lossy(&kraken_symbol).is_some();
-                if !self.sync_timeframe_enabled(tf_key) {
-                    self.log.push_back(LogEntry::warn(format!(
-                        "No cached data for {} {} — sync for {} is disabled",
-                        symbol,
-                        tf.label(),
-                        sync_timeframe_short_label(tf_key)
-                    )));
-                } else if kraken_supported {
-                    let queued = self.queue_kraken_fetch(&kraken_symbol, tf_key);
-                    if queued {
+            if chart.source_override.is_empty() {
+                // Auto-source cold load: hand the decompress + cross-source merge
+                // to the deferred worker pool instead of running it on the render
+                // thread. A deep-history symbol (e.g. SMCI M15 ~26.9k bars) froze
+                // the focus for seconds otherwise — the multi-second `toolbar`
+                // stall in the live log (reload_symbol runs inside the toolbar).
+                // Swap the empty chart in immediately so the UI shows the new
+                // symbol, then front-queue it; the same result-cache restore path
+                // the MTF grid already uses (restore_from_result_cache) lands the
+                // bars within a frame or two. Fetch-on-empty is covered by the
+                // caller's queue_open_symbol_sync_all_timeframes (reload_symbol)
+                // plus the broad sync scheduler, so it is not duplicated here.
+                if let Some(target) = self.charts.get_mut(self.active_tab) {
+                    *target = chart;
+                }
+                let idx = self.active_tab;
+                if idx < self.charts.len() && self.deferred_chart_load_set.insert(idx) {
+                    // Front of the queue: the focused chart outranks background
+                    // MTF cells. If it is already queued the existing entry loads
+                    // the freshly-swapped symbol (the tick reads charts[idx] live).
+                    self.deferred_chart_loads.push_front(idx);
+                }
+            } else {
+                // Source-pinned charts are single-source (no cross-source merge)
+                // and the async restore path can't carry a source override, so
+                // load them in place — preserving the empty→fetch handling.
+                let mut gpu = self.gpu_indicators.take();
+                let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());
+                self.gpu_indicators = gpu;
+                if !load_succeeded {
+                    // Read error (not contention — read_conn is UI-exclusive)
+                    self.log
+                        .push_back(LogEntry::err("Cache read error — check logs"));
+                } else if chart.bars.is_empty() {
+                    let tf_key = tf.cache_suffix();
+                    let kraken_symbol = typhoon_engine::core::kraken::normalize_pair_symbol(symbol);
+                    let kraken_supported =
+                        typhoon_engine::core::kraken::to_kraken_pair_lossy(&kraken_symbol).is_some();
+                    if !self.sync_timeframe_enabled(tf_key) {
+                        self.log.push_back(LogEntry::warn(format!(
+                            "No cached data for {} {} — sync for {} is disabled",
+                            symbol,
+                            tf.label(),
+                            sync_timeframe_short_label(tf_key)
+                        )));
+                    } else if kraken_supported {
+                        let queued = self.queue_kraken_fetch(&kraken_symbol, tf_key);
+                        if queued {
+                            self.log.push_back(LogEntry::info(format!(
+                                "No cached data for {} {} — fetching from Kraken...",
+                                symbol,
+                                tf.label()
+                            )));
+                        }
+                    } else if self.queue_alpaca_fetch(symbol, tf_key) {
                         self.log.push_back(LogEntry::info(format!(
-                            "No cached data for {} {} — fetching from Kraken...",
+                            "No cached data for {} {} — fetching from Alpaca...",
                             symbol,
                             tf.label()
                         )));
                     }
-                } else if self.queue_alpaca_fetch(symbol, tf_key) {
-                    self.log.push_back(LogEntry::info(format!(
-                        "No cached data for {} {} — fetching from Alpaca...",
-                        symbol,
-                        tf.label()
-                    )));
+                }
+                if let Some(target) = self.charts.get_mut(self.active_tab) {
+                    *target = chart;
                 }
             }
             let split_probe_symbol = normalize_market_data_symbol(symbol)
@@ -1179,9 +1209,6 @@ impl TyphooNApp {
                         fmp_key: self.fmp_key.clone(),
                     });
                 }
-            }
-            if let Some(target) = self.charts.get_mut(self.active_tab) {
-                *target = chart;
             }
             // Refresh MTF Grid status for all timeframes
             self.compute_mtf_grid_status();
