@@ -39,6 +39,19 @@ pub(super) const BROAD_DISPATCH_LANES: u8 = 3;
 /// catalog scan.
 pub(super) const BROAD_DISPATCH_REFILL_MIN_SPACING: std::time::Duration =
     std::time::Duration::from_millis(250);
+/// Minimum spacing between heavy broad-dispatch lane runs on *visible* passes.
+/// Each lane's full-catalog workset selection costs 250-490ms on the render
+/// thread (12k-symbol universe), so at full-tilt the 1s periodic interval plus
+/// settlement-driven refills otherwise put a scan on nearly every visible
+/// frame — the persistent ~300ms `dispatch_ms` stalls in the live log. Sync
+/// throughput does not depend on visible cadence (the 256-768 deep queue
+/// windows buffer between refills and the per-provider rate limiter is the
+/// real ceiling), and hidden overnight passes stay unthrottled, so spacing
+/// visible dispatch here restores smooth rendering without slowing catch-up.
+/// Actively-viewed symbols stay fresh through the separate chart/watchlist
+/// demand fetch paths, which are not gated by this.
+pub(super) const VISIBLE_BROAD_DISPATCH_MIN_SPACING: std::time::Duration =
+    std::time::Duration::from_secs(2);
 
 pub(super) const ALPACA_FULL_TILT_QUEUE_WINDOW: usize = 256;
 pub(super) const ALPACA_FULL_TILT_BATCH_SIZE: usize = 200;

@@ -3775,6 +3775,14 @@ pub struct TyphooNApp {
     /// lane per frame; hidden passes run every due lane. See
     /// `run_broad_dispatch_slice`.
     pub(crate) broad_dispatch_cursor: usize,
+    /// Last time a heavy broad-dispatch lane ran on a *visible* pass. Visible
+    /// passes are throttled to at most one lane per
+    /// `VISIBLE_BROAD_DISPATCH_MIN_SPACING`: each full-catalog workset scan
+    /// costs 250-490ms on the render thread, and under full-tilt the 1s
+    /// interval plus settlement refills otherwise make a lane due on nearly
+    /// every frame (the persistent ~300ms visible-frame stalls). Hidden
+    /// overnight passes are unthrottled, so catch-up throughput is unchanged.
+    pub(crate) broad_dispatch_visible_last: std::time::Instant,
     /// Lanes still owed a settlement-driven refill. The broker drain sets this
     /// to the lane count instead of walking all catalog worksets inline
     /// (which cost 180-800ms inside the drain budget); the post-drain

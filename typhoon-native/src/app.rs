@@ -2961,6 +2961,7 @@ impl TyphooNApp {
             hidden_pump_last_heartbeat: std::time::Instant::now(),
             weekend_crypto_rotation_idx: 0,
             broad_dispatch_cursor: 0,
+            broad_dispatch_visible_last: std::time::Instant::now(),
             broad_refill_lanes_pending: 0,
             pump_dispatch_ms: 0.0,
             bg_snapshot_last_applied: std::time::Instant::now(),

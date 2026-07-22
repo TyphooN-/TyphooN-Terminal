@@ -487,8 +487,27 @@ impl TyphooNApp {
         if !self.cache_loaded {
             return;
         }
+        // Visible passes must protect the frame rate. A single heavy lane's
+        // full-catalog workset selection costs 250-490ms on the render thread,
+        // and at full-tilt the 1s periodic interval plus settlement-driven
+        // refills would otherwise run a lane on nearly every visible frame —
+        // the persistent ~300ms `dispatch_ms` stalls in the live log. Space
+        // visible heavy dispatch to at most one lane per
+        // `VISIBLE_BROAD_DISPATCH_MIN_SPACING`; hidden overnight passes stay
+        // unthrottled so catch-up throughput is unchanged, and actively-viewed
+        // symbols stay fresh via the separate chart/watchlist demand paths.
+        if !self.pump_hidden
+            && now_instant.duration_since(self.broad_dispatch_visible_last)
+                < VISIBLE_BROAD_DISPATCH_MIN_SPACING
+        {
+            return;
+        }
         let interval = self.market_data_sync_interval();
-        let refill_requested = self.broad_refill_lanes_pending > 0;
+        // Settlement refills accelerate lane dueness to the 250ms floor — that
+        // is valuable overnight (hidden), but visible passes rely on the
+        // periodic interval alone so a continuous settlement stream can't turn
+        // every visible frame into a catalog scan.
+        let refill_requested = self.broad_refill_lanes_pending > 0 && self.pump_hidden;
         let lane_budget = if self.pump_hidden {
             BROAD_DISPATCH_LANES
         } else {
@@ -506,6 +525,11 @@ impl TyphooNApp {
         );
         self.broad_dispatch_cursor = new_cursor;
         self.broad_refill_lanes_pending = self.broad_refill_lanes_pending.saturating_sub(ran);
+        // Stamp the visible throttle only when a lane actually ran, so a pass
+        // where nothing was due doesn't push the next real dispatch out.
+        if !self.pump_hidden && ran > 0 {
+            self.broad_dispatch_visible_last = now_instant;
+        }
     }
 
     fn broad_dispatch_lane_due(
