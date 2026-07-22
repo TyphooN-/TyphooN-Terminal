@@ -100,10 +100,12 @@ Index auto-refreshes every 10s while the window is open.
   the next send, which works but costs tokens proportional to history length.
   The user explicitly accepted this: *"at the very least can we save a text
   transcript of the conversations to pre-load to the model?"*
-- **Blocking DB writes on reply path.** `persist_turn` writes zstd-compressed
-  JSON inside `update()`. For typical transcripts (< 50 turns, < 100 KB) this is
-  sub-millisecond. If a reply was unusually large we'd notice a UI hitch; if
-  that happens we move it to `tokio::task::spawn_blocking`.
+- **Blocking DB writes on reply path.** `persist_turn` still writes zstd-compressed
+  JSON from the reply-receipt path in `eframe::App::logic()`. For typical
+  transcripts (< 50 turns, < 100 KB) this is sub-millisecond. A naive
+  `spawn_blocking` conversion can reorder two full-history writes and let an older,
+  shorter transcript win; moving this off-thread therefore needs a single-owner
+  ordered persistence lane (or monotonic compare-and-store), not detached tasks.
 
 ## Test plan
 

@@ -34,7 +34,10 @@ The dependency audit was repeated with `cargo tree -d` and the workspace manifes
 - Changed native `eframe` from default features to explicit Linux native features (`default_fonts`, `wayland`, `x11`, `wgpu_no_default_features`). The direct `wgpu` dependency now enables only `std`, `parking_lot`, `vulkan`, and `wgsl`, avoiding web, DX12, Metal, GLES, and WebGPU backend feature compilation in the Linux native terminal.
 - Revisited the `keyring` 4.x migration. The umbrella `keyring` 4.0.1 crate pulled in the optional SQLite/Turso backend and conflicted with `typhoon-native`'s global allocator, so TyphooN now uses the keyring 4.x split crates directly: `keyring-core` for `Entry`/`Error` and `dbus-secret-service-keyring-store` for Linux/FreeBSD Secret Service. This preserves the existing libsecret credential namespace without compiling the unused `keyring` CLI/sample wrapper, SQLite store, or Turso stack.
 
-`native-tls` / `openssl` are still present because LAN sync currently builds a native-tls acceptor/connector for local WSS. Removing them safely requires a LAN-sync TLS implementation migration, not a manifest-only edit.
+At the time of this 2026-05 follow-up, `native-tls` / `openssl` remained because
+LAN sync built a native-TLS acceptor/connector for local WSS. ADR-115 later
+removed LAN sync; the 2026-07-22 dependency tree contains neither `native-tls`
+nor `openssl`. `openssl-probe` remains as a distinct certificate-location helper.
 
 Explicit non-upgrades / unresolved upstream constraints after this pass:
 
@@ -100,7 +103,8 @@ re-tested and cleared:
   chrome panels rendering through the root `Ui`. Deliberately kept as one
   body (no `logic()`/`ui()` split): eframe 0.34 already gated `update()`
   behind `is_visible`, so a hidden window pausing the pump is long-standing
-  shipped behavior, and one body preserves it exactly.
+  shipped behavior, and one body preserved it at that time. ADR-134 later added
+  the vendored render-independent `logic()` pump and separate `ui()` rendering.
 - **`wasm-encoder` 0.250 → 0.252** — transpiler codegen; no source edits.
 - **Durable rule (new): the direct `wgpu` major must follow `egui-wgpu`'s,
   not crates.io latest.** wgpu 30 is published, but egui-wgpu 0.35 pins

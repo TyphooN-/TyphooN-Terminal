@@ -1,6 +1,6 @@
 # ADR-128: Sync-Coverage Levers (market-hours gate, reachable %, WS ceiling)
 
-**Status:** Accepted | **Date:** 2026-06-28
+**Status:** Accepted / Implemented | **Date:** 2026-06-28
 
 Builds on **ADR-112** (demand-depth vs catalog-breadth sync lanes), **ADR-113 /
 ADR-124** (cross-source equity merge), and **ADR-126** (primary/assist broker).

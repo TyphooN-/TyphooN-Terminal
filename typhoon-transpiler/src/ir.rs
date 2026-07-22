@@ -106,6 +106,8 @@ pub enum IrExpr {
     // Math
     BinOp(IrBinOp, Box<IrExpr>, Box<IrExpr>),
     UnaryOp(IrUnaryOp, Box<IrExpr>),
+    /// Set a named local and leave the assigned value on the expression stack.
+    AssignLocal(String, Box<IrExpr>),
     Call(String, Vec<IrExpr>),
     // Conversions
     F64ToI32(Box<IrExpr>),
@@ -488,19 +490,10 @@ fn lower_expr(expr: &Expr) -> Result<IrExpr, CompileError> {
         }
         Expr::Assign { target, value, .. } => {
             // Assignment is a statement-level operation but MQL5 allows it as an expression.
-            // Lower to a Call that the codegen handles specially as set_local + get_local.
+            // Preserve the target name explicitly so codegen can emit local.tee.
             let ir_value = lower_expr(value)?;
             match target.as_ref() {
-                Expr::Ident(name) => {
-                    // Emit as a special __assign call: codegen emits tee_local (set + return value)
-                    Ok(IrExpr::Call(
-                        "__assign".into(),
-                        vec![
-                            IrExpr::GetLocal(name.clone()), // marker for which local
-                            ir_value,
-                        ],
-                    ))
-                }
+                Expr::Ident(name) => Ok(IrExpr::AssignLocal(name.clone(), Box::new(ir_value))),
                 Expr::Index { array: _, index } => {
                     // Buffer assignment: array[index] = value
                     let ir_index = lower_expr(index)?;
@@ -679,5 +672,22 @@ mod tests {
         assert!(result.is_ok());
         let m = result.unwrap();
         assert!(m.on_calculate.is_none());
+    }
+
+    #[test]
+    fn lower_assignment_expression_preserves_local_target() {
+        let expr = Expr::Assign {
+            target: Box::new(Expr::Ident("signal".into())),
+            op: AssignOp::Assign,
+            value: Box::new(Expr::FloatLit(7.5)),
+        };
+
+        match lower_expr(&expr).expect("assignment should lower") {
+            IrExpr::AssignLocal(name, value) => {
+                assert_eq!(name, "signal");
+                assert!(matches!(*value, IrExpr::F64Const(v) if v == 7.5));
+            }
+            other => panic!("expected AssignLocal, got {other:?}"),
+        }
     }
 }

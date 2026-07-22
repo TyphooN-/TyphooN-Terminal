@@ -64,6 +64,10 @@ No source edits required. `cargo build --workspace` and
 
 ### Phase 2 — semver-major bumps
 
+The paths in this original phase are historical. LAN sync, Darwin, the old CLI,
+and their source files were removed from active `master` in June 2026; the current
+dependency state is recorded by the July follow-up sections below.
+
 Phase 1 left `paste` as the sole irreducible RustSec warning at the
 time, transitively via `thirtyfour` and `image → ravif → rav1e`.
 Take the rest of the available majors:

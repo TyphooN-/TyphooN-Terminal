@@ -1,6 +1,6 @@
 # ADR-126: Primary / Assist Broker Selection
 
-**Status:** Accepted | **Date:** 2026-06-22
+**Status:** Accepted / Implemented | **Date:** 2026-06-22
 
 > **Scope note (2026-07):** the Primary/Assist choice governs **order routing**
 > and the **rank-0 equity-merge lane** — it does **not** gate live market data.

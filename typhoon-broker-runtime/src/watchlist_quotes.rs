@@ -1,10 +1,65 @@
 use std::sync::Arc;
 
-use typhoon_engine::broker::alpaca::AlpacaBroker;
+use typhoon_engine::broker::alpaca::{AlpacaBroker, SnapshotData};
 use typhoon_engine::broker::protocol::BrokerMsg;
 use typhoon_engine::core::cache::SqliteCache;
 use typhoon_engine::core::fundamentals;
 use typhoon_engine::core::watchlist::WatchlistRow;
+
+const ALPACA_SNAPSHOT_CONCURRENCY: usize = 4;
+
+fn alpaca_snapshot_symbol(symbol: &str) -> String {
+    const CRYPTO_BASES: &[&str] = &[
+        "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT", "XMR", "ZEC",
+        "DASH",
+    ];
+
+    let upper = symbol.to_uppercase();
+    CRYPTO_BASES
+        .iter()
+        .find_map(|base| {
+            (upper.starts_with(base) && upper.ends_with("USD") && upper.len() == base.len() + 3)
+                .then(|| format!("{base}/USD"))
+        })
+        .unwrap_or_else(|| symbol.to_string())
+}
+
+fn apply_alpaca_snapshot(
+    row: &mut WatchlistRow,
+    snapshot: SnapshotData,
+    regular_session_open: bool,
+) {
+    let change = snapshot.last - snapshot.prev_close;
+    let change_pct = if snapshot.prev_close > 0.0 {
+        (snapshot.last / snapshot.prev_close - 1.0) * 100.0
+    } else {
+        0.0
+    };
+    let ext_change_pct = if regular_session_open {
+        0.0
+    } else if snapshot.regular_close > 0.0 && (snapshot.last - snapshot.regular_close).abs() > 1e-10
+    {
+        (snapshot.last / snapshot.regular_close - 1.0) * 100.0
+    } else {
+        0.0
+    };
+    *row = WatchlistRow {
+        symbol: row.symbol.clone(),
+        cache_key: row.symbol.clone(),
+        last: snapshot.last,
+        prev_close: snapshot.prev_close,
+        regular_close: snapshot.regular_close,
+        change,
+        change_pct,
+        volume: snapshot.daily_volume,
+        ext_change_pct,
+        live_bid: 0.0,
+        live_ask: 0.0,
+        live_bid_size: 0.0,
+        live_ask_size: 0.0,
+        live_quote_at: None,
+    };
+}
 
 pub fn spawn_watchlist_quotes_task(
     symbols: Vec<String>,
@@ -34,70 +89,26 @@ pub fn spawn_watchlist_quotes_task(
         };
 
         if let Some(ref b) = broker {
-            for row in &mut rows {
-                let api_sym = {
-                    let crypto_bases = [
-                        "BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT",
-                        "XMR", "ZEC", "DASH",
-                    ];
-                    let su = row.symbol.to_uppercase();
-                    crypto_bases
-                        .iter()
-                        .find_map(|base| {
-                            if su.starts_with(base)
-                                && su.ends_with("USD")
-                                && su.len() == base.len() + 3
-                            {
-                                Some(format!("{}/USD", base))
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| row.symbol.clone())
-                };
-                // 3s timeout per symbol — don't let one stale symbol block the entire watchlist.
-                // During weekends/off-hours this may fail or return stale/empty data; Yahoo/cache
-                // enrichment below still keeps the watchlist usable.
-                if let Ok(Ok(snap)) = tokio::time::timeout(
-                    std::time::Duration::from_secs(3),
-                    b.get_snapshot(&api_sym),
-                )
-                .await
-                {
-                    let change = snap.last - snap.prev_close;
-                    let change_pct = if snap.prev_close > 0.0 {
-                        (snap.last / snap.prev_close - 1.0) * 100.0
-                    } else {
-                        0.0
-                    };
-                    // Extended hours change: last trade vs regular session close.
-                    // Reset ext_change_pct during regular hours to avoid carrying over
-                    // yesterday's extended hours change as the starting point.
-                    let ext_change_pct = if regular_session_open {
-                        0.0
-                    } else if snap.regular_close > 0.0
-                        && (snap.last - snap.regular_close).abs() > 1e-10
-                    {
-                        (snap.last / snap.regular_close - 1.0) * 100.0
-                    } else {
-                        0.0
-                    };
-                    *row = WatchlistRow {
-                        symbol: row.symbol.clone(),
-                        cache_key: row.symbol.clone(),
-                        last: snap.last,
-                        prev_close: snap.prev_close,
-                        regular_close: snap.regular_close,
-                        change,
-                        change_pct,
-                        volume: snap.daily_volume,
-                        ext_change_pct,
-                        live_bid: 0.0,
-                        live_ask: 0.0,
-                        live_bid_size: 0.0,
-                        live_ask_size: 0.0,
-                        live_quote_at: None,
-                    };
+            // Bound fan-out to avoid both the previous O(symbols × 3s) tail latency
+            // and an unbounded burst against Alpaca's snapshot endpoint.
+            for chunk in rows.chunks_mut(ALPACA_SNAPSHOT_CONCURRENCY) {
+                let fetches = chunk.iter().map(|row| {
+                    let api_symbol = alpaca_snapshot_symbol(&row.symbol);
+                    async move {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(3),
+                            b.get_snapshot(&api_symbol),
+                        )
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                    }
+                });
+                let snapshots = futures_util::future::join_all(fetches).await;
+                for (row, snapshot) in chunk.iter_mut().zip(snapshots) {
+                    if let Some(snapshot) = snapshot {
+                        apply_alpaca_snapshot(row, snapshot, regular_session_open);
+                    }
                 }
             }
         }
@@ -244,7 +255,7 @@ pub fn spawn_watchlist_quotes_task(
                     for source in typhoon_engine::core::watchlist::watchlist_cache_fallback_sources(
                         &row.symbol,
                     ) {
-                        for key in typhoon_chart_ui::cache_keys::chart_source_cache_keys(
+                        for key in typhoon_engine::broker::cache_keys::chart_source_cache_keys(
                             source,
                             &row.symbol,
                             tf,
@@ -273,4 +284,38 @@ pub fn spawn_watchlist_quotes_task(
         }
         let _ = broker_msg_tx.send(BrokerMsg::WatchlistQuotes(rows));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alpaca_snapshot_symbol_normalizes_supported_crypto_pairs_only() {
+        assert_eq!(alpaca_snapshot_symbol("BTCUSD"), "BTC/USD");
+        assert_eq!(alpaca_snapshot_symbol("ethusd"), "ETH/USD");
+        assert_eq!(alpaca_snapshot_symbol("AAPL"), "AAPL");
+        assert_eq!(alpaca_snapshot_symbol("BABYUSD"), "BABYUSD");
+    }
+
+    #[test]
+    fn snapshot_application_preserves_display_symbol_and_calculates_changes() {
+        let mut row = typhoon_engine::core::watchlist::empty_watchlist_row("BTCUSD");
+        apply_alpaca_snapshot(
+            &mut row,
+            SnapshotData {
+                symbol: "BTC/USD".to_string(),
+                last: 105.0,
+                prev_close: 100.0,
+                daily_volume: 42.0,
+                regular_close: 102.0,
+            },
+            false,
+        );
+        assert_eq!(row.symbol, "BTCUSD");
+        assert_eq!(row.last, 105.0);
+        assert_eq!(row.change, 5.0);
+        assert!((row.change_pct - 5.0).abs() < 1e-12);
+        assert!((row.ext_change_pct - (105.0 / 102.0 - 1.0) * 100.0).abs() < 1e-12);
+    }
 }

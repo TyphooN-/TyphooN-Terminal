@@ -22,13 +22,17 @@ Cache-to-pixels timing is workload-dependent. Slow merged-cache loads are explic
 
 ### Why It's Fast
 
-1. **Zero serialization** — data stays as Rust types from SQLite to GPU
+1. **Binary cache-to-render hot path** — cached TTBR records decode into owned Rust
+   bars and stay typed through indicator computation and drawing. Provider ingest,
+   session persistence, and some cache/control boundaries still use JSON; this is
+   not a claim of zero serialization across the application.
 2. **Immediate mode UI** — no DOM or retained widget tree; performance comes from bounded per-frame work, caching, and repaint throttling
 3. **Pre-computed indicators** — computed once on load, cached in ChartState
 4. **Vulkan backend** — wgpu selects Vulkan on Linux (NVIDIA), Metal on macOS
 5. **No garbage collection** — Rust ownership model, no GC pauses
-6. **Per-frame O(1) discipline** — per-frame paths (`update()`, `draw_chart()`,
-   panel render closures) avoid allocations proportional to dataset size:
+6. **Per-frame O(1) discipline** — per-frame paths (`eframe::App::logic()`,
+   `eframe::App::ui()`, `draw_chart()`, panel render closures) avoid allocations
+   proportional to dataset size:
    invariant work is hoisted out of inner closures, suffix arrays replace
    per-candidate scans (e.g. FVG fill check), pre-normalized HashSets
    replace linear `iter().any` audits (Kraken pairs lookup, balance ownership,

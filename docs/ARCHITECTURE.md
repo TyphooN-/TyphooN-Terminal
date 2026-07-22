@@ -2,7 +2,9 @@
 
 ## Overview
 
-Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization.
+Pure Rust native GPU application. No JavaScript, no WebKit, and no browser IPC in
+the chart/render path. Provider and persistence boundaries may still serialize
+JSON before data enters the typed TTBR/cache pipeline.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -59,7 +61,7 @@ The native render path has no browser IPC or garbage collector. Provider ingesti
 
 ## Data Sources
 
-Current broker & data scope is **Kraken + Alpaca** (ADR-111), with Yahoo Chart as corroborator. The architecture remains broker-modular: L1/L2/L3 capability, entitlement, freshness, and snapshot-vs-stream behavior are modeled per broker via a typed capability model (`typhoon-engine::broker::capabilities` — `MarketDataSupport`/`DepthAssetScope`/`BrokerMarketDataCapabilities` with an exhaustive match over `OrderBroker`; ADR-129) so the selected primary broker does not hard-wire UI semantics. After the Alpaca/Kraken combover, tastytrade is the likely next restored broker module; Binance is a plausible later crypto venue. Equity bars merge a trusted tier against an independent corroborator (ADR-112/113), with known stock splits back-adjusted from a curated fallback when the FMP split feed is unavailable (ADR-122).
+Current broker & data scope is **Kraken + Alpaca** (ADR-111), with Yahoo Chart as corroborator. The architecture remains broker-modular: L1/L2/L3 capability, entitlement, freshness, and snapshot-vs-stream behavior are modeled per broker via a typed capability model (`typhoon-engine::broker::capabilities` — `MarketDataSupport`/`DepthAssetScope`/`BrokerMarketDataCapabilities` with an exhaustive match over `OrderBroker`; ADR-129) so the selected primary broker does not hard-wire UI semantics. No additional broker is currently scheduled on `master`; any future adapter must enter through that capability model rather than reviving removed UI-specific paths. Equity bars merge a trusted tier against an independent corroborator (ADR-112/113), with known stock splits back-adjusted from a curated fallback when the FMP split feed is unavailable (ADR-122).
 
 Recent market data work (ADR-129/109): Strong L1 (ticker/quotes/trades with sizes and freshness guards) for both brokers. Kraken L2 (v2 book with atomic CRC32, exact wire tokens, shared DOM depth preference across toolbar/DOM/Order Flow/Bookmap stream entrypoints). L3 foundation (per-order `ws_v2_level3.rs`, real/sim streamer + token/no-token entitlement status, CRC, KrakenL3State). Depth profile (live bins + overlay) and richer Bookmap (per-order bid/ask markers, selected-order persistence/highlight, age coloring, interactions) on focused symbols. M1/M5 are valid low-TF targets for Kraken Spot and Equities (assist rows like Alpaca/Yahoo remain non-target/stale for those TFs).
 
@@ -85,7 +87,7 @@ capacity because Kraken market data and iapi pressure are public/process-level.
 
 Kraken equities fallback is the first implementation of a broader rule: enabled
 brokers/sources may assist each other through a normalized instrument-identity
-layer. The same modularity rule applies to future tastytrade/Binance support: provider adapters advertise capabilities, and shared chart/watchlist/DOM/Bookmap surfaces consume normalized L1/L2/L3 data rather than broker-specific UI forks. A new broker should not force a full cold historical sync when existing
+layer. The same modularity rule applies to any future broker: provider adapters advertise capabilities, and shared chart/watchlist/DOM/Bookmap surfaces consume normalized L1/L2/L3 data rather than broker-specific UI forks. A new broker should not force a full cold historical sync when existing
 compatible bars already cover the same economic instrument. The selected broker
 remains authoritative for execution and native health, while compatible history
 from other sources is merged at read/render/research time with provenance. Native
@@ -118,8 +120,8 @@ TyphooN-Terminal/
 ├── typhoon-native/                 # Native GPU application
 │   ├── src/
 │   │   ├── main.rs         # eframe init, wgpu renderer selection
-│   │   ├── app.rs          # TyphooNApp, chart pane, palette, dispatch
-│   │   ├── app/            # Window renderers (ADR-086 split)
+│   │   ├── app.rs          # TyphooNApp construction + app module integration
+│   │   ├── app/            # Runtime, sync, chart glue, state, commands, windows
 │   │   │   ├── ai.rs               # AI Chat / Claude / Gemini /
 │   │   │   │                       # Codex / Sessions / Response Cache
 │   │   │   ├── alpaca_sync.rs      # Broker sync capacities, TF filters, no-data marks
@@ -160,7 +162,7 @@ TyphooN-Terminal/
 ├── typhoon-research-ui/            # Research snapshot renderers (render/ segment modules, ADR-108) + packet formatter + window shell + packet section tree (ADR-125 Target 1)
 ├── typhoon-transpiler/             # Multi-language indicator transpiler + WASM/WGSL codegen
 └── docs/
-    ├── adr/                # Architecture Decision Records (110; numbering has gaps)
+    ├── adr/                # Architecture Decision Records (111 + index; numbering has gaps)
     ├── API_KEYS.md
     ├── INDICATORS.md
     ├── PERFORMANCE.md

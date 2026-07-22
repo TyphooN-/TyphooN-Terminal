@@ -144,7 +144,7 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "SMA_INTELLIGENCE",
-        desc: "SMA Outfit research window — correlated SMA outfits per Unfair Market",
+        desc: "SMA Outfit research — stack, trigger, distance, and cross analysis",
     },
     Command {
         name: "REG_SHO",

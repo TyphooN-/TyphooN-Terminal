@@ -66,9 +66,11 @@ Rules for future slices:
 4. Run downstream `cargo check -p typhoon-native` before committing a migration slice.
 5. Prefer extracting research/provider/storage crates only after module boundaries are stable enough to avoid circular dependencies.
 
-## Follow-up Plan
+## Historical Follow-up Plan (implemented or superseded)
 
-Next structural targets, in order:
+These were the ordered targets used during the extraction. The storage families
+below now exist under finer semantic names; the live remaining work is recorded
+under **Current Extraction Ranking**.
 
 1. Continue extracting storage families:
    - next storage slices should be smaller migration/version families (`storage_market_rates.rs`, `storage_quant_snapshots.rs`, `storage_indicator_snapshots.rs`) rather than one giant all-storage dump.
@@ -89,18 +91,17 @@ Next structural targets, in order:
 4. Extract `typhoon-research` once dependencies on `crate::core::fundamentals` and `crate::core::sec_filing` have been inverted or moved to shared crates.
 5. Keep broker/cache hot paths out of the research crate so a Kraken/Alpaca sync edit does not invalidate heavy research code.
 6. Use `sccache` as the local rustc wrapper when installed/configured on the machine; do not set `rustc-wrapper` to a missing binary.
-   - 2026-06-06 check: `sccache 0.15.0` is installed at `/usr/bin/sccache` with a local disk cache at `/home/typhoon/.cache/sccache`.
+   - 2026-07-22 check: `sccache 0.16.0` is installed at `/usr/bin/sccache`; `.cargo/config.toml` still configures it as the workspace wrapper.
    - `.cargo/config.toml` now sets `rustc-wrapper = "sccache"` under `[build]`.
    - Verification: normal incremental `cargo check -p typhoon-engine` completed in 10.18s but was non-cacheable because Cargo incremental compilation is enabled; `CARGO_INCREMENTAL=0 cargo check -p typhoon-engine` executed through sccache with 2 Rust cache misses and no cache errors. Do not disable incremental globally for local dev; use `CARGO_INCREMENTAL=0` for CI/clean multi-branch cache reuse.
-6. Keep `tokio-tungstenite` TLS cleanup gated behind LAN-sync verification, because LAN sync currently uses native-tls self-signed certificate handling.
-   - `tokio-tungstenite` is still pulled with `native-tls` through `typhoon-engine/Cargo.toml`.
-   - `typhoon-engine/src/core/lan_sync.rs` directly builds `native_tls::TlsAcceptor` / `TlsConnector`, wraps with `tokio_native_tls`, passes `Connector::NativeTls`, and reads peer certificates through `MaybeTlsStream::NativeTls`.
-   - That means TLS cleanup is real but not a safe quick flag flip; migrate LAN sync to rustls or isolate LAN sync behind a feature before removing native-tls.
+7. LAN sync and its native-TLS implementation were removed under ADR-115. The
+   former TLS blocker is closed; current dependency policy is tracked by
+   ADR-031/088 rather than this research-modularization ADR.
 
 ## Current Extraction Ranking
 
 **Update (2026-06): the original goal is achieved.** The root `research/mod.rs`
-went ~90k → ~36.8k → **1,668 lines** and is **no longer the compile/rust-analyzer
+went ~90k → ~36.8k → **1,759 lines** and is **no longer the compile/rust-analyzer
 hotspot**. The final two cuts were:
 
 - **Candlestick-pattern storage** (v80/v83–v88 `create/upsert/get_cdl_*`) →
@@ -123,7 +124,7 @@ the root:
 | `research/price_transform_indicator_models.rs` | ~21 | Thin price-transform parent after extracting `adaptive_average_transforms.rs`, `price_average_variance.rs`, `directional_movement.rs`, `rate_correlation.rs`, `rolling_extrema.rs`, `bands_accumulation_regression.rs`, `aroon_macd_variable_average.rs`, `oscillator_squeeze_range.rs`, and `regression_hilbert_oscillators.rs`. |
 | `research/technical_indicator_models.rs` | ~12 | Thin technical-indicator parent after extracting `squeeze_trend_channels.rs`, `directional_flow_trend.rs`, `volume_momentum_oscillators.rs`, `momentum_volume_pressure.rs`, and `cycle_trend_value.rs`. |
 | `research/moving_average_oscillator_models.rs` | ~53 | Thin MA/oscillator parent with shared EMA/SMA helpers after extracting `regression_pivot_candles.rs`, `adaptive_forecast_vigor.rs`, `adaptive_volume_momentum.rs`, `acceleration_range_impulse.rs`, `momentum_envelope_volume.rs`, and `adaptive_cycle_volume.rs`. |
-| `research/mod.rs` | ~1,668 | Orchestration + residual storage. No longer the hotspot. |
+| `research/mod.rs` | 1,759 | Orchestration + residual storage. No longer the hotspot. |
 
 ### Next targets (in order)
 
@@ -151,8 +152,11 @@ Positive:
 
 Tradeoffs:
 
-- This first slice is not enough to solve engine-wide invalidation by itself.
-- `mod.rs` remains large and needs more semantic extractions.
+- Intra-crate module splits improve ownership, navigation, and incremental-query
+  locality but do not create separate compilation units; crate boundaries remain
+  the stronger compile-time lever.
+- `mod.rs` is no longer a dominant hotspot. Extract residual storage only if it
+  regrows or a cohesive ownership boundary warrants the move.
 - Crate extraction is deferred until dependency cycles are resolved deliberately rather than by whack-a-mole call-site rewrites.
 
 ## Update (2026-07-02) — research-ui snapshot-renderer segmentation

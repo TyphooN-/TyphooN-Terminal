@@ -117,7 +117,7 @@ remove redundant work.
 
 ## Invariants Going Forward
 
-- **Per-frame paths (`update()`, `draw_chart()`, panel render closures)
+- **Per-frame paths (`eframe::App::logic()`, `eframe::App::ui()`, `draw_chart()`, panel render closures)
   must not allocate proportional to dataset size.** Pre-computed caches,
   reusable buffers, and index-aligned iteration are the tools.
 - **Per-message paths (`BrokerMsg::*` handlers) treat the message batch
@@ -131,8 +131,9 @@ remove redundant work.
 
 ## Consequences
 
-- **Pro:** Chart pan/zoom and MTF grid keep their 60 FPS floor under
-  busier broker feeds and deeper indicator stacks.
+- **Pro:** Chart pan/zoom and MTF grid retain responsive frame pacing under
+  busier broker feeds and deeper indicator stacks. This is a telemetry-backed
+  responsiveness target, not a guaranteed fixed-FPS floor.
 - **Pro:** Sync scheduling spends fewer allocator cycles per tick when
   the broker universe is large.
 - **Con:** Adds a few small per-frame caches that must be invalidated

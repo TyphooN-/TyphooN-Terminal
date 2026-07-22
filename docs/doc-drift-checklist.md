@@ -3,30 +3,72 @@
 **Purpose**: Track mismatches between current implementation (code + runtime behavior) and documentation.  
 **Style**: Prefer semantic names over old "feature parity" sequencing. Update on changes.  
 **Maintenance**: Before major work, run searches for "stub|pending|not yet|parity|future|missing" in docs/ + cross-check key code areas. Mark items [x] when fixed and re-commit.  
-**Last full sweep**: 2026-07-12 (implementation-alignment comb-over: performance telemetry, bounded background snapshots, single-owner session persistence, broker-refill backpressure, current compression policy, and Kraken-equities lane semantics). ADR-130 closed (Kraken private-WS follows primary switch via kraken_private_ws_task abort+respawn; KrakenTradeCopy one-shot xStock spot replication with margin-skip + catalog doomed-order guard; broker-aware TradeCopy window). ADR-120 SSR shipped (computed Rule-201 state machine: engine trigger/expiry/purge + native 30s watchlist scan, holiday-aware expiry). ADR-117 closed (keyless Reddit mention lane + research_social_history sparkline in the SENTIMENT window; sentiment-v2 superseded by local history). ADR-116 all eight TODOs closed (FinvizSnapshot + packet section; perf windows; derived ratios/growth; employees ingested + optionable inferred; headline day-impact; MARKET_MAP treemap + sector groups; ScreenerField registry + saved screens). ADR-084 max pain shipped (engine + packet line). ADR-113 live-tick anchor shipped (narrow newest-bar clamp vs fresh real-time quote at merged installs). ADR-048 #7 cross-TF drawings assessed and deliberately kept open (bar-index coordinate model across 89 Drawing variants + persisted-session migration = dedicated pass). Externally blocked, documented as such: ADR-120 delisting feed (no machine-readable source) + borrow rates (paid-only), ADR-110 iapi schedule endpoint items (undocumented endpoint). Prior sweep 2026-07-04 (ADR deferred-work completion pass).
+**Last full sweep**: 2026-07-22. All 128 tracked Markdown documents and
+111 numbered ADRs were scanned against the six-crate workspace. The sweep also
+audited all 720 non-vendored Rust files for large-module, dependency-boundary,
+async/blocking, and explicit TODO/stub risks.
 
 **Status legend**:
 - [ ] Open drift (code ahead or doc outdated)
 - [x] Fixed / in sync
 - [~] Acceptable historical (intentional record, git-history pointer, or ADR title)
 
-**Latest full comb-over (2026-07-12 implementation alignment):**
-- Counted 110 ADR files and verified the six Cargo workspace packages against `cargo metadata`.
-- Cross-checked performance/sync/storage ADRs against `app_runtime.rs`, `app_background.rs`, `app_runtime_broker_messages.rs`, `market_data_sync.rs`, session persistence, and `typhoon-engine::core::cache`.
-- **Drift fixed:**
-  - Replaced unsupported fixed startup/render/memory benchmark claims with the phase-attributed telemetry actually emitted by the runtime.
-  - Corrected the chart data-flow description: TTBR is decoded into owned bars; JSON still exists at provider boundaries, so “zero serialization everywhere” was false.
-  - Restored ADR-032/033’s current capacity-one `BgData` snapshot channel, 3s lightweight/5m full cadence, nonblocking publication, and off-thread destruction. Documented the 45+ GB high-water failure that exposed the accidental unbounded channel.
-  - Recorded single-owner incremental session persistence and removal of duplicate minute-cadence session JSON/preferences work.
-  - Recorded saturated heavy-sync broker-refill deferral (`pending > 200`) while preserving periodic full-universe progress.
-  - Corrected ADR-089/099 and high-level storage docs: normal bars, `merge_bars_fast`, and current KV writes honor the configured zstd level; WS no longer silently forces level 3.
-  - Corrected Kraken equities scope across ROADMAP/PERFORMANCE/ARCHITECTURE and ADR-101/102: iapi is demand-depth repair; the June 8 full-catalog experiment was reversed by ADR-112; bounded WS snapshot and Alpaca/Yahoo merged lanes own catalog breadth.
-  - Corrected ADR count 109→110 in the architecture tree and removed stale CryptoCompare union wording from the active Kraken roadmap.
-  - Marked ADR-037/066/069/131 statuses honestly; updated ADR-110 and ADR-115 to current implementation/workspace state; clarified ADR-103 and ADR-088 historical provider/path references.
-  - Updated README volatile metrics, alert delivery, broker-adapter scope, transpiler description, and ADR index annotations; updated research-packet AI transports and removed brittle fixed sub-block counts.
-  - Revised ADR-112/128 for bounded full-universe native WS coverage from `1Week` through `1Min` while retaining demand-scoped iapi depth repair and derived `1Month`.
-- Historical removed-system sections remain explicitly labeled as history rather than rewritten as current architecture.
-- The prior 2026-07-08 command/palette audit remains valid; no command-surface changes were made in this pass.
+**Latest full comb-over (2026-07-22 implementation alignment):**
+
+- Corrected the active ADR count to 111 and extended the README index through
+  ADR-134.
+- Corrected ADR-086/108's compile-unit model and stale source layout/counts.
+  Rust modules are readability/change-locality boundaries; Cargo/rustc compile
+  crates. Real parallel incremental compile gains come from the six workspace
+  crate boundaries, `sccache`, and `mold`.
+- Removed obsolete LAN-sync/native-TLS blockers from current architecture.
+  LAN sync is gone and the live dependency tree contains neither `native-tls`
+  nor `openssl`.
+- Removed active tastytrade/Binance restoration plans. Removed adapters remain
+  historical/deprecated until a new explicit decision reintroduces one.
+- Corrected the eframe hot-path contract from the removed `update()` callback to
+  `logic()` plus `ui()`, and replaced a fixed 60-FPS guarantee with telemetry-backed
+  responsiveness language.
+- Corrected “zero serialization” wording: the hot cache-to-render path is binary
+  TTBR, while provider, persistence, packet, and broker boundaries still serialize.
+- Applied ADR-118's test-module convention to the largest remaining test blocks:
+  6,785 lines moved from 13 production modules into sibling `tests.rs` modules.
+- Closed one concrete transpiler TODO: assignment expressions now carry their
+  actual local target into WASM `local.tee`, and all IR-declared locals are emitted
+  in the function local declaration vector. Indexed buffer assignment still needs
+  typed buffer-name resolution and a buffer-selecting runtime ABI; configurable
+  input values likewise need an explicit WASM input ABI instead of scratch-local
+  fallback behavior.
+- Moved provider-normalized cache-key policy into `typhoon-engine` and removed
+  broker-runtime's dependency on chart UI, so broker-runtime checks no longer pull
+  the egui/chart crate through a non-rendering helper.
+- Shortened cache read-lock ownership to the SQLite query itself; zstd decode,
+  TTBR unpacking, UTF-8 conversion, and legacy JSON parsing now happen after the
+  pooled read connection is released.
+- Replaced serial per-symbol Alpaca watchlist snapshots with ordered four-wide
+  batches. The three-second timeout now applies per bounded batch lane rather than
+  accumulating across every watchlist symbol, without creating an unbounded API burst.
+- Corrected the README's obsolete direct-wgpu/removed-command claims, recorded the
+  ADR-134 hidden-window pump, split completed SMA geometry from deferred historical
+  correlation/ranking, and marked ADR-126/128/133 implemented.
+- Historical removed-system sections remain explicitly labeled as history rather
+  than rewritten as current architecture.
+
+**Still blocked or deliberately deferred:**
+
+- Real Kraken L3 requires an authenticated WebSocket token and account/venue
+  entitlement. Simulator/foundation work cannot prove production access.
+- Cross-timeframe drawing persistence needs a coordinate-model/session migration
+  across 89 drawing variants; it is not a safe opportunistic patch.
+- The synchronous per-indicator GPU readback path is a real UI-stall risk, but
+  fixing it requires a batched asynchronous result/state-machine design rather
+  than moving the same wait behind an unbounded task.
+- Moving the 23k-line research renderer set to another leaf crate and splitting
+  engine protocol/cache boundaries are real compile-boundary candidates, but each
+  changes a broad public API and should land as separately measured migrations.
+- Machine-readable delisting data, borrow rates, and the undocumented Kraken iapi
+  schedule endpoint remain unavailable/paid/provider-blocked as recorded in their
+  owning ADRs.
 
 ## 1. High-level Docs (ROADMAP.md, ARCHITECTURE.md, DESIGN_PHILOSOPHY.md, INDICATORS.md)
 

@@ -1,18 +1,19 @@
 # ADR-086: typhoon-native/app.rs Module Decomposition for Compile Speed
 
 **Date:** 2026-04-23
-**Status:** Accepted
+**Status:** Complete
+**Last updated:** 2026-07-22
 **Related:** `typhoon-native/src/app.rs`, `typhoon-native/src/app/`, ADR-001 (native GPU architecture)
 
 ## Context
 
 `typhoon-native/src/app.rs` had grown past 158k lines as the home of `TyphooNApp`
 plus every floating-window renderer, every command handler, every keyboard
-binding, and every popup body in the native UI. Even small UI tweaks
-recompiled the whole file because Rust's compilation unit is the crate, not
-the function — but the practical bottleneck was each `cargo build` cycle
-running through the full `app.rs` typecheck plus codegen. Iteration feel
-was 30s+ for a one-line change.
+binding, and every popup body in the native UI. Rust's compilation unit is the
+crate, so an internal module split does not create one `rustc` process or object
+file per source module. It does, however, reduce edit/diff/rust-analyzer scope and
+gives incremental compilation smaller dependency regions to invalidate inside the
+crate. Before the split, iteration feel was 30s+ for a one-line change.
 
 The file's growth pattern was clear from blame: window renderers were
 top-of-file additions, and there was no internal seam to peel off without a
@@ -24,14 +25,18 @@ otherwise touched only its own state.
 
 ## Decision
 
-Decompose `typhoon-native/src/app.rs` into a `typhoon-native/src/app/` submodule tree,
-moving the largest self-contained renderers and leaving `TyphooNApp` plus
-the chart / palette / command-dispatch core in the parent file.
+Decompose `typhoon-native/src/app.rs` into a `typhoon-native/src/app/` submodule tree.
+The initial cut moved self-contained renderers; subsequent accepted cuts moved
+state ownership, the eframe pump, command dispatch, broker-message handling, and
+chart rendering to their current semantic owners.
 
 **Final layout:**
 
 ```
-typhoon-native/src/app.rs                  — TyphooNApp, chart, palette, dispatch
+typhoon-native/src/app.rs                  — module root and app construction/integration
+typhoon-native/src/app/state.rs            — TyphooNApp and central state graph
+typhoon-native/src/app/app_runtime.rs      — eframe logic/UI pump
+typhoon-native/src/app/command_palette.rs  — research-command dispatch
 typhoon-native/src/app/ai.rs               — AI Chat, Claude Code, Antigravity CLI,
                                      Codex CLI, AI Sessions, AI Response
                                      Cache (six related windows)
@@ -80,9 +85,10 @@ The two-step split was deliberate:
   strategy windows.
 
 The original ~158k-line `app.rs` has since been decomposed far further: as of
-2026-06-25, `typhoon-native/src/app.rs` is **~3.1k lines**, and the two seams this ADR
+2026-07-22, `typhoon-native/src/app.rs` is **~3.3k lines**, and the two seams this ADR
 flagged have themselves been split into directories — `app/floating_windows/` is
-now **118 files (~39.1k lines total)** and `command_palette.rs` is **~684 lines**.
+now **120 files** and `command_palette.rs` is a thin dispatcher over semantic child
+modules.
 The renderer/window decomposition this ADR set in motion is essentially complete;
 the remaining native monoliths are production *logic* files, not renderers (see
 the updated seam bullet under Consequences). Peeled-off submodules rebuild in
@@ -90,19 +96,19 @@ isolation when they are the only thing changed.
 
 ## Consequences
 
-- **Edit-rebuild cycle is materially faster** for changes scoped to one
-  submodule — Storage Manager edits no longer trigger an `app.rs`
-  recompile, AI window edits no longer trigger Storage/Settings recompile.
+- **Edit/review locality is materially better** for changes scoped to one
+  submodule. Incremental compilation can reuse unaffected query/codegen work, but
+  the whole `typhoon-native` crate still has one `rustc` invocation.
 - **No behavior change.** The split is structural; `git diff -M` shows
   near-perfect line moves for the six new files.
 - **Window discovery is easier.** A new contributor looking for the AI
   Sessions browser or the Storage Manager finds it under the obvious
   submodule path instead of grepping a monolithic parent file.
-- **`app.rs` stays the integration point.** `TyphooNApp` remains in
-  the parent file, all `BrokerCmd` / `BrokerMsg` handling lives there,
-  the chart pane and command palette live there, and the central state
-  graph (drawings, indicators, panes, sessions) is still defined in one
-  place. The split is for renderer code, not for state.
+- **`app.rs` stays the construction/integration root.** `TyphooNApp` is defined
+  in `app/state.rs`; the eframe pump lives in `app/app_runtime.rs`; broker messages
+  are handled by typed runtime modules; command dispatch lives under
+  `app/command_palette.rs`; and chart rendering is owned by `typhoon-chart-ui`.
+  The central state graph remains defined in one place rather than fragmented.
 - **Future renderers should land in submodules from day one.** The
   precedent is set: a new "X Window" renderer goes into
   `typhoon-native/src/app/x_window.rs` (or a related bundle), not into `app.rs`.
@@ -113,14 +119,15 @@ isolation when they are the only thing changed.
   `typhoon-broker-runtime`, and queue/refill orchestration in
   `app/market_data_sync.rs`; do not add new sync islands to `app.rs`.
 - **The renderer seams this ADR named are done; the remaining monoliths are
-  production logic.** `floating_windows/` (118 files) and `command_palette.rs`
-  (~684 lines) are split. New broker fetch workers still land in
+  production logic.** `floating_windows/` is a semantic module tree and
+  `command_palette.rs` is a thin dispatcher over command families. New broker fetch workers still land in
   `typhoon_engine::broker::bar_fetch` / `typhoon-broker-runtime`, not `app.rs`.
   The next targets need *semantic* splits (extract cohesive `impl TyphooNApp`
   method groups or free-fn families into sibling files — a second
   `impl TyphooNApp` block in a new file is fine), not renderer moves:
-  `state.rs` (~3.5k), `trade_ops.rs` (~2.6k), `market_data_sync.rs` (~2.3k),
-  `app_runtime_central_panel.rs` (~2.1k), `session_persistence.rs` (~1.8k),
+  `state.rs` (~3.8k), `trade_ops.rs` (~3.0k), `market_data_sync.rs` (~2.8k after
+  its tests moved out), `app_runtime_central_panel.rs` (~2.8k),
+  `session_persistence.rs` (~1.8k),
   and `typhoon-broker-runtime/src/research_compute/technical_indicators/candlestick_patterns.rs` (~1.7k). For `state.rs`, keep the central
   state struct in one place (per the consequence above) and split its *methods*,
   not the struct.
@@ -143,7 +150,7 @@ isolation when they are the only thing changed.
 
 - `cargo build --workspace` clean before and after each split commit.
 - `cargo test --workspace --lib` test counts unchanged across the split.
-- Spot-check: clean rebuild of `typhoon-native` after touching only
-  `app/storage.rs` should not rebuild any non-affected `app/*.rs`
-  module's object file (verified by `cargo build -v` output showing
-  one `rustc` invocation per touched module).
+- Compare the same warm incremental edit workload before/after a structural cut;
+  do not infer a compile-time win from source-file count. Cargo invokes `rustc`
+  once for the changed crate, and intra-crate module splits primarily improve
+  dependency-query reuse, navigation, and review locality.

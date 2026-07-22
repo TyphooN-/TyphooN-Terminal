@@ -82,9 +82,15 @@ Conventions:
 - Test-binary compile time is unchanged (the crate is still one codegen unit); the
   win is readability, edit-locality, and rust-analyzer responsiveness.
 
-## TODOs / deferred
+## Current state
 
 - The old `technical_analysis.rs` mid-file test block is gone with ADR-125 Target 2;
   the file is now a 5-line re-export shim to `typhoon-chart-ui::render`.
-- Future large `tests/` slices can be further subdivided by family using the same
-  `include!` rule.
+- The 2026-07-22 workspace comb-over moved another **6,785 lines** of large
+  test modules into sibling `<name>/tests.rs` files: engine backtest,
+  fundamentals, core Kraken, Kraken broker/iapi limiter/OHLC WS; chart rendering; native
+  chart operations/market-data sync; and transpiler parser/transpile/WASM/WGSL
+  codegen. This closes the largest straightforward violations of this convention.
+- Smaller inline modules remain where the extraction would add navigation cost
+  without materially shrinking the production file. Reassess them when their
+  parent is touched or the test block grows beyond a few hundred lines.

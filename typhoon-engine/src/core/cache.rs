@@ -2558,7 +2558,10 @@ impl SqliteCache {
     /// a real stall. Racy by nature (the lock state can change immediately
     /// after); only use it to skip optional work, never for correctness.
     pub fn write_lock_contended(&self) -> bool {
-        matches!(self.conn.try_lock(), Err(std::sync::TryLockError::WouldBlock))
+        matches!(
+            self.conn.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
     }
 
     pub fn put_bars_if_uncontended(&self, key: &str, json_data: &str) -> Result<bool, String> {
@@ -2588,19 +2591,21 @@ impl SqliteCache {
 
     /// Load bar data — handles both binary (new) and JSON (legacy) formats.
     pub fn get_bars(&self, key: &str) -> Result<Option<(String, i64)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
-            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let result = {
+            let conn = self
+                .read_conn
+                .lock()
+                .map_err(|e| format!("Lock failed: {e}"))?;
+            let mut stmt = conn
+                .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
+                .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
-        let result = stmt.query_row(params![key], |row| {
-            let data: Vec<u8> = row.get(0)?;
-            let timestamp: i64 = row.get(1)?;
-            Ok((data, timestamp))
-        });
+            stmt.query_row(params![key], |row| {
+                let data: Vec<u8> = row.get(0)?;
+                let timestamp: i64 = row.get(1)?;
+                Ok((data, timestamp))
+            })
+        };
 
         match result {
             Ok((data, timestamp)) => {
@@ -2620,19 +2625,21 @@ impl SqliteCache {
     }
 
     /// Get bars as raw OHLCV tuples (no JSON serialization).
-    /// Zero-serialization hot path for native GPU renderer: cache → f64 → GPU vertex buffer.
+    /// Binary hot path for native chart rendering: cache blob → decoded OHLCV tuples.
     pub fn get_bars_raw(
         &self,
         key: &str,
     ) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
-            .map_err(|e| format!("Prepare failed: {e}"))?;
-        let row: Option<Vec<u8>> = stmt.query_row(rusqlite::params![key], |r| r.get(0)).ok();
+        let row: Option<Vec<u8>> = {
+            let conn = self
+                .read_conn
+                .lock()
+                .map_err(|e| format!("Read lock failed: {e}"))?;
+            let mut stmt = conn
+                .prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
+                .map_err(|e| format!("Prepare failed: {e}"))?;
+            stmt.query_row(rusqlite::params![key], |r| r.get(0)).ok()
+        };
         match row {
             None => Ok(None),
             Some(data) => {
@@ -2668,19 +2675,21 @@ impl SqliteCache {
     /// For 500 bars from a 50K-bar cache: converts only 500 bars to JSON instead of 50K.
     /// Decompression overhead is unchanged (zstd doesn't support seeking).
     pub fn get_bars_tail(&self, key: &str, tail: usize) -> Result<Option<(String, i64)>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
-            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let result = {
+            let conn = self
+                .read_conn
+                .lock()
+                .map_err(|e| format!("Read lock failed: {e}"))?;
+            let mut stmt = conn
+                .prepare_cached("SELECT data, timestamp FROM bar_cache WHERE key = ?1")
+                .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
-        let result = stmt.query_row(params![key], |row| {
-            let data: Vec<u8> = row.get(0)?;
-            let timestamp: i64 = row.get(1)?;
-            Ok((data, timestamp))
-        });
+            stmt.query_row(params![key], |row| {
+                let data: Vec<u8> = row.get(0)?;
+                let timestamp: i64 = row.get(1)?;
+                Ok((data, timestamp))
+            })
+        };
 
         match result {
             Ok((compressed, timestamp)) => {
@@ -2729,18 +2738,20 @@ impl SqliteCache {
 
     /// Load key-value data.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>, String> {
-        let conn = self
-            .read_conn
-            .lock()
-            .map_err(|e| format!("Read lock failed: {e}"))?;
-        let mut stmt = conn
-            .prepare_cached("SELECT value FROM kv_cache WHERE key = ?1")
-            .map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let result = {
+            let conn = self
+                .read_conn
+                .lock()
+                .map_err(|e| format!("Read lock failed: {e}"))?;
+            let mut stmt = conn
+                .prepare_cached("SELECT value FROM kv_cache WHERE key = ?1")
+                .map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
-        let result = stmt.query_row(params![key], |row| {
-            let data: Vec<u8> = row.get(0)?;
-            Ok(data)
-        });
+            stmt.query_row(params![key], |row| {
+                let data: Vec<u8> = row.get(0)?;
+                Ok(data)
+            })
+        };
 
         match result {
             Ok(compressed) => {

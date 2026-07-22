@@ -4484,7 +4484,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "typhoon-chart-ui",
  "typhoon-engine",
 ]
 

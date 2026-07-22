@@ -55,7 +55,7 @@ pub async fn handle_fundamentals_command(
             }
             if use_kraken {
                 let syms: Vec<String> =
-                    typhoon_chart_ui::cache_keys::normalize_kraken_equity_symbol_list(
+                    typhoon_engine::broker::cache_keys::normalize_kraken_equity_symbol_list(
                         kraken_equity_symbols.iter(),
                     )
                     .into_iter()

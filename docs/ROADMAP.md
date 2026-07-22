@@ -2,9 +2,12 @@
 
 ## Deprecated & Removed (2026-06)
 
-The terminal narrowed to a native **Kraken + Alpaca** desktop app for the current combover. Items in the history below that cover removed subsystems are kept for the record and do not currently ship, but the broker architecture remains modular: tastytrade is a likely future restoration after Alpaca/Kraken are complete, and Binance is a plausible later crypto venue.
+The terminal narrowed to a native **Kraken + Alpaca** desktop app. Items in the
+history below that cover removed subsystems are kept for the record and do not
+currently ship. The broker architecture remains modular, but no additional broker
+is scheduled on `master`.
 
-- **Brokers/data currently removed:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and removed fallback lanes — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md). Code preserved on `deprecated/*` branches. Future restoration should start with tastytrade through the normalized broker capability model, not by reviving old UI-specific paths.
+- **Brokers/data currently removed:** MT5/Darwinex (DARWIN portfolio + BarCacheWriter bridge), tastytrade, CryptoCompare, and removed fallback lanes — see [ADR-111](adr/111-broker-scope-reduction-kraken-alpaca-only.md). Code is preserved on `deprecated/*` branches; none of these adapters is active future work on `master`.
 - **LAN sync + WASM/web phone client:** removed; native-desktop only.
 - **Live martingale trading:** deprecated — see [ADR-114](adr/114-deprecate-martingale-live-trading.md).
 - **MQL5 export pipeline:** removed (the `typhoon-transpiler` language-tooling crate is retained).
@@ -65,7 +68,8 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Walk-forward optimizer (70/30 in-sample/out-of-sample, 5 strategies)
 - [x] Seasonals (monthly return patterns from bar data)
 - [x] Volume Profile (POC, Value Area High/Low)
-- [x] SMA Outfit Intelligence (`SMA_INTELLIGENCE` research window — correlated outfit target per Unfair Market, partially complete; ADR-131/133)
+- [x] SMA Outfit stack/trigger/distance/cross analysis (`SMA_INTELLIGENCE`; ADR-131/133)
+- [ ] Historical outfit behavior correlation, out-of-sample scoring, and ranking (deferred pending an accepted outcome horizon/objective)
 - [x] Monte Carlo VaR (from DARWIN daily returns)
 - [x] Stress test (8 historical scenarios)
 - [x] VaR multiplier (per-DARWIN corridor status)
@@ -104,14 +108,15 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Storage Manager pagination
 - [x] Cross-source data hierarchy (current: Kraken + Alpaca trusted tier with Yahoo corroborator — ADR-111/113)
 
-### Phase 9: tastytrade Integration *(removed 2026-06; likely future restoration after Alpaca/Kraken combover)*
+### Phase 9: tastytrade Integration *(historical; removed 2026-06)*
 - [x] tastytrade REST API client (session-based login, balances, positions, orders)
 - [x] Market data via DXLink WebSocket (historical bars: SETUP→AUTH→FEED protocol)
 - [x] Option chains + Greeks (nested expiration/strike, IV rank/percentile via market metrics)
 - [x] Quote snapshots + market metrics (bid/ask, IV rank, IV percentile, beta)
 - [x] Cross-source bar merge with scale validation (current: Kraken + Alpaca + Yahoo — ADR-113)
-- [ ] Future restoration path: reintroduce tastytrade as a broker module with declared L1/L2/L3/data-history capabilities, entitlement/status reporting, and shared chart/watchlist/DOM semantics.
-- [ ] Later candidate: Binance crypto venue, using the same broker capability/freshness/snapshot-vs-stream model.
+- Removed implementation is preserved only as history. Any future broker decision
+  requires a new accepted ADR and must use the normalized capability/freshness/
+  snapshot-vs-stream model.
 
 ### Phase 10: Advanced Features
 - [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 89 total)
@@ -194,6 +199,7 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] No-data symbol skip set
 - [x] Dependency audit + RustSec advisory closure (ADR-088)
 - [x] Six-crate workspace extraction: broker runtime, chart UI, and research UI separated from the native shell (ADR-125/127)
+- [x] Render-independent hidden-window logic pump via vendored eframe `logic()` / `ui()` split (ADR-134)
 
 ### Phase 21: Multi-Account, Session & Data-Integrity Follow-Through (2026-07)
 - [x] Multi-account broker pools: 4 uniform Alpaca slots (Key/Secret/Paper|Live each); successfully connected slots round-robin historical requests/batches independently of Primary, share canonical cache keys, and scale aggregate capacity + Kraken trading identities and account-primary cycling (ADR-130)
@@ -202,4 +208,4 @@ The terminal narrowed to a native **Kraken + Alpaca** desktop app for the curren
 - [x] Holiday-aware Kraken xStocks session status (rule-based NYSE holiday calendar, ADR-110)
 - [x] General stock-split feed: bulk research scrape populates `research_stock_splits` via FMP + keyless Yahoo for every scraped symbol (ADR-122/123)
 - [x] SL/TP trade lines active-chart-scoped with exact painted-geometry dragging (ADR-132)
-- [x] SMA Outfit Intelligence research window (`SMA_INTELLIGENCE`, ADR-131/133)
+- [x] SMA Outfit deterministic research window (`SMA_INTELLIGENCE`, ADR-131/133); historical correlation/ranking remains deferred

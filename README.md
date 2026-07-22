@@ -48,13 +48,13 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Risk/Reward Overlay** | Visual profit/loss zones on chart when SL/TP lines set |
 | **Trade Journal** | Log trades with notes, review history (~ →JOURNAL) |
 | **Position Calculator** | Risk-based sizing with R:R ratio (~ →CALC) |
-| **Chart Annotations** | Text markers on chart bars (~ →ANNOTATE) |
+| **Chart Annotations** | Text markers on chart bars through the graphical drawing controls |
 | **Regime Detection** | ADX-based trending/ranging/choppy state in dashboard |
 | **Pattern Recognition** | Harmonic pattern auto-detection plus manual H&S/triangle/pattern annotation tools; classic double-top/H&S auto-detection is deferred |
 | **Sentiment Analysis** | Keyword-based bullish/bearish scoring from news (~ →SENTIMENT) |
 | **Volatility Surface** | Options IV heatmap by strike×expiry (~ →VOLSURF) |
 | **Portfolio Heat Map** | Finviz-style colored boxes by P&L (~ →HEATMAP) |
-| **Bracket Order UI** | Visual OCO/bracket order placement (~ →BRACKET) |
+| **Bracket Order UI** | Visual OCO/bracket placement through the trading panel and chart trade lines |
 | **Alert Dashboard** | Cross-watchlist alert monitoring (~ →ALERTBOARD) |
 | **Renko Charts** | ATR-based Renko brick charting |
 | **GUI Menu Bar** | File/View/Trading/Tools/Research/Analysis dropdown menus |
@@ -89,12 +89,12 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Fear & Greed** | Market sentiment gauge (0-100) + 30-day sparkline (~ →FEAR) |
 | **Dark Pool** | FINRA RegSHO daily short volume with gauge visualization (~ →DARKPOOL) |
 | **Congress Trading** | House Stock Watcher: congressional trades filterable by symbol/rep/party (~ →CONGRESS) |
-| **Earnings Overlay** | Toggle E/D/S markers on chart for earnings, dividends, splits (~ →EARNINGS-OVERLAY) |
+| **Earnings Overlay** | Graphical E/D/S markers on chart for earnings, dividends, and splits |
 | **World Indices** | 14 major indices across Americas/Europe/Asia-Pacific, auto-refresh (~ →WEI) |
 | **Forex Dashboard** | ECB rates + 6×6 cross rate matrix (~ →FX) |
 | **Crypto Market** | CoinGecko top 50 + trending + 7-day sparklines (~ →CRYPTO) |
 | **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (~ →YIELD) |
-| **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
+| **GPU Chart Engine** | Native egui-painted candlesticks, drawings, panes, lines, histograms, and fills on a wgpu-backed surface |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
 | **Economic Calendar** | Finnhub economic events: FOMC, NFP, CPI, PMI with impact ratings (~ →ECON) |
 | **Kraken Primary Market Data** | Public Spot/xStocks universe sync with no API key; async OHLCV queueing paced to Kraken's public limits with cooldown |
@@ -186,7 +186,7 @@ See [KEYBOARD_SHORTCUTS.md](docs/KEYBOARD_SHORTCUTS.md) for the full reference.
 
 **Pure Rust native GPU renderer** — egui + wgpu (Vulkan/Metal/DX12).
 
-Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu vertex buffer → GPU renders candlesticks + indicators.
+Chart path: SQLite TTBR cache → zstd decode → owned Rust bars → chart state and indicator computation → egui paint primitives on the wgpu-backed native surface. Provider ingestion and persistence boundaries may still serialize JSON; the render path has no browser IPC.
 
 ### Documentation
 
@@ -317,6 +317,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [131](docs/adr/131-sma-outfit-intelligence.md) | SMA Outfit Intelligence Window _(partial foundation; correlation ranking deferred)_ |
 | [132](docs/adr/132-sl-tp-lines-active-chart-scope.md) | SL/TP Trade Lines Are Active-Chart-Scoped (Exact-Geometry Dragging) |
 | [133](docs/adr/133-command-palette-research-only.md) | Command Palette Is Research-Only |
+| [134](docs/adr/134-render-independent-background-pump.md) | Render-Independent Background Pump (Hidden-Window Sync) |
 
 ---
 

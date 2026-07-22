@@ -4,7 +4,7 @@ Date: 2026-07-09
 
 ## Status
 
-Accepted.
+Accepted / Implemented.
 
 ## Context
 
