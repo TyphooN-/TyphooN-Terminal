@@ -480,6 +480,42 @@ fn fetch_key_parts(
     keys.iter().filter_map(|key| key.rsplit_once(':')).collect()
 }
 
+struct PreparedFetchSymbols<'a> {
+    source: &'a [String],
+    symbols: std::sync::OnceLock<std::collections::HashMap<&'a str, String>>,
+}
+
+impl<'a> PreparedFetchSymbols<'a> {
+    fn new(source: &'a [String]) -> Self {
+        Self {
+            source,
+            symbols: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn get(&self, symbol: &str) -> Option<&str> {
+        self.symbols
+            .get_or_init(|| {
+                self.source
+                    .iter()
+                    .map(|symbol| {
+                        (
+                            symbol.as_str(),
+                            normalize_market_data_symbol(symbol).replace('/', ""),
+                        )
+                    })
+                    .collect()
+            })
+            .get(symbol)
+            .map(String::as_str)
+    }
+
+    #[cfg(test)]
+    fn is_initialized(&self) -> bool {
+        self.symbols.get().is_some()
+    }
+}
+
 struct PreparedBarSyncEquitySymbols<'a> {
     catalog_source: &'a [String],
     demand_source: &'a [String],
@@ -536,6 +572,8 @@ impl BarSyncInputs {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let prepared_equity_symbols =
             PreparedBarSyncEquitySymbols::new(&self.catalog_symbols, &self.demand_symbols);
+        let prepared_spot_fetch_symbols = PreparedFetchSymbols::new(&self.spot_symbols);
+        let prepared_futures_fetch_symbols = PreparedFetchSymbols::new(&self.futures_symbols);
         let alpaca_backfill_parts = fetch_key_parts(&self.alpaca_backfill_keys);
         let kraken_backfill_parts = fetch_key_parts(&self.kraken_backfill_keys);
         let kraken_futures_backfill_parts = fetch_key_parts(&self.kraken_futures_backfill_keys);
@@ -549,7 +587,7 @@ impl BarSyncInputs {
             .map(|(source, keys)| (source.as_str(), fetch_key_parts(keys)))
             .collect();
         let checked_or_complete_parts =
-            |prefix: &str, symbol: &str, tf: &str, fetch_parts_are_canonical: bool| -> bool {
+            |prefix: &str, symbol: &str, fetch_symbol: &str, tf: &str| -> bool {
                 // Kraken Spot WS OHLC snapshots/updates are authoritative liveness checks for
                 // subscribed low-timeframe pairs. Illiquid pairs may have an old last trade,
                 // but if WS just delivered the recent-window snapshot/update, the cache is in
@@ -565,37 +603,20 @@ impl BarSyncInputs {
                 {
                     return true;
                 }
-                let (parts, keys) = match prefix {
-                    "alpaca" => (&alpaca_backfill_parts, &self.alpaca_backfill_keys),
-                    "kraken" | "kraken-equities" => {
-                        (&kraken_backfill_parts, &self.kraken_backfill_keys)
-                    }
-                    "kraken-futures" => (
-                        &kraken_futures_backfill_parts,
-                        &self.kraken_futures_backfill_keys,
-                    ),
-                    "yahoo-chart" => (&yahoo_chart_backfill_parts, &self.yahoo_chart_backfill_keys),
+                let parts = match prefix {
+                    "alpaca" => &alpaca_backfill_parts,
+                    "kraken" | "kraken-equities" => &kraken_backfill_parts,
+                    "kraken-futures" => &kraken_futures_backfill_parts,
+                    "yahoo-chart" => &yahoo_chart_backfill_parts,
                     _ => return false,
                 };
-                if fetch_parts_are_canonical {
-                    parts.contains(&(symbol, tf))
-                } else {
-                    keys.contains(&alpaca_fetch_key(symbol, tf))
-                }
+                parts.contains(&(fetch_symbol, tf))
             };
-        let no_data_contains =
-            |source: &str, symbol: &str, tf: &str, fetch_parts_are_canonical: bool| -> bool {
-                if fetch_parts_are_canonical {
-                    no_data_parts_by_source
-                        .get(source)
-                        .is_some_and(|parts| parts.contains(&(symbol, tf)))
-                } else {
-                    let fetch_key = alpaca_fetch_key(symbol, tf);
-                    self.no_data_keys_by_source
-                        .get(source)
-                        .is_some_and(|keys| keys.contains(&fetch_key))
-                }
-            };
+        let no_data_contains = |source: &str, fetch_symbol: &str, tf: &str| -> bool {
+            no_data_parts_by_source
+                .get(source)
+                .is_some_and(|parts| parts.contains(&(fetch_symbol, tf)))
+        };
         let checked_or_complete_lookup = |key: &str| -> bool {
             let mut parts = key.splitn(3, ':');
             let Some(prefix) = parts.next() else {
@@ -607,7 +628,24 @@ impl BarSyncInputs {
             let Some(tf) = parts.next() else {
                 return false;
             };
-            checked_or_complete_parts(prefix, symbol, tf, false)
+            if matches!(prefix, "kraken" | "kraken-equities")
+                && TyphooNApp::kraken_ws_pair_is_fresh_at(
+                    &self.kraken_ws_fresh_until,
+                    symbol,
+                    tf,
+                    now_ms,
+                )
+            {
+                return true;
+            }
+            let fetch_key = alpaca_fetch_key(symbol, tf);
+            match prefix {
+                "alpaca" => self.alpaca_backfill_keys.contains(&fetch_key),
+                "kraken" | "kraken-equities" => self.kraken_backfill_keys.contains(&fetch_key),
+                "kraken-futures" => self.kraken_futures_backfill_keys.contains(&fetch_key),
+                "yahoo-chart" => self.yahoo_chart_backfill_keys.contains(&fetch_key),
+                _ => false,
+            }
         };
         let mut rows = compute_bar_sync_stats(
             &self.detailed_stats,
@@ -619,6 +657,8 @@ impl BarSyncInputs {
         self.add_expected_kraken_sync_rows(
             &mut rows,
             &prepared_equity_symbols,
+            &prepared_spot_fetch_symbols,
+            &prepared_futures_fetch_symbols,
             &detailed_rows,
             &checked_or_complete_parts,
             &no_data_contains,
@@ -690,8 +730,8 @@ impl BarSyncInputs {
         rows: &mut Vec<SyncStatsRow>,
         prepared_equity_symbols: &PreparedBarSyncEquitySymbols<'_>,
         detailed: &DetailedSyncRows<'_>,
-        checked_or_complete_parts: &dyn Fn(&str, &str, &str, bool) -> bool,
-        no_data_contains: &dyn Fn(&str, &str, &str, bool) -> bool,
+        checked_or_complete_parts: &dyn Fn(&str, &str, &str, &str) -> bool,
+        no_data_contains: &dyn Fn(&str, &str, &str) -> bool,
     ) {
         if self.timeframes.is_empty() {
             return;
@@ -809,8 +849,8 @@ impl BarSyncInputs {
         tf: &str,
         now_ms: i64,
         detailed: &DetailedSyncRows<'_>,
-        checked_or_complete_parts: &dyn Fn(&str, &str, &str, bool) -> bool,
-        no_data_contains: &dyn Fn(&str, &str, &str, bool) -> bool,
+        checked_or_complete_parts: &dyn Fn(&str, &str, &str, &str) -> bool,
+        no_data_contains: &dyn Fn(&str, &str, &str) -> bool,
     ) -> MergedSyncStatus {
         let mut saw_stale = false;
         if let Some(row) = detailed.get(&("merged", symbol, tf)).copied() {
@@ -824,7 +864,7 @@ impl BarSyncInputs {
                     let bar_aged_out = now_ms - last_ms > period_ms * 24;
                     if bar_aged_out
                         && !recently_checked
-                        && !checked_or_complete_parts("merged", symbol, tf, true)
+                        && !checked_or_complete_parts("merged", symbol, symbol, tf)
                     {
                         saw_stale = true;
                     } else {
@@ -857,7 +897,7 @@ impl BarSyncInputs {
             // permanently tombstoned the cell as no-data so a fully-tombstoned
             // Empty can be reported Unreachable (excluded from the reachable %).
             supported_sources += 1;
-            if no_data_contains(source, symbol, tf, true) {
+            if no_data_contains(source, symbol, tf) {
                 tombstoned_sources += 1;
             }
 
@@ -882,7 +922,7 @@ impl BarSyncInputs {
             let bar_aged_out = now_ms - last_ms > period_ms * 24;
             if bar_aged_out
                 && !recently_checked
-                && !checked_or_complete_parts(source, symbol, tf, true)
+                && !checked_or_complete_parts(source, symbol, symbol, tf)
             {
                 saw_stale = true;
             } else {
@@ -902,9 +942,11 @@ impl BarSyncInputs {
         &self,
         rows: &mut Vec<SyncStatsRow>,
         prepared_equity_symbols: &PreparedBarSyncEquitySymbols<'_>,
+        prepared_spot_fetch_symbols: &PreparedFetchSymbols<'_>,
+        prepared_futures_fetch_symbols: &PreparedFetchSymbols<'_>,
         detailed: &DetailedSyncRows<'_>,
-        checked_or_complete_parts: &dyn Fn(&str, &str, &str, bool) -> bool,
-        no_data_contains: &dyn Fn(&str, &str, &str, bool) -> bool,
+        checked_or_complete_parts: &dyn Fn(&str, &str, &str, &str) -> bool,
+        no_data_contains: &dyn Fn(&str, &str, &str) -> bool,
     ) {
         let timeframes = &self.timeframes;
         if timeframes.is_empty() || (!self.cache_stats_present && self.detailed_stats.is_empty()) {
@@ -960,17 +1002,20 @@ impl BarSyncInputs {
                     "alpaca" | "yahoo-chart" => prepared_equity_symbols.broad(tf),
                     _ => &[],
                 };
-                let fetch_parts_are_canonical =
-                    matches!(source, "kraken-equities" | "alpaca" | "yahoo-chart");
                 let row_key = (broker.to_string(), tf.to_string());
                 for symbol in symbols.iter() {
                     if detailed.contains_key(&(source, symbol.as_str(), tf)) {
                         continue;
                     }
+                    let fetch_symbol = match source {
+                        "kraken" => prepared_spot_fetch_symbols.get(symbol),
+                        "kraken-futures" => prepared_futures_fetch_symbols.get(symbol),
+                        _ => Some(symbol.as_str()),
+                    }
+                    .unwrap_or(symbol);
                     let provider_settled =
-                        checked_or_complete_parts(source, symbol, tf, fetch_parts_are_canonical);
-                    let provider_unreachable =
-                        no_data_contains(source, symbol, tf, fetch_parts_are_canonical);
+                        checked_or_complete_parts(source, symbol, fetch_symbol, tf);
+                    let provider_unreachable = no_data_contains(source, fetch_symbol, tf);
                     if let Some(&idx) = row_index.get(&row_key) {
                         let row = &mut rows[idx];
                         row.total += 1;
@@ -1172,6 +1217,8 @@ mod tests {
         let mut kraken_backfill_keys = std::collections::HashSet::new();
         kraken_backfill_keys.insert(alpaca_fetch_key("BTCUSD", "1Day"));
         kraken_backfill_keys.insert(alpaca_fetch_key("AAPL", "1Day"));
+        let kraken_futures_backfill_keys =
+            std::collections::HashSet::from([alpaca_fetch_key("PF_ETHUSD", "1Day")]);
         let mut kraken_no_data = std::collections::HashSet::new();
         kraken_no_data.insert(alpaca_fetch_key("ETHUSD", "1Day"));
         kraken_no_data.insert(alpaca_fetch_key("MSFT", "1Day"));
@@ -1188,14 +1235,14 @@ mod tests {
             demand_symbols: vec!["AAPL.EQ".to_string(), "msft".to_string()],
             ws_sweep_symbols: Vec::new(),
             spot_symbols: vec!["BTC/USD".to_string(), "eth/usd".to_string()],
-            futures_symbols: Vec::new(),
+            futures_symbols: vec!["pf_eth/usd".to_string()],
             timeframes: vec!["1Day".to_string()],
             backfill_alpaca_kraken_equities_enabled: false,
             backfill_yahoo_chart_enabled: false,
             kraken_ws_fresh_until: std::collections::HashMap::new(),
             alpaca_backfill_keys: std::collections::HashSet::new(),
             kraken_backfill_keys,
-            kraken_futures_backfill_keys: std::collections::HashSet::new(),
+            kraken_futures_backfill_keys,
             yahoo_chart_backfill_keys: std::collections::HashSet::new(),
             no_data_keys_by_source,
         };
@@ -1222,6 +1269,14 @@ mod tests {
         assert_eq!(securities_d1.settled, 1);
         assert_eq!(securities_d1.empty, 1);
         assert_eq!(securities_d1.unreachable, 1);
+        let futures_d1 = result
+            .rows
+            .iter()
+            .find(|row| row.broker == "Kraken Futures" && row.tf == "1Day")
+            .unwrap();
+        assert_eq!(futures_d1.total, 1);
+        assert_eq!(futures_d1.healthy, 1);
+        assert_eq!(futures_d1.settled, 1);
     }
 
     #[test]
@@ -1363,6 +1418,20 @@ mod tests {
         let source = keys.get("SY:M:1Hour").expect("source key");
         assert!(std::ptr::eq(symbol.as_ptr(), source.as_ptr()));
         assert!(std::ptr::eq(timeframe.as_ptr(), source[5..].as_ptr()));
+    }
+
+    #[test]
+    fn prepared_fetch_symbols_normalize_once_and_reuse_results() {
+        let source = vec!["btc/usd".to_string(), "PF_XBTUSD".to_string()];
+        let prepared = PreparedFetchSymbols::new(&source);
+
+        assert!(!prepared.is_initialized());
+        let btc = prepared.get("btc/usd").expect("prepared spot symbol");
+        assert_eq!(btc, "BTCUSD");
+        assert_eq!(format!("{btc}:1Day"), alpaca_fetch_key("btc/usd", "1Day"));
+        let btc_again = prepared.get("btc/usd").expect("reused spot symbol");
+        assert!(std::ptr::eq(btc.as_ptr(), btc_again.as_ptr()));
+        assert_eq!(prepared.get("PF_XBTUSD"), Some("PF_XBTUSD"));
     }
 
     #[test]

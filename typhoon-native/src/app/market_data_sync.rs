@@ -363,6 +363,7 @@ where
     typhoon_chart_ui::cache_keys::normalize_kraken_equity_symbol_list(symbols)
 }
 
+#[cfg(test)]
 pub(super) fn kraken_equity_native_symbols_for_timeframe(
     catalog_symbols: &[String],
     demand_symbols: &[String],
@@ -397,6 +398,7 @@ pub(super) fn kraken_equity_native_history_symbols(
     normalize_kraken_equity_symbol_list(demand_symbols.iter())
 }
 
+#[cfg(test)]
 pub(super) fn kraken_equity_symbols_for_timeframe(
     catalog_symbols: &[String],
     demand_symbols: &[String],
