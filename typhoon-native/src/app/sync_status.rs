@@ -294,6 +294,40 @@ impl TyphooNApp {
                 });
                 ui.separator();
 
+                // One-glance answer to "have we synced all available data?" — the
+                // deduped reachable gauge (Merged equity union + native Kraken
+                // lanes), so provider-no-data never drags it below 100% the way the
+                // raw per-TF %s do.
+                let avail = compute_available_sync_summary(&rows);
+                let (avail_text, avail_color) = if avail.pending() == 0 {
+                    (
+                        format!(
+                            "✓ All available data synced — 100%  ·  {} cell(s) unavailable (no provider)",
+                            avail.no_data
+                        ),
+                        egui::Color32::from_rgb(26, 188, 156),
+                    )
+                } else {
+                    (
+                        format!(
+                            "Available data: {:.1}% synced  ·  {} reachable cell(s) still to sync  ·  {} unavailable (no-data)",
+                            avail.pct(),
+                            avail.pending(),
+                            avail.no_data
+                        ),
+                        if avail.pct() >= 99.0 {
+                            egui::Color32::from_rgb(26, 188, 156)
+                        } else {
+                            egui::Color32::from_rgb(241, 196, 15)
+                        },
+                    )
+                };
+                ui.label(egui::RichText::new(avail_text).color(avail_color).monospace().strong())
+                    .on_hover_text(
+                        "Available = every bar some enabled lane can actually serve (the deduped Merged equity union plus the native Kraken crypto/futures lanes), excluding provider-no-data cells. 100% here means nothing fillable is left; the raw per-TF %s below stay lower because they also count the un-fillable no-data cells.",
+                    );
+                ui.separator();
+
                 egui::ScrollArea::vertical().id_salt("sync_scroll").auto_shrink(false).show(ui, |ui| {
                     if rows.is_empty() {
                         ui.label(
@@ -303,12 +337,15 @@ impl TyphooNApp {
                         );
                         return;
                     }
-                    egui::Grid::new("sync_grid").striped(true).num_columns(6).min_col_width(60.0).show(ui, |ui| {
+                    egui::Grid::new("sync_grid").striped(true).num_columns(7).min_col_width(56.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("TF").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
                         ui.label(egui::RichText::new("Healthy").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Unhealthy").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Unsynced").color(AXIS_TEXT).small().strong())
+                            .on_hover_text("Reachable but not synced yet: some enabled lane can still fill these. This is the actionable backlog — 0 means the row has every bar any lane can give.");
+                        ui.label(egui::RichText::new("No-data").color(AXIS_TEXT).small().strong())
+                            .on_hover_text("Provider-no-data: no enabled lane serves these (symbol/timeframe), so they can never sync. Excluded from the Available % — they are why the raw % Synced stays below 100%.");
                         ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
                         ui.end_row();
                         for row in rows.iter() {
@@ -333,11 +370,27 @@ impl TyphooNApp {
                                     row.settled
                                 ));
                             }
-                            let unhealthy_response = ui.label(egui::RichText::new(cells.stale_or_empty).color(AXIS_TEXT).small());
-                            if row.stale > 0 || row.empty > 0 {
-                                unhealthy_response.on_hover_text(format!(
-                                    "Unhealthy = stale + empty. Stale: {} cached symbol/timeframe rows have aged beyond the freshness window and need a refresh/check. Empty: {} expected rows have no usable bars cached yet.",
-                                    row.stale, row.empty
+                            let reachable_empty = row.empty.saturating_sub(row.unreachable);
+                            let unsynced_response = ui.label(egui::RichText::new(cells.unsynced).color(AXIS_TEXT).small());
+                            if row.stale > 0 || reachable_empty > 0 {
+                                unsynced_response.on_hover_text(format!(
+                                    "Reachable but not synced yet — some enabled lane can still fill these: {} stale (cached, aged past the freshness window, needs a refresh/check) + {} empty (no usable bars cached yet).",
+                                    row.stale, reachable_empty
+                                ));
+                            }
+                            let no_data_response = ui.label(
+                                egui::RichText::new(cells.no_data)
+                                    .color(if row.unreachable > 0 {
+                                        egui::Color32::from_rgb(150, 150, 150)
+                                    } else {
+                                        AXIS_TEXT
+                                    })
+                                    .small(),
+                            );
+                            if row.unreachable > 0 {
+                                no_data_response.on_hover_text(format!(
+                                    "{} cell(s) every applicable provider has tombstoned as no-data — no enabled lane can serve them, so they can never become healthy. Excluded from the Available % (still counted in the raw % Synced).",
+                                    row.unreachable
                                 ));
                             }
                             let pct_color = if sync_stats_row_is_informational(row) {
@@ -685,10 +738,20 @@ impl BarSyncInputs {
                 || normalize_sync_timeframe_key(&row.tf).is_some_and(|tf| enabled_tfs.contains(tf))
         });
         sort_sync_stats_rows(&mut rows);
+        // Full-tilt gating basis (stored in overall_pct, read by
+        // poll_bar_sync_compute → auto_full_tilt): reachable coverage of the real
+        // provider lanes (exclude Merged, the deduped view, and informational
+        // rows). Reachable — not raw — because provider-no-data cells can never
+        // become healthy, so counting them in the denominator pins the raw % well
+        // below the 99% release threshold and latches full-tilt on forever. On the
+        // reachable basis the gate releases once the fillable backlog is actually
+        // caught up, then re-engages (< 97%) if a real backlog reappears.
         let (total, healthy) = rows
             .iter()
             .filter(|row| row.broker != "Merged" && !sync_stats_row_is_informational(row))
-            .fold((0u64, 0u64), |(t, h), row| (t + row.total, h + row.healthy));
+            .fold((0u64, 0u64), |(t, h), row| {
+                (t + row.total.saturating_sub(row.unreachable), h + row.healthy)
+            });
         let overall_pct = if total == 0 {
             100.0
         } else {
@@ -893,12 +956,21 @@ impl BarSyncInputs {
             {
                 continue;
             }
-            // This source is applicable for (symbol, tf). Track whether it has
-            // permanently tombstoned the cell as no-data so a fully-tombstoned
-            // Empty can be reported Unreachable (excluded from the reachable %).
-            supported_sources += 1;
-            if no_data_contains(source, symbol, tf) {
-                tombstoned_sources += 1;
+            // Reachability accounting: only count a source toward the
+            // supported/tombstoned ratio when it can actually serve (symbol, tf).
+            // Kraken WS v2 delivers no equity OHLC at 15Min–4Hour (see
+            // kraken_equity_ws_intraday_unservable_timeframe), so crediting
+            // kraken-equities there would keep an Alpaca-no-data intraday cell
+            // "reachable" forever and make the Merged reachable % dishonest. The
+            // Healthy check below still runs for every applicable source, so a
+            // rare WS-fresh intraday bar is never mis-reported as unreachable.
+            let counts_for_reachability = !(source == "kraken-equities"
+                && kraken_equity_ws_intraday_unservable_timeframe(tf));
+            if counts_for_reachability {
+                supported_sources += 1;
+                if no_data_contains(source, symbol, tf) {
+                    tombstoned_sources += 1;
+                }
             }
 
             let Some(row) = detailed.get(&(source, symbol, tf)).copied() else {
@@ -1095,7 +1167,7 @@ fn kraken_equities_merged_timeframe_supported(tf: &str) -> bool {
 fn relabel_kraken_equity_intraday_rows(rows: &mut [SyncStatsRow]) {
     for row in rows.iter_mut() {
         if row.broker == "Kraken Equities"
-            && matches!(row.tf.as_str(), "15Min" | "30Min" | "1Hour" | "4Hour")
+            && kraken_equity_ws_intraday_unservable_timeframe(row.tf.as_str())
         {
             row.total = 0;
             row.healthy = 0;
@@ -1277,6 +1349,117 @@ mod tests {
         assert_eq!(futures_d1.total, 1);
         assert_eq!(futures_d1.healthy, 1);
         assert_eq!(futures_d1.settled, 1);
+    }
+
+    #[test]
+    fn merged_intraday_excludes_kraken_equities_but_daily_keeps_it() {
+        // Kraken WS v2 serves no equity OHLC at 15m–4h (only D1/W1 settled + M1/M5
+        // live), so an Alpaca-no-data intraday cell with no other intraday source
+        // must read Unreachable — not falsely reachable via a kraken-equities
+        // source that can never fill it. At D1 kraken-equities is a real source
+        // and still counts, so the same no-data mark leaves the cell reachable.
+        let build = |tf: &str| -> BarSyncInputs {
+            let mut alpaca_no_data = std::collections::HashSet::new();
+            alpaca_no_data.insert(alpaca_fetch_key("WOK", tf));
+            let mut no_data_keys_by_source = std::collections::HashMap::new();
+            no_data_keys_by_source.insert("alpaca".to_string(), alpaca_no_data);
+            BarSyncInputs {
+                detailed_stats: Vec::new(),
+                bar_ts_cache: std::collections::HashMap::new(),
+                cache_stats_present: true,
+                catalog_symbol_count: 1,
+                catalog_symbols: vec!["WOK.EQ".to_string()],
+                demand_symbols: Vec::new(),
+                ws_sweep_symbols: Vec::new(),
+                spot_symbols: Vec::new(),
+                futures_symbols: Vec::new(),
+                timeframes: vec![tf.to_string()],
+                backfill_alpaca_kraken_equities_enabled: true,
+                backfill_yahoo_chart_enabled: false,
+                kraken_ws_fresh_until: std::collections::HashMap::new(),
+                alpaca_backfill_keys: std::collections::HashSet::new(),
+                kraken_backfill_keys: std::collections::HashSet::new(),
+                kraken_futures_backfill_keys: std::collections::HashSet::new(),
+                yahoo_chart_backfill_keys: std::collections::HashSet::new(),
+                no_data_keys_by_source,
+            }
+        };
+
+        let merged = |result: &BarSyncResult, tf: &str| -> SyncStatsRow {
+            result
+                .rows
+                .iter()
+                .find(|row| row.broker == "Merged" && row.tf == tf)
+                .unwrap_or_else(|| panic!("merged {tf} row"))
+                .clone()
+        };
+
+        let intraday = build("15Min").compute();
+        let merged_15m = merged(&intraday, "15Min");
+        assert_eq!(merged_15m.total, 1);
+        assert_eq!(
+            merged_15m.unreachable, 1,
+            "Alpaca-no-data 15Min xStock has no intraday source → Unreachable: {merged_15m:?}"
+        );
+
+        let daily = build("1Day").compute();
+        let merged_1d = merged(&daily, "1Day");
+        assert_eq!(merged_1d.total, 1);
+        assert_eq!(
+            merged_1d.unreachable, 0,
+            "kraken-equities remains a valid D1 source → cell stays reachable: {merged_1d:?}"
+        );
+    }
+
+    #[test]
+    fn overall_pct_uses_reachable_basis_so_no_data_never_pins_full_tilt() {
+        // Native Kraken Equities 1Day with one settled (healthy) symbol and one
+        // provider-no-data (unreachable) symbol. Raw coverage would be 50% — below
+        // the 99% full-tilt release threshold, so the scheduler would stay pinned
+        // at full tilt forever. On the reachable basis the no-data cell drops out
+        // of the denominator, overall_pct is 100%, and full-tilt can stand down.
+        let mut kraken_no_data = std::collections::HashSet::new();
+        kraken_no_data.insert(alpaca_fetch_key("WOK", "1Day"));
+        let mut no_data_keys_by_source = std::collections::HashMap::new();
+        no_data_keys_by_source.insert("kraken-equities".to_string(), kraken_no_data);
+        let mut kraken_backfill_keys = std::collections::HashSet::new();
+        kraken_backfill_keys.insert(alpaca_fetch_key("AAPL", "1Day"));
+
+        let inputs = BarSyncInputs {
+            detailed_stats: Vec::new(),
+            bar_ts_cache: std::collections::HashMap::new(),
+            cache_stats_present: true,
+            catalog_symbol_count: 0,
+            catalog_symbols: Vec::new(),
+            demand_symbols: vec!["AAPL.EQ".to_string(), "WOK.EQ".to_string()],
+            ws_sweep_symbols: Vec::new(),
+            spot_symbols: Vec::new(),
+            futures_symbols: Vec::new(),
+            timeframes: vec!["1Day".to_string()],
+            backfill_alpaca_kraken_equities_enabled: false,
+            backfill_yahoo_chart_enabled: false,
+            kraken_ws_fresh_until: std::collections::HashMap::new(),
+            alpaca_backfill_keys: std::collections::HashSet::new(),
+            kraken_backfill_keys,
+            kraken_futures_backfill_keys: std::collections::HashSet::new(),
+            yahoo_chart_backfill_keys: std::collections::HashSet::new(),
+            no_data_keys_by_source,
+        };
+
+        let result = inputs.compute();
+        let equities = result
+            .rows
+            .iter()
+            .find(|row| row.broker == "Kraken Equities" && row.tf == "1Day")
+            .expect("kraken equities 1Day row");
+        assert_eq!(equities.healthy, 1);
+        assert_eq!(equities.unreachable, 1);
+        // Raw would be 1/2 = 50%; reachable excludes the no-data cell → 1/1 = 100%.
+        assert!(
+            (result.overall_pct - 100.0).abs() < f32::EPSILON,
+            "overall_pct should be reachable-based (100%), got {}",
+            result.overall_pct
+        );
     }
 
     #[test]

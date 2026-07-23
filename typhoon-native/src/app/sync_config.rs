@@ -136,6 +136,18 @@ pub(super) fn kraken_equity_broad_fallback_timeframe(tf: &str) -> bool {
     )
 }
 
+/// Timeframes where Kraken's WS v2 returns no usable xStock/equity OHLC. Kraken
+/// serves equity OHLC at D1/W1 (settled) and M1/M5 (live) only; the 15Min–4Hour
+/// middle band repeatedly returns no bars even for tokenized xStocks, so a
+/// native "Kraken Equities" intraday row can never become fresh (this is the
+/// set zeroed by `relabel_kraken_equity_intraday_rows`). It is also why
+/// kraken-equities must not be credited as a Merged *reachability* source at
+/// these TFs — otherwise an Alpaca-no-data intraday cell that no enabled lane
+/// can fill stays falsely "reachable" forever.
+pub(super) fn kraken_equity_ws_intraday_unservable_timeframe(tf: &str) -> bool {
+    matches!(tf, "15Min" | "30Min" | "1Hour" | "4Hour")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

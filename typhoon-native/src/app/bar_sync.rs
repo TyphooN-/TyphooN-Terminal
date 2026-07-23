@@ -232,7 +232,13 @@ pub(super) fn sort_sync_stats_rows(rows: &mut [SyncStatsRow]) {
 pub(super) struct SyncStatsRowStatusCells {
     pub(super) symbols: String,
     pub(super) healthy: String,
-    pub(super) stale_or_empty: String,
+    /// Reachable-but-unhealthy: `stale + empty` minus provider-no-data. Some
+    /// enabled lane can still fill these, so this is the actionable "not synced
+    /// yet" count — 0 means the row has all the data any lane can give.
+    pub(super) unsynced: String,
+    /// Provider-no-data (unreachable): no enabled lane serves these, so they can
+    /// never become healthy and are excluded from the Available %.
+    pub(super) no_data: String,
     pub(super) settled: String,
     pub(super) note: String,
 }
@@ -242,15 +248,23 @@ pub(super) fn sync_stats_row_status_cells(row: &SyncStatsRow) -> SyncStatsRowSta
         return SyncStatsRowStatusCells {
             symbols: row.total.to_string(),
             healthy: "—".to_string(),
-            stale_or_empty: "—".to_string(),
+            unsynced: "—".to_string(),
+            no_data: "—".to_string(),
             settled: "—".to_string(),
             note: row.note.clone().unwrap_or_default(),
         };
     }
+    // Unhealthy = stale + empty; `unreachable` is a subset of it (provider-no-data
+    // rows land in `empty`). Split it so the grid separates the actionable backlog
+    // from the un-fillable tail. `.min` guards against any inconsistency rather
+    // than risk an unsigned underflow.
+    let unhealthy = row.stale + row.empty;
+    let no_data = row.unreachable.min(unhealthy);
     SyncStatsRowStatusCells {
         symbols: row.total.to_string(),
         healthy: row.healthy.to_string(),
-        stale_or_empty: (row.stale + row.empty).to_string(),
+        unsynced: (unhealthy - no_data).to_string(),
+        no_data: no_data.to_string(),
         settled: row.settled.to_string(),
         note: row.note.clone().unwrap_or_default(),
     }
@@ -303,6 +317,48 @@ pub(super) fn compute_bar_sync_broker_totals(rows: &[SyncStatsRow]) -> Vec<BarSy
         out.push((broker, total, healthy, pct));
     }
     out
+}
+
+/// The deduped "have we synced all *available* data?" gauge for the Sync Status
+/// headline. Sums the Merged equity/xStock union plus the native Kraken crypto
+/// and futures lanes (Alpaca and Yahoo are already folded into Merged, so
+/// counting their rows again would double-count) on the reachable basis —
+/// provider-no-data cells are excluded because no lane can ever fill them.
+/// `pending() == 0` ⇔ 100% of obtainable data is in.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct AvailableSyncSummary {
+    pub(super) reachable_total: u64,
+    pub(super) healthy: u64,
+    pub(super) no_data: u64,
+}
+
+impl AvailableSyncSummary {
+    pub(super) fn pending(&self) -> u64 {
+        self.reachable_total.saturating_sub(self.healthy)
+    }
+
+    pub(super) fn pct(&self) -> f32 {
+        if self.reachable_total == 0 {
+            100.0
+        } else {
+            (self.healthy as f32 / self.reachable_total as f32) * 100.0
+        }
+    }
+}
+
+pub(super) fn compute_available_sync_summary(rows: &[SyncStatsRow]) -> AvailableSyncSummary {
+    const LANES: [&str; 3] = ["Merged", "Kraken Spot", "Kraken Futures"];
+    let mut summary = AvailableSyncSummary::default();
+    for row in rows {
+        if sync_stats_row_is_informational(row) || !LANES.contains(&row.broker.as_str()) {
+            continue;
+        }
+        let no_data = row.unreachable.min(row.total);
+        summary.reachable_total += row.total - no_data;
+        summary.healthy += row.healthy;
+        summary.no_data += no_data;
+    }
+    summary
 }
 
 pub(super) fn sync_stats_row_is_informational(row: &SyncStatsRow) -> bool {
@@ -551,7 +607,8 @@ mod tests {
         let cells = sync_stats_row_status_cells(&catalog_row);
         assert_eq!(cells.symbols, "12721");
         assert_eq!(cells.healthy, "—");
-        assert_eq!(cells.stale_or_empty, "—");
+        assert_eq!(cells.unsynced, "—");
+        assert_eq!(cells.no_data, "—");
     }
 
     #[test]
@@ -643,8 +700,68 @@ mod tests {
         let cells = sync_stats_row_status_cells(&row);
         assert_eq!(cells.symbols, "3");
         assert_eq!(cells.healthy, "1");
-        assert_eq!(cells.stale_or_empty, "2");
+        assert_eq!(cells.unsynced, "2");
+        assert_eq!(cells.no_data, "0");
         assert_eq!(cells.settled, "7");
         assert_eq!(cells.note, "provider lane note");
+    }
+
+    #[test]
+    fn status_cells_split_unhealthy_into_unsynced_and_no_data() {
+        let row = SyncStatsRow {
+            broker: "Merged".into(),
+            tf: "15Min".into(),
+            total: 10,
+            healthy: 4,
+            stale: 1,
+            empty: 5, // includes the 3 unreachable below
+            settled: 0,
+            unreachable: 3,
+            note: None,
+            pct_healthy: 40.0,
+        };
+        let cells = sync_stats_row_status_cells(&row);
+        // Unhealthy = stale(1) + empty(5) = 6; no-data = unreachable(3);
+        // unsynced = reachable remainder = 6 - 3 = 3.
+        assert_eq!(cells.unsynced, "3");
+        assert_eq!(cells.no_data, "3");
+    }
+
+    #[test]
+    fn available_sync_summary_dedupes_merged_and_crypto_and_excludes_no_data() {
+        let row = |broker: &str, total, healthy, unreachable| SyncStatsRow {
+            broker: broker.into(),
+            tf: "15Min".into(),
+            total,
+            healthy,
+            stale: 0,
+            empty: total - healthy,
+            settled: 0,
+            unreachable,
+            note: None,
+            pct_healthy: 0.0,
+        };
+        let rows = vec![
+            row("Merged", 100, 40, 55),
+            row("Kraken Spot", 10, 9, 0),
+            // Alpaca/Yahoo are folded into Merged — must NOT be counted again.
+            row("Alpaca", 100, 40, 55),
+            row("Yahoo", 100, 40, 55),
+            SyncStatsRow {
+                broker: "Kraken Equities (Tradable)".into(),
+                tf: "Catalog".into(),
+                total: 9999,
+                healthy: 9999,
+                note: Some("catalog".into()),
+                ..Default::default()
+            },
+        ];
+        let s = compute_available_sync_summary(&rows);
+        // Reachable = Merged (100-55=45) + Kraken Spot (10) = 55; healthy = 49.
+        assert_eq!(s.reachable_total, 55);
+        assert_eq!(s.healthy, 49);
+        assert_eq!(s.no_data, 55);
+        assert_eq!(s.pending(), 6);
+        assert!((s.pct() - (49.0 / 55.0 * 100.0)).abs() < 0.01);
     }
 }
