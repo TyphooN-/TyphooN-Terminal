@@ -76,11 +76,13 @@ impl TyphooNApp {
                         }
                     });
                     ui.separator();
-                    // Messages
+                    // Messages — fill available height, leaving room for the input row below, so
+                    // the message list grows with the window instead of being pinned to 350px.
+                    let msg_h = (ui.available_height() - 48.0).max(80.0);
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .stick_to_bottom(true)
-                        .max_height(350.0)
+                        .max_height(msg_h)
                         .show(ui, |ui| {
                             if self.matrix_messages.is_empty() {
                                 ui.vertical_centered(|ui| {

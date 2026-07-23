@@ -20,9 +20,9 @@ impl TyphooNApp {
                                     .color(AXIS_TEXT),
                             );
                             ui.separator();
+                            // Fill the window's remaining height so enlarging the window shows more objects.
                             egui::ScrollArea::vertical()
                                 .auto_shrink(false)
-                                .max_height(250.0)
                                 .show(ui, |ui| {
                                     egui::Grid::new("object_list_grid").striped(true).show(
                                         ui,

@@ -90,9 +90,9 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Complete").color(UP).small().strong());
                         }
                     });
+                    // Fill the window's remaining height so enlarging the window shows more log lines.
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
-                        .max_height(180.0)
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             for msg in &self.bardata_log {

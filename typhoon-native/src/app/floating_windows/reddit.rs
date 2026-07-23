@@ -19,9 +19,9 @@ impl TyphooNApp {
                         }
                     });
                     ui.separator();
+                    // Fill the window's remaining height so enlarging the window shows more posts.
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
-                        .max_height(340.0)
                         .show(ui, |ui| {
                             for (title, _url, score, comments) in &self.reddit_posts {
                                 ui.horizontal(|ui| {

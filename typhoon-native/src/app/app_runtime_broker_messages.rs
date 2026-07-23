@@ -85,8 +85,11 @@ impl TyphooNApp {
                 BrokerMsg::KrakenOrderbookUpdate(text) => {
                     let was_empty = self.orderbook_result.is_empty();
                     self.orderbook_result = text.clone();
-                    self.show_orderbook_window = true;
+                    // Only auto-open on the FIRST update of a stream. Forcing it open on every
+                    // depth tick made the window immediately reopen after the user closed it
+                    // (the stream pushes many updates per second).
                     if was_empty {
+                        self.show_orderbook_window = true;
                         self.log
                             .push_back(LogEntry::info("Kraken orderbook WS: live depth streaming"));
                     }

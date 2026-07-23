@@ -479,7 +479,7 @@ impl TyphooNApp {
             let mut bookmap_symbol_to_open: Option<String> = None;
             egui::Window::new("Orderbook DOM")
                         .open(&mut self.show_orderbook_window)
-                        .resizable(true).default_size([360.0, 420.0])
+                        .resizable(true).default_size([440.0, 720.0])
                         .show(ctx, |ui| {
                             let ob_bid = egui::Color32::from_rgb(0, 200, 80);
                             let ob_ask = egui::Color32::from_rgb(220, 50, 50);
@@ -697,22 +697,29 @@ impl TyphooNApp {
                                 let max_sz = bids.iter().chain(asks.iter())
                                     .map(|e| level_size(e))
                                     .fold(0.0_f64, f64::max).max(1.0);
-                                let avail_w = ui.available_width().min(320.0);
+                                // Depth bars scale with the full window width (no fixed 320px cap)
+                                // so widening the DOM widens the volume bars. Reserve room for the
+                                // price (left) and size/cumulative (right) labels so they never clip.
+                                let bar_w = (ui.available_width() - 200.0).clamp(24.0, 1600.0);
+                                // Show more price levels as the window grows taller (was a fixed 25).
+                                let visible_levels = self.dom_depth.clamp(30, 200);
 
                                 // cumulative for richer view
                                 let mut cum_bid = 0.0f64;
                                 let mut cum_ask = 0.0f64;
 
-                                egui::ScrollArea::vertical().auto_shrink(false).max_height(340.0).show(ui, |ui| {
+                                // No fixed max_height: the ladder fills the window's remaining height
+                                // and scrolls internally, so enlarging the window shows more depth.
+                                egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                                     ui.label(egui::RichText::new("Asks (sell side) — richer L2").color(ob_ask).small().strong());
-                                    for ask in asks.iter().rev().take(25) {
+                                    for ask in asks.iter().rev().take(visible_levels) {
                                         let price = level_price(ask);
                                         let size  = level_size(ask);
                                         cum_ask += size;
                                         let frac  = (size / max_sz) as f32;
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(format_price(price)).monospace().small().color(ob_ask));
-                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 140.0, 10.0), egui::Sense::hover());
+                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, 10.0), egui::Sense::hover());
                                             ui.painter_at(rect).rect_filled(
                                                 egui::Rect::from_min_size(rect.min, egui::vec2(frac * rect.width(), 10.0)),
                                                 0.0, egui::Color32::from_rgba_premultiplied(200, 40, 40, 120));
@@ -721,14 +728,14 @@ impl TyphooNApp {
                                     }
                                     ui.separator();
                                     ui.label(egui::RichText::new("Bids (buy side) — richer L2").color(ob_bid).small().strong());
-                                    for bid in bids.iter().take(25) {
+                                    for bid in bids.iter().take(visible_levels) {
                                         let price = level_price(bid);
                                         let size  = level_size(bid);
                                         cum_bid += size;
                                         let frac  = (size / max_sz) as f32;
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(format_price(price)).monospace().small().color(ob_bid));
-                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 140.0, 10.0), egui::Sense::hover());
+                                            let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, 10.0), egui::Sense::hover());
                                             ui.painter_at(rect).rect_filled(
                                                 egui::Rect::from_min_size(rect.min, egui::vec2(frac * rect.width(), 10.0)),
                                                 0.0, egui::Color32::from_rgba_premultiplied(0, 180, 60, 120));

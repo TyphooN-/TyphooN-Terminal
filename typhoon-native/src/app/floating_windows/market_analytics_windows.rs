@@ -387,7 +387,8 @@ impl TyphooNApp {
                                 if let Ok(expirations) = serde_json::from_str::<serde_json::Value>(&json) {
                                     if let Some(arr) = expirations.as_array() {
                                         ui.label(egui::RichText::new(format!("{} expirations", arr.len())).small());
-                                        egui::ScrollArea::vertical().auto_shrink(false).max_height(360.0).show(ui, |ui| {
+                                        // Fill remaining height so enlarging the window shows more expirations.
+                                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                                             for exp in arr.iter() {
                                                 let date = exp["expiration_date"].as_str().unwrap_or("?");
                                                 let strikes = exp["strikes"].as_array();
