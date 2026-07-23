@@ -1,28 +1,7 @@
-# cargo-audit configuration — documented advisory acceptances only.
-# Every entry must say WHY it is safe to defer and WHEN to revisit.
+# cargo-audit configuration — advisory acceptances are exceptional.
+# Any future entry must say WHY it is safe to defer and WHEN to revisit.
 
 [advisories]
-ignore = [
-    # RUSTSEC-2026-0194 + RUSTSEC-2026-0195: quick-xml < 0.41 (quadratic dup-attr
-    # scan / unbounded NsReader namespace allocation). Reached only through
-    # wayland-scanner 0.31.10, a build-time code generator that parses the
-    # vendored Wayland protocol XML shipped inside wayland-protocols crates;
-    # quick-xml is never linked into the runtime binary. wayland-scanner (latest
-    # published) pins quick-xml ^0.39, so no semver-compatible fix exists yet;
-    # git master is only on 0.40 (still vulnerable), and no pre-release exists.
-    # The fix is in flight upstream: https://github.com/Smithay/wayland-rs/pull/938
-    # ("wayland-scanner: Bump quick-xml dependency to 0.41", open 2026-07).
-    # Deliberately NOT patching to that unmerged fork branch — pulling
-    # unreviewed third-party code onto the build path is a worse supply-chain
-    # posture than this build-time-only acceptance.
-    # Master-tracking was canary-tested (2026-07-03, scratch worktree): a
-    # [patch] of wayland-scanner to Smithay master does not even build — the
-    # master scanner emits codegen for unreleased wayland-backend symbols
-    # (CWlMessage/CWlInterface), so following master would mean running the
-    # ENTIRE unreleased wayland stack. Upstream releases the workspace as a
-    # coherent set, so the eventual release lands via plain `cargo update`.
-    # Revisit: drop these entries when #938 merges and a wayland-scanner
-    # release ships (check `cargo audit` after egui/winit stack bumps).
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-]
+# No accepted advisories. wayland-scanner 0.31.11 moved its build-time parser
+# to quick-xml 0.41, closing RUSTSEC-2026-0194/0195 on 2026-07-22.
+ignore = []

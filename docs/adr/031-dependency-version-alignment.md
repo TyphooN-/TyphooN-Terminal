@@ -480,3 +480,56 @@ Security-first initiative verification pass after Claude-assisted centralization
 
 Policy re-confirmed with zero edits required. Future "latest" sweeps remain one-place (workspace table) + documented non-upgrades.
 
+## Upstream deduplication and advisory closure (2026-07-22)
+
+A fresh security-first upstream pass did not trust `cargo update --workspace`
+reporting `Locking 0 packages`: every one of its 42 reported newer packages was
+probed serially with a targeted precise dry run. Thirty-eight were individually
+compatible. Re-resolution then exposed four more compatible releases. The
+lockfile now carries the complete compatible refresh, including:
+
+- TLS/network/runtime: `aws-lc-rs` 1.17.1 → 1.17.3 (`aws-lc-sys` 0.42 →
+  0.43), `rustls` 0.23.41 → 0.23.42, futures 0.3.32 → 0.3.33,
+  `http-body` 1.0.1 → 1.1.0, `http-body-util` 0.1.3 → 0.1.4, `hyper`
+  1.10.1 → 1.11.0, `mio` 1.2.1 → 1.2.2, and `socket2` 0.6.4 → 0.6.5.
+- Parser/proc-macro/tooling: pest family 2.8.7 → 2.8.8, `proc-macro2`
+  1.0.106 → 1.0.107, `quote` 1.0.46 → 1.0.47, `syn` 2.0.118 →
+  2.0.119, `toml_edit` 0.25.12 → 0.25.13, `winnow` 1.0.3 → 1.0.4,
+  and `foreign-types-macros` 0.2.3 → 0.2.4.
+- Platform/data/crypto patches: `bitflags`, `cc`, `cfg_aliases`, `fastrand`,
+  `libc`, `polyval`, `portable-atomic`, `self_cell`, `simd-adler32`,
+  `simd_cesu8`, `time`/`time-macros`, `tokio-macros`, `uuid`, both
+  webpki root packages, `zerocopy`/derive, and `zmij` moved to their latest
+  compatible releases.
+- Wayland moved coherently: `wayland-backend` 0.3.15 → 0.3.16,
+  `wayland-client` 0.31.14 → 0.31.15, and `wayland-scanner` 0.31.10 →
+  0.31.11. This advances quick-xml 0.39.4 → 0.41.0 and closes the two
+  previously accepted build-time advisories (RUSTSEC-2026-0194/0195).
+
+Resolved packages fell **551 → 550** and extra versions fell **44 → 43**:
+the Wayland/platform refresh removed `windows-sys 0.59`, leaving only 0.52
+(winit/ring/glutin compatibility) and current 0.61. The final graph has 507
+unique names and 40 duplicate families. Every family was traced through Cargo
+metadata reverse edges. None is direct TyphooN drift or locally removable
+without dropping supported behavior or downgrading current security lines:
+
+- latest Secret Service still owns RustCrypto 0.10-era aes/cipher/digest/hmac/
+  sha2, while TyphooN uses current RustCrypto 0.11;
+- winit 0.30 and clipboard/UI owners span Smithay/calloop, ObjC, CoreFoundation,
+  rustix, and thiserror generations;
+- independent GPU, HTML/mime, TLS, SQLite, and target-support owners retain
+  their hashbrown/phf/getrandom/rand/bitflags/platform generations;
+- syn 3 is used by current async-trait/serde/thiserror/foreign-types derives,
+  while other current proc macros remain on syn 2.
+
+Forty-four direct crate headlines were checked against crates.io. Stable direct
+requirements are current; rustls 0.24 is prerelease only. The final compatible
+dry run reports only the two established holds: `generic-array 0.14.7` is
+exact-pinned by `crypto-common 0.1.7` under the latest Secret Service backend,
+and wgpu 30 cannot move independently of eframe/egui-wgpu 0.35's wgpu 29 type
+universe. Manifest drift remains clean and direct feature policy did not widen.
+
+Validation: `cargo check --workspace --all-targets` is warning-free; the full
+workspace suite passes 2,575 tests with 6 ignored; `cargo audit` is clean with
+no ignores; the manifest drift scan and `git diff --check` pass.
+

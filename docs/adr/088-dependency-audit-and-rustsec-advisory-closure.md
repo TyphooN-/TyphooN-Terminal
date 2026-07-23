@@ -358,3 +358,29 @@ Verification pass post centralization/refresh (companion to ADR-031):
 
 See ADR-031 for detailed command output and policy restatement.
 
+## Advisory closure and upstream deduplication (2026-07-22)
+
+The upstream re-comb closed the last accepted advisories rather than renewing
+their exception. `wayland-scanner` 0.31.11 now depends on quick-xml 0.41, which
+fixes RUSTSEC-2026-0194 and RUSTSEC-2026-0195. `.cargo/audit.toml` therefore has
+an empty ignore list, and `cargo audit` scans all 550 resolved packages with no
+vulnerability, warning, or accepted finding.
+
+Serial precise probes found and applied 42 compatible package refreshes that
+the initial workspace-wide dry run left unchanged. Besides current security and
+bug-fix levels across TLS, HTTP, async runtime, parser, crypto, and platform
+support, the coherent Wayland refresh removed the `windows-sys 0.59` line.
+Resolved package count fell 551 → 550; 507 names remain, with 40 upstream-owned
+duplicate families / 43 extra versions. Metadata reverse-edge tracing found no
+direct workspace split and no safe local unification missed by this pass.
+
+The only remaining update holds are non-advisory ecosystem constraints:
+`generic-array 0.14.7` is exact-pinned by the latest Secret Service backend's
+old RustCrypto line, and wgpu 29 must remain paired with eframe/egui-wgpu 0.35.
+No direct feature was widened and the manifest drift check remains clean. See
+the companion ADR-031 entry for the complete update and duplicate-owner groups.
+
+Validation: warning-free all-target workspace check, 2,575 passed / 0 failed /
+6 ignored, clean unignored `cargo audit`, clean manifest drift scan, and clean
+diff validation.
+
