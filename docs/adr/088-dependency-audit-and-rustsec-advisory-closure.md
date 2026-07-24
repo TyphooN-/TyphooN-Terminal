@@ -384,3 +384,19 @@ Validation: warning-free all-target workspace check, 2,575 passed / 0 failed /
 6 ignored, clean unignored `cargo audit`, clean manifest drift scan, and clean
 diff validation.
 
+
+## 2026-07-24 advisory re-check
+
+`cargo audit` is clean across 550 crates against a 1,169-advisory database,
+with `.cargo/audit.toml` still carrying `ignore = []` — no accepted advisories
+of any kind. `cargo audit --deny warnings` is also clean, which is the stronger
+statement: the tree carries no *informational* advisories either (no
+unmaintained, unsound, or yanked crates). `cargo deny check advisories` and
+`cargo deny check bans` both pass.
+
+One lockfile-only refresh landed (`rustls-pki-types` 1.15.0 → 1.15.1) and one
+new non-advisory hold was recorded (`base64` 0.22 vs 0.23 — a dedup hold, the
+HTTP stack still requires 0.22). Both are detailed in ADR-031. The vendored
+`eframe` fork stays at upstream 0.35.0 — the local patch is confined to the
+four `src/native/*` files listed in `vendor/eframe/README.md` and carries no
+dependency delta, so it inherits upstream's advisory posture.

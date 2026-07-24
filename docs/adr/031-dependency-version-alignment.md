@@ -533,3 +533,42 @@ Validation: `cargo check --workspace --all-targets` is warning-free; the full
 workspace suite passes 2,575 tests with 6 ignored; `cargo audit` is clean with
 no ignores; the manifest drift scan and `git diff --check` pass.
 
+
+## 2026-07-24 comb-over — one lockfile refresh, one new documented hold
+
+Re-verified every direct requirement against crates.io and re-ran the audit
+gates. Findings:
+
+- **`rustls-pki-types` 1.15.0 → 1.15.1** (lockfile-only, targeted
+  `cargo update -p rustls-pki-types`). This is the only in-range upgrade the
+  tree was behind on. Deliberately targeted rather than a blanket
+  `cargo update`: the blanket run also wanted to add `windows-sys` 0.59 **and**
+  0.60 plus eleven `windows-*` target crates alongside the existing 0.52/0.61,
+  which trades a patch bump for four concurrent Windows binding generations in
+  the lockfile. The targeted update leaves the crate count unchanged at 550.
+- **New hold — `base64` 0.22.1 (0.23.0 available).** `base64` is a single
+  import site (`typhoon-engine/src/broker/kraken/mod.rs`, the `AddOrder`
+  signer), but `hyper-util`, `reqwest`, and `ureq`/`ehttp`/`egui_extras` all
+  still require 0.22. Moving TyphooN's direct requirement alone would put two
+  `base64` majors in the tree for no security benefit — there is no advisory on
+  0.22.1. Revisit when the HTTP stack moves. Note 0.23 also adds a
+  `simd-unsafe` **default** feature; whenever this hold lifts, the existing
+  `default-features = false, features = ["alloc"]` posture must be kept so the
+  new unsafe SIMD path stays off.
+- **Existing holds unchanged.** `wgpu` 29.0.4 (eframe/egui-wgpu 0.35 pins the
+  wgpu 29 type universe; 30 cannot move independently) and `generic-array`
+  0.14.7 (exact-pinned by `crypto-common 0.1.7` under the latest
+  `dbus-secret-service-keyring-store`). `rustls` 0.24 remains prerelease
+  (`0.24.0-dev.1`) — not a candidate.
+- **Duplicate families re-traced, no direct drift.** Every duplicate resolves
+  to an upstream owner: the RustCrypto 0.10-era `aes`/`cipher`/`digest`/
+  `hmac`/`sha2`/`block-buffer` set comes in through
+  `dbus-secret-service`, and the `calloop`/`smithay-client-toolkit`/`rustix`/
+  `thiserror` 1-vs-2 split comes in through `winit` 0.30. No TyphooN manifest
+  contributes a second version of anything.
+
+Gates: `cargo audit` clean over 550 crates with `ignore = []` (no accepted
+advisories — the 2026-07-22 `quick-xml` 0.41 move closed
+RUSTSEC-2026-0194/0195 and nothing has re-opened); `cargo audit --deny warnings`
+also clean, so there are no unmaintained/unsound informational advisories in the
+tree; `cargo deny check advisories` and `cargo deny check bans` both pass.
