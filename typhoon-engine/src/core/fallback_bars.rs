@@ -168,8 +168,12 @@ fn yahoo_expected_granularity(timeframe: &str) -> Option<&'static str> {
 
 pub fn yahoo_chart_provider_no_data_error(error: &str) -> bool {
     let e = error.to_lowercase();
-    if e.contains("rate limited") || e.contains("429") || e.contains("too many") || e.contains("throttl") {
-        return false;  // transient; let backoff / Error path handle it
+    if e.contains("rate limited")
+        || e.contains("429")
+        || e.contains("too many")
+        || e.contains("throttl")
+    {
+        return false; // transient; let backoff / Error path handle it
     }
     e.contains("http 400")
         || e.contains("http 404")
@@ -212,7 +216,9 @@ async fn _fetch_yahoo_chart_bars_internal(
         .map_err(|e| format!("Yahoo Chart request failed for {symbol} {timeframe}: {e}"))?;
     let status = resp.status();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return Err(format!("Yahoo Chart rate limited (429) for {symbol} {timeframe}"));
+        return Err(format!(
+            "Yahoo Chart rate limited (429) for {symbol} {timeframe}"
+        ));
     }
     if !status.is_success() {
         return Err(format!(
@@ -225,16 +231,18 @@ async fn _fetch_yahoo_chart_bars_internal(
         .map_err(|e| format!("Yahoo Chart read body failed for {symbol} {timeframe}: {e}"))?;
     let body_text = String::from_utf8_lossy(&body_bytes).to_string();
     let lower = body_text.to_lowercase();
-    if lower.contains("too many requests") || lower.contains("rate limit") || lower.contains("throttl") {
+    if lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("throttl")
+    {
         return Err(format!("Yahoo Chart rate limited for {symbol} {timeframe}"));
     }
-    let root: serde_json::Value = serde_json::from_str(&body_text)
-        .map_err(|e| {
-            let preview: String = body_text.chars().take(400).collect();
-            format!(
-                "Yahoo Chart JSON parse failed for {symbol} {timeframe}: {e}; body preview: {preview}"
-            )
-        })?;
+    let root: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
+        let preview: String = body_text.chars().take(400).collect();
+        format!(
+            "Yahoo Chart JSON parse failed for {symbol} {timeframe}: {e}; body preview: {preview}"
+        )
+    })?;
     if let Some(err) = root["chart"]["error"].as_object() {
         return Err(format!(
             "Yahoo Chart error for {symbol} {timeframe}: {err:?}"
