@@ -798,6 +798,27 @@ fn parse_stock_bars_by_symbol_batch_valid() {
 }
 
 #[test]
+fn parse_stock_bars_by_symbol_handles_non_array_symbol_payload() {
+    // The batch parser hands each symbol's bar array straight to
+    // `parse_bars_array` instead of rebuilding a `json!({"bars": bars})`
+    // wrapper (that wrapper deep-cloned each symbol's bar subtree).
+    // A malformed non-array payload used to round-trip through the wrapper and
+    // land as an empty Vec; keep that entry-always behaviour so the batch task's
+    // `remove(symbol).unwrap_or_default()` sees no change.
+    let json = json!({
+        "bars": {
+            "AAPL": [{"t":"2024-01-02T00:00:00Z","o":100.0,"h":110.0,"l":99.0,"c":105.0,"v":1000.0}],
+            "MSFT": "not-an-array"
+        }
+    });
+    let symbols = vec!["AAPL".to_string(), "MSFT".to_string()];
+    let bars = AlpacaBroker::parse_stock_bars_by_symbol(&json, &symbols);
+    assert_eq!(bars["AAPL"].len(), 1);
+    assert!(bars.contains_key("MSFT"), "malformed symbol keeps its entry");
+    assert!(bars["MSFT"].is_empty());
+}
+
+#[test]
 fn normalize_stock_batch_symbols_dedupes_with_constant_time_membership() {
     let symbols = vec![
         " aapl ".to_string(),

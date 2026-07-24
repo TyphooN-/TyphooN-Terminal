@@ -267,3 +267,56 @@ The performance contract is unchanged: do not shrink the Kraken Spot/Securities/
   watchlist nested scan. Previous-close axis coloring reads the maintained
   provider `ChartState::prev_daily_close` or its full-recompute bar fallback
   instead of scanning bar history per frame.
+
+## Update 2026-07-24 — broad-sync RSS spikes: what is measured, what is not
+
+Overnight heartbeats showed RSS oscillating between a ~3 GB baseline and
+10–15 GB peaks (`pending_fetches=223 heavy_sync=true rss_mb=14963`), correlating
+with 1,600–2,200 cell/min Alpaca bursts every ~15 minutes. Nothing was
+malfunctioning — but the spikes were also entirely unpoliced, and only part of
+them is explained. Recording both halves so this is not re-derived.
+
+**Measured.** A representative Alpaca batch page (10,000 bars across a
+50-symbol chunk, the real 1Day chunk size) was parsed under an RSS probe:
+
+| Stage | Resident |
+| --- | --- |
+| Raw JSON wire body | 1.0 MB |
+| Parsed `serde_json::Value` | 9.1 MB |
+
+A **~9x amplification over the wire bytes**, held live by every in-flight batch
+fetch while it parses. This is the largest known transient in the broad-sync
+path and the obvious target: typed `serde` deserialization straight into
+`Vec<Bar>` would remove the intermediate `Value` entirely. Not done here.
+
+**Fixed here.** `parse_stock_bars_by_symbol` rebuilt a
+`json!({ "bars": bars })` wrapper per symbol just to satisfy `parse_bars`'
+shape — a deep clone of each symbol's bar subtree. `parse_bars_array` now takes
+the located slice directly. Note the honest scale: an initial probe suggested
+this doubled the page (+9.2 MB), but that probe *retained* every wrapper. The
+real code drops each one per iteration, so the A/B difference is **~0.2 MB
+peak** — the true cost is ~50 clone/free cycles of ~180 KB per page per
+in-flight batch. Worth removing, not a smoking gun.
+
+**Established by reading, not fixed.**
+
+- The broker-side gate in `typhoon-broker-runtime/src/memory_pressure.rs` scales
+  with system RAM: `reduced_rss = 38%` and `pause_rss = 48%` of MemTotal. On a
+  96 GB workstation that is **36.6 GB / 46.3 GB**, so a 15 GB spike never
+  approaches a throttle. Correct as an OOM guard; it is not a churn bound.
+- Concurrency is `alpaca_fetch_permits` = per-tier base (8–16) x connected
+  accounts, capped at 48, then memory-scaled — realistically 24–48 concurrent
+  deep batches under full tilt.
+- A deep 1Day batch accumulates `HashMap<String, Vec<Bar>>` across pages,
+  **bounded by the lookback window** (not unbounded, as first suspected): 50
+  symbols x ~6,300 daily bars ~= 315k `Bar`s ~= 29 MB, plus the 9.1 MB live
+  page ~= **~38 MB per in-flight batch**, or 0.9–1.8 GB across all permits.
+
+**Open.** That arithmetic covers roughly 15% of the observed ~12 GB delta; the
+dominant term is **not isolated**. Unverified candidates: the unbounded
+`BrokerMsg` channel carrying `Vec<Bar>` payloads to the native app, the cache
+write path (TTBR + zstd buffers), and mimalloc retaining freed pages — RSS is
+not live heap. Separating these needs a heap profile or per-lane allocation
+counters on the running process, not static reading. Next concrete step: log an
+RSS delta around the batch-fetch and cache-write boundaries so the next
+overnight run attributes the growth.
