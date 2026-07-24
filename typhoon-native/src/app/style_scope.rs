@@ -3,6 +3,15 @@ use super::*;
 const SEC_CACHE_HEAVY_SYNC_MIN_REBUILD_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(30);
 
+/// Rows pulled per ticker for an on-demand filing-history search.
+///
+/// Sized to cover a symbol's full history rather than a page of it: the
+/// heaviest filer in the live corpus has ~25k rows, but a typical large-cap
+/// runs under 1k for its entire life (SMCI: 975 since inception, 398 in the
+/// last three years). 2000 answers "the past 1-3 years" for essentially every
+/// symbol while keeping a search to ~1MB.
+const SEC_HISTORY_PER_TICKER_ROWS: usize = 2_000;
+
 pub(super) fn refresh_arc_slice_cache<T, K, F>(
     cached: &mut std::sync::Arc<[T]>,
     cached_key: &mut Option<K>,
@@ -457,6 +466,36 @@ impl TyphooNApp {
         }
     }
 
+    /// Fire a per-ticker filing-history query when the search box changes.
+    ///
+    /// Cheap in steady state: parsing a short string and comparing it against
+    /// what is already loaded / in flight. Only a genuinely new symbol search
+    /// sends a command.
+    pub(super) fn dispatch_sec_history_query(&mut self) {
+        let tickers = sec_history_query_tickers(&self.sec_search_query);
+        if tickers.is_empty() {
+            // Query cleared or is free text — drop the history so the view falls
+            // back to the recent snapshot instead of showing a stale symbol.
+            if !self.sec_history_tickers.is_empty() {
+                self.sec_history_filings.clear();
+                self.sec_history_tickers.clear();
+            }
+            self.sec_history_inflight = None;
+            return;
+        }
+        if self.sec_history_tickers == tickers
+            || self.sec_history_inflight.as_ref() == Some(&tickers)
+        {
+            return;
+        }
+        self.sec_history_inflight = Some(tickers.clone());
+        let _ = self.broker_tx.send(BrokerCmd::SecFilingHistory {
+            db_path: cache_db_path(),
+            tickers,
+            limit: SEC_HISTORY_PER_TICKER_ROWS,
+        });
+    }
+
     /// Rebuild SEC window caches if any of the keyed state has changed.
     /// Called once per frame when the SEC window is open. Caches are:
     ///   - tab counts (scoped filings, alerts, insider trades) — keyed on (bg_rev, scope)
@@ -482,6 +521,10 @@ impl TyphooNApp {
         // Kraken looked fine only because they inherited the wider preceding
         // scope's filter.
         let _ = self.refresh_broker_scope_cache();
+        // Symbol searches are answered from SQLite, not from the capped
+        // snapshot. Dispatch happens here (once per changed query) so the rows
+        // are already in hand by the time the cache below rebuilds.
+        self.dispatch_sec_history_query();
 
         let sec_data_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -489,6 +532,11 @@ impl TyphooNApp {
             self.bg.sec_alerts.len().hash(&mut h);
             self.bg.insider_trades.len().hash(&mut h);
             self.bg.sec_content_stats.hash(&mut h);
+            // On-demand history swaps the row source out from under every cache
+            // below, so it has to move the data key or a landed query renders
+            // nothing until some other input happens to change.
+            self.sec_history_filings.len().hash(&mut h);
+            self.sec_history_tickers.hash(&mut h);
             if let Some(first) = self.bg.sec_filings.first() {
                 first.id.hash(&mut h);
                 first.filing_date.hash(&mut h);
@@ -575,14 +623,19 @@ impl TyphooNApp {
             self.sec_cache_last_rebuild = std::time::Instant::now();
         }
         if self.sec_cache_tab_counts_key != Some(counts_key) {
+            let count_rows: &[typhoon_engine::core::sec_filing::SecFiling] =
+                if self.sec_history_filings.is_empty() {
+                    &self.bg.sec_filings
+                } else {
+                    &self.sec_history_filings
+                };
             let (scoped, insider_total) = match &self.cached_scope_syms {
                 None => (
-                    self.bg.sec_filings.len(),
+                    count_rows.len(),
                     self.bg.insider_trades.values().map(|v| v.len()).sum(),
                 ),
                 Some(set) => (
-                    self.bg
-                        .sec_filings
+                    count_rows
                         .iter()
                         .filter(|f| set.contains(f.ticker.as_str()))
                         .count(),
@@ -606,7 +659,15 @@ impl TyphooNApp {
             // Symbol-only search: uppercase query once, compare against ticker (stored upper).
             let search_upper = self.sec_search_query.trim().to_uppercase();
             let has_search = !search_upper.is_empty();
-            let filings = &self.bg.sec_filings;
+            // Symbol searches read the DB answer; everything else reads the
+            // capped recent snapshot. Field-level borrows so the cache
+            // assignment below still type-checks.
+            let filings: &[typhoon_engine::core::sec_filing::SecFiling] =
+                if self.sec_history_filings.is_empty() {
+                    &self.bg.sec_filings
+                } else {
+                    &self.sec_history_filings
+                };
 
             // Search now spans (ticker, company, sector, industry). Build a small
             // fundamentals lookup so the sector/industry hit is O(1) per row.
@@ -1223,6 +1284,46 @@ fn normalize_sec_scrape_symbols_priority_order(
     syms
 }
 
+/// Parse the SEC scanner's search box into tickers to pull history for.
+///
+/// Only symbol-shaped input qualifies: the box also accepts company / sector /
+/// industry text, and firing a per-ticker DB query for "technology" would be a
+/// guaranteed miss. Comma or whitespace separated, so `SMCI, NVDA` pulls both.
+/// Capped because each ticker is its own query and its own snapshot.
+pub(super) fn sec_history_query_tickers(query: &str) -> Vec<String> {
+    const MAX_TICKERS: usize = 8;
+
+    // Every token must look like a ticker, not merely some of them. Accepting
+    // the ticker-shaped subset meant "WESTERN DIGITAL CORP" dispatched a query
+    // for CORP — a guaranteed miss that would then *replace* the snapshot rows
+    // the company-name filter was about to match, turning a working search into
+    // an empty table.
+    let mut out: Vec<String> = Vec::new();
+    for tok in query.split([',', ' ', '\t', ';']) {
+        // SEC tickers are 1-5 alphanumerics, sometimes class-suffixed (BRK.B).
+        let tok = tok.trim().to_ascii_uppercase();
+        if tok.is_empty() {
+            continue;
+        }
+        let ticker_shaped = tok.len() <= 6
+            && tok
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            && tok.chars().any(|c| c.is_ascii_alphabetic());
+        if !ticker_shaped {
+            return Vec::new();
+        }
+        if !out.contains(&tok) {
+            out.push(tok);
+        }
+        if out.len() >= MAX_TICKERS {
+            break;
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Kraken scope **membership**: what the filtered views (fundamentals, SEC
 /// filings/insiders/timeline) test their rows against.
 ///
@@ -1409,6 +1510,42 @@ mod tests {
                 "{equity} was scraped under Kraken scope but is not in scope membership"
             );
         }
+    }
+
+    #[test]
+    fn sec_history_query_parses_symbols_and_ignores_free_text() {
+        // A symbol search must reach the DB — the capped snapshot spans weeks
+        // and a few hundred tickers of a corpus going back to 1994, so anything
+        // outside it was invisible no matter how many filings were stored.
+        assert_eq!(sec_history_query_tickers("SMCI"), vec!["SMCI".to_string()]);
+        assert_eq!(
+            sec_history_query_tickers(" smci "),
+            vec!["SMCI".to_string()]
+        );
+        assert_eq!(
+            sec_history_query_tickers("SMCI, NVDA"),
+            vec!["NVDA".to_string(), "SMCI".to_string()]
+        );
+        // Class suffixes are real tickers.
+        assert_eq!(sec_history_query_tickers("BRK.B"), vec!["BRK.B".to_string()]);
+
+        // The box also accepts company / sector / industry text. Firing a
+        // per-ticker query for those is a guaranteed miss, so they must not
+        // trigger one — the snapshot filter still handles them.
+        assert!(sec_history_query_tickers("").is_empty());
+        assert!(sec_history_query_tickers("technology").is_empty());
+        assert!(sec_history_query_tickers("WESTERN DIGITAL CORP").is_empty());
+        assert!(sec_history_query_tickers("12345").is_empty());
+
+        // Bounded: each ticker is its own query and its own snapshot.
+        let many = "AA BB CC DD EE FF GG HH II JJ KK";
+        assert_eq!(sec_history_query_tickers(many).len(), 8);
+
+        // Deduped and stable, so an unchanged query never re-dispatches.
+        assert_eq!(
+            sec_history_query_tickers("SMCI smci SMCI"),
+            vec!["SMCI".to_string()]
+        );
     }
 
     #[test]

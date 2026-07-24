@@ -268,7 +268,9 @@ pub fn spawn_broker_message_processor(
                         }
                     }
                 }
-                cmd @ (BrokerCmd::SecScrape { .. } | BrokerCmd::FinnhubNews { .. }) => {
+                cmd @ (BrokerCmd::SecScrape { .. }
+                | BrokerCmd::SecFilingHistory { .. }
+                | BrokerCmd::FinnhubNews { .. }) => {
                     news::handle_news_command(
                         cmd,
                         broker_msg_tx_clone.clone(),

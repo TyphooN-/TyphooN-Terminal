@@ -3,13 +3,31 @@ use rusqlite::{Connection, params};
 
 // ── Query Functions (synchronous — called from spawn_blocking in commands) ──
 
+/// Hard ceiling on rows returned by [`get_recent_filings`], guarding the
+/// caller-supplied limit.
+///
+/// This used to be a bare `.min(1000)`, which silently clamped every caller: a
+/// request for more rows was truncated with no error and no log, so the SEC
+/// scanner's snapshot could never grow past 1000 rows however it was called.
+/// On a full-universe corpus (1M+ rows spanning decades) the newest 1000 rows
+/// cover only weeks and a few hundred tickers, so searching them for a symbol
+/// outside that window found nothing even with years of its filings stored.
+/// Global browsing is still bounded — an unbounded snapshot is what pushed the
+/// process into the OOM killer — but per-ticker history now has room to be a
+/// real multi-year answer. Rows average ~150 bytes of payload (~450 bytes
+/// in memory), so this ceiling is tens of MB, not hundreds.
+pub const MAX_FILING_QUERY_ROWS: usize = 50_000;
+
 /// Get recent filings, optionally filtered by ticker.
+///
+/// With `Some(ticker)` this rides `idx_sec_ticker_date` and is the on-demand
+/// path for "show me everything this symbol has filed" — a seek, not a scan.
 pub fn get_recent_filings(
     conn: &Connection,
     ticker: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SecFiling>, String> {
-    let limit = limit.min(1000);
+    let limit = limit.min(MAX_FILING_QUERY_ROWS);
     let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(t) = ticker
     {
         (

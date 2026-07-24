@@ -101,7 +101,16 @@ impl TyphooNApp {
                                 // ═══════════ FILINGS TAB (full height) ═══════════
                                 // PERF: pull pre-filtered/sorted indices from cache. Cache is
                                 // rebuilt by rebuild_sec_caches() only when state changes.
-                                let filings = &self.bg.sec_filings;
+                                // Row source must match what rebuild_sec_caches
+                                // indexed: on-demand per-ticker history when a
+                                // symbol search is active, else the capped
+                                // recent snapshot.
+                                let filings: &[typhoon_engine::core::sec_filing::SecFiling] =
+                                    if self.sec_history_filings.is_empty() {
+                                        &self.bg.sec_filings
+                                    } else {
+                                        &self.sec_history_filings
+                                    };
                                 let idxs = &self.sec_cache_filings;
 
                                 // Detail panel at top (if a filing is selected)

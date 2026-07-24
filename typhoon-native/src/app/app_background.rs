@@ -208,7 +208,13 @@ pub(super) fn spawn_background_refresh(
                     // write lock) indistinguishable from "no filings", so the
                     // scanner told the user to "Click Scrape Now to fetch from SEC
                     // EDGAR" while a million rows sat in the table.
-                    match sec_filing::get_recent_filings(conn, None, 1000) {
+                    // Global browse window. Still bounded — an unbounded
+                    // snapshot of a 1M-row corpus is what reached the OOM
+                    // killer — but 1000 rows spanned only ~5 weeks and ~130
+                    // tickers of a table going back to 1994, which is not a
+                    // usable default view. Per-symbol depth is the on-demand
+                    // `SecFilingHistory` query, not this snapshot.
+                    match sec_filing::get_recent_filings(conn, None, 20_000) {
                         Ok(filings) => data.sec_filings = filings,
                         Err(e) => tracing::warn!(
                             "SEC recent-filings snapshot failed, keeping {} cached row(s): {e}",

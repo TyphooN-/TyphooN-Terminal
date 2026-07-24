@@ -256,6 +256,7 @@ impl TyphooNApp {
                     self.handle_order_result(msg);
                 }
                 msg @ (BrokerMsg::SecScrapeResult(_)
+                | BrokerMsg::SecFilingHistoryResult { .. }
                 | BrokerMsg::FilingContent(_)
                 | BrokerMsg::FinnhubNewsResult(_)) => {
                     self.handle_news_sec_result_msg(msg);

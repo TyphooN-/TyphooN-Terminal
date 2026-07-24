@@ -13,6 +13,50 @@ pub fn handle_news_command(
     shared_cache_broker: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>>,
 ) {
     match cmd {
+        BrokerCmd::SecFilingHistory {
+            db_path: _,
+            tickers,
+            limit,
+        } => {
+            // Pure SQLite reads on an indexed column — fast, but still off the
+            // command loop and off the render thread. Uses a dedicated BG read
+            // connection rather than `connection()`, so it never waits behind a
+            // bar-sync writer holding the single write mutex.
+            let msg_tx = broker_msg_tx_clone.clone();
+            let shared_cache_broker = shared_cache_broker.clone();
+            let _ = std::thread::Builder::new()
+                .name("typhoon-sec-filing-history".into())
+                .spawn(move || {
+                    let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone())
+                    else {
+                        let _ = msg_tx.send(BrokerMsg::Error(
+                            "SEC filing history: cache not ready".into(),
+                        ));
+                        return;
+                    };
+                    let conn = match cache.open_bg_read_connection() {
+                        Ok(conn) => conn,
+                        Err(e) => {
+                            let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                "SEC filing history: open failed: {e}"
+                            )));
+                            return;
+                        }
+                    };
+                    let mut filings = Vec::new();
+                    for ticker in &tickers {
+                        match sec_filing::get_recent_filings(&conn, Some(ticker), limit) {
+                            Ok(rows) => filings.extend(rows),
+                            Err(e) => {
+                                let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                    "SEC filing history {ticker}: {e}"
+                                )));
+                            }
+                        }
+                    }
+                    let _ = msg_tx.send(BrokerMsg::SecFilingHistoryResult { tickers, filings });
+                });
+        }
         BrokerCmd::SecScrape { db_path, symbols } => {
             // Spawn as independent task — SEC scraping can take 10-60s and must not
             // block the broker command loop (would freeze trading, data fetch, etc.)

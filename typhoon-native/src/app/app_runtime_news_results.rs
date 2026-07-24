@@ -56,6 +56,28 @@ impl TyphooNApp {
                 self.scrape_sec_last_msg = msg.clone();
                 self.log.push_back(LogEntry::info(msg));
             }
+            BrokerMsg::SecFilingHistoryResult { tickers, filings } => {
+                // Discard a reply whose search the user has already moved off —
+                // otherwise a slow query can overwrite a newer one's rows.
+                if self.sec_history_inflight.as_ref() != Some(&tickers) {
+                    return;
+                }
+                self.sec_history_inflight = None;
+                let count = filings.len();
+                self.log.push_back(LogEntry::info(format!(
+                    "SEC filing history: {count} filing(s) for {} from cache{}",
+                    tickers.join(", "),
+                    match (filings.last(), filings.first()) {
+                        (Some(oldest), Some(newest)) =>
+                            format!(" ({} → {})", oldest.filing_date, newest.filing_date),
+                        _ => String::new(),
+                    }
+                )));
+                self.sec_history_filings = filings;
+                self.sec_history_tickers = tickers;
+                self.sec_page = 0;
+                self.sec_selected_filing = None;
+            }
             BrokerMsg::FilingContent(text) => {
                 self.sec_filing_content = text;
                 self.sec_filing_loading = false;

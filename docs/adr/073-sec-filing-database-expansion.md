@@ -312,3 +312,56 @@ now have real branches — Alpaca's `us_equity` catalog, and Kraken's equity
 universe plus spot/FX pairs (crypto belongs in a *news* scope in a way it does
 not for filings: the pipeline has CryptoPanic/CoinDesk providers and dedups
 fetches by base asset).
+
+## Update 2026-07-24 (6) — the scanner was a 1000-row window over 1M filings
+
+Reported as "why are there so few filings? impossible! we want at least the
+past 1-3 years." Measured against the live corpus, the report was exactly right
+and the data was never the problem:
+
+| | |
+|---|---|
+| Rows in `sec_filings` | 1,039,956 |
+| Date range stored | 1994-01-26 → 2026-07-24 |
+| Rows the UI could see | **1,000** |
+| What those 1,000 rows span | 2026-06-15 → 2026-07-24 (~5½ weeks) |
+| Distinct tickers in them | **134** |
+| SMCI filings stored | 975 (398 in the last 3 years) |
+| SMCI filings visible | 0 — it is not one of the 134 |
+
+`bg.sec_filings` is filled by exactly one call,
+`get_recent_filings(conn, None, 1000)`, and that function opened with
+`let limit = limit.min(1000)` — a silent clamp, so no caller could ask for more.
+Scope, form filters and the search box then filtered *that window*. Searching a
+symbol searched 134 tickers' worth of the last five weeks, not the table.
+
+Widening the snapshot cannot fix this. Measured on the same corpus, 5,000 rows
+reaches 2026-06-08, 20,000 reaches 2026-05-18, and 50,000 still only reaches
+2026-03-31; "the last 3 years" is 415,279 rows, which at ~450 bytes each in
+memory is ~200MB before the clone into the app — the OOM path the 1000-row cap
+was introduced to avoid.
+
+So the fix is the on-demand path the cap always implied ("deeper SEC
+browsing/search must stay on-demand instead of living in every app snapshot")
+but which was never built:
+
+- **`BrokerCmd::SecFilingHistory`** — when the search box parses as ticker(s),
+  query SQLite directly on `idx_sec_ticker_date` (a seek per ticker, not a
+  scan), on its own thread, through a dedicated BG read connection so it never
+  waits behind a bar-sync writer. 2,000 rows per ticker covers a symbol's whole
+  history for essentially every issuer (SMCI's entire 975 filings since
+  inception fit) for ~1MB.
+- The filings cache, tab counts and grid all switch row source to those results
+  while a symbol search is active, and the SEC data key includes the history so
+  a landed query actually triggers a rebuild.
+- A reply whose tickers no longer match the in-flight query is discarded, so a
+  slow query cannot overwrite a newer one.
+- The global browse window went 1,000 → 20,000 (~10MB, 1,182 tickers, back to
+  2026-05-18). Still bounded; per-symbol depth is the query, not the snapshot.
+- `MAX_FILING_QUERY_ROWS` replaces the bare `.min(1000)` so the ceiling is named
+  and documented rather than a magic number that silently truncates callers.
+
+A query only counts as a symbol search when **every** token is ticker-shaped.
+Accepting the ticker-shaped subset meant "WESTERN DIGITAL CORP" dispatched a
+query for `CORP` and replaced the snapshot rows the company-name filter was
+about to match — turning a working search into an empty table.

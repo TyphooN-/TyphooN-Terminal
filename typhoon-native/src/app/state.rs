@@ -598,6 +598,19 @@ pub struct TyphooNApp {
     /// firing every frame the window stays open, while still
     /// re-triggering on the next restart.
     pub(crate) news_initial_load_done: bool,
+    /// On-demand per-ticker filing history (ADR-073 update 6).
+    ///
+    /// The always-on BG snapshot is capped at the globally most recent rows,
+    /// which on this corpus spans weeks and a few hundred tickers out of 1M+
+    /// filings back to 1994. Searching a symbol therefore searched that window,
+    /// not the table, and found nothing for anything outside it. When the SEC
+    /// search box parses as ticker(s) these hold the DB answer instead.
+    pub(crate) sec_history_filings: Vec<typhoon_engine::core::sec_filing::SecFiling>,
+    /// Tickers `sec_history_filings` currently holds.
+    pub(crate) sec_history_tickers: Vec<String>,
+    /// Tickers whose query is in flight, so a reply for an abandoned search is
+    /// discarded and the same search is not dispatched twice.
+    pub(crate) sec_history_inflight: Option<Vec<String>>,
     /// Background news auto-scrape (ADR-073 update 5). News had every piece of
     /// the SEC/fundamentals scrape machinery — scope symbols, `NewsScrapeSymbols`,
     /// a freshness index — but nothing ever *called* it, so the corpus only grew

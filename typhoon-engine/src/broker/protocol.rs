@@ -272,6 +272,22 @@ pub enum BrokerCmd {
         /// Uppercase equity tickers derived from the current top-level Scope.
         symbols: Vec<String>,
     },
+    /// Read a symbol's filing history straight out of SQLite.
+    ///
+    /// The always-on BG snapshot is deliberately capped at the globally most
+    /// recent N filings, which on a full-universe corpus spans only weeks and a
+    /// few hundred tickers — searching it for a symbol outside that window
+    /// returns nothing even though the table holds years of that symbol's
+    /// filings. This is the on-demand path the snapshot cap always assumed:
+    /// indexed by `idx_sec_ticker_date`, so it is a seek per ticker rather than
+    /// a scan.
+    SecFilingHistory {
+        db_path: PathBuf,
+        /// Uppercase tickers parsed from the SEC scanner's search box.
+        tickers: Vec<String>,
+        /// Per-ticker row cap.
+        limit: usize,
+    },
     // scrape_filings_for_ticker available via scrape_all_portfolio_symbols
     /// Fetch Finnhub news for a symbol.
     FinnhubNews {
@@ -2764,6 +2780,12 @@ pub enum BrokerMsg {
     },
     KrakenEquityUniverse(Vec<crate::broker::kraken::KrakenEquityMarket>),
     SecScrapeResult(String),
+    /// Result of [`BrokerCmd::SecFilingHistory`]: the tickers requested (so a
+    /// stale reply for an abandoned search can be discarded) and their rows.
+    SecFilingHistoryResult {
+        tickers: Vec<String>,
+        filings: Vec<crate::core::sec_filing::SecFiling>,
+    },
     FilingContent(String), // fetched SEC filing document text
     FinnhubNewsResult(Vec<(String, String, String)>),
     /// Latest quote data.
