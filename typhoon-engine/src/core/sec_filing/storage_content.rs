@@ -234,3 +234,98 @@ pub fn mark_filing_content_fetch_failed(
     .map_err(|e| format!("Mark content fetch failed: {e}"))?;
     Ok(())
 }
+
+// ── Form 4 insider backfill queue ───────────────────────────────────
+
+/// Form 4 filings whose insider trades have not been parsed yet, newest first.
+///
+/// Insider parsing only ever ran inline over filings inserted during the
+/// current scrape pass, so anything that failed was never revisited — and until
+/// the `xslF345X0*` URL fix in [`super::form4_xml_url`] every Form 4 failed,
+/// because the parser was handed SEC's rendered HTML instead of the raw XML.
+/// That left 537,648 stored Form 4 filings and 0 rows in `sec_insider_trades`.
+/// This is the queue that drains that backlog.
+///
+/// Mirrors [`get_unfetched_filings`]: attempt-capped and cooldown'd so a
+/// permanently unparseable document cannot monopolise every cycle, and ordered
+/// newest-first so recent insider activity lands before a decade-old backlog.
+pub fn get_unparsed_form4_filings(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<SecFiling>, String> {
+    const MAX_INSIDER_PARSE_ATTEMPTS: i64 = 3;
+    const INSIDER_PARSE_RETRY_COOLDOWN_SECS: i64 = 6 * 60 * 60;
+
+    let retry_before = chrono::Utc::now().timestamp() - INSIDER_PARSE_RETRY_COOLDOWN_SECS;
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, ticker, form_type, accession_number, filing_date, url,
+                company_name, importance_score, category, summary, insider_flag, created_at
+         FROM sec_filings
+         WHERE insider_flag = TRUE
+           AND COALESCE(insider_parsed, FALSE) = FALSE
+           AND COALESCE(insider_parse_attempts, 0) < ?2
+           AND COALESCE(insider_last_attempt_at, 0) <= ?3
+         ORDER BY filing_date DESC
+         LIMIT ?1",
+        )
+        .map_err(|e| format!("Prepare unparsed form4 failed: {e}"))?;
+
+    let rows = stmt
+        .query_map(
+            params![limit as i64, MAX_INSIDER_PARSE_ATTEMPTS, retry_before],
+            |row| {
+                Ok(SecFiling {
+                    id: row.get(0)?,
+                    ticker: row.get(1)?,
+                    form_type: row.get(2)?,
+                    accession_number: row.get(3)?,
+                    filing_date: row.get(4)?,
+                    url: row.get(5)?,
+                    company_name: row.get(6)?,
+                    importance_score: row.get(7)?,
+                    category: row.get(8)?,
+                    summary: row.get(9)?,
+                    insider_flag: row.get(10)?,
+                    created_at: row.get(11)?,
+                })
+            },
+        )
+        .map_err(|e| format!("Query unparsed form4 failed: {e}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Collect unparsed form4 failed: {e}"))
+}
+
+/// Mark a Form 4 as parsed so the backfill queue stops returning it.
+///
+/// Called on success *including* a zero-transaction result: a Form 4 can
+/// legitimately report only holdings, and retrying those forever would wedge
+/// the queue behind documents that will never yield a row.
+pub fn mark_form4_insider_parsed(conn: &Connection, accession: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE sec_filings
+         SET insider_parsed = TRUE,
+             insider_parse_attempts = COALESCE(insider_parse_attempts, 0) + 1,
+             insider_last_attempt_at = ?2
+         WHERE accession_number = ?1",
+        params![accession, chrono::Utc::now().timestamp()],
+    )
+    .map_err(|e| format!("Mark form4 parsed failed: {e}"))?;
+    Ok(())
+}
+
+/// Record a failed Form 4 parse attempt (network error, HTTP failure).
+/// Leaves `insider_parsed` false so the row is retried after the cooldown,
+/// until the attempt cap is reached.
+pub fn mark_form4_insider_parse_failed(conn: &Connection, accession: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE sec_filings
+         SET insider_parse_attempts = COALESCE(insider_parse_attempts, 0) + 1,
+             insider_last_attempt_at = ?2
+         WHERE accession_number = ?1",
+        params![accession, chrono::Utc::now().timestamp()],
+    )
+    .map_err(|e| format!("Mark form4 parse failed: {e}"))?;
+    Ok(())
+}

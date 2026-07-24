@@ -114,6 +114,32 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
         "ALTER TABLE sec_filings ADD COLUMN content_last_error TEXT DEFAULT ''",
         [],
     );
+    // Retry bookkeeping for Form 4 insider parsing, mirroring the content
+    // columns above. Insider trades were only ever parsed for filings inserted
+    // during the current scrape pass, so a Form 4 that failed (and until the
+    // `xslF345X0*` URL fix, every single one did) was never revisited. The
+    // backfill worker needs somewhere to record attempts, or a Form 4 that
+    // genuinely reports no transactions would be refetched forever.
+    let _ = conn.execute(
+        "ALTER TABLE sec_filings ADD COLUMN insider_parsed BOOLEAN DEFAULT FALSE",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE sec_filings ADD COLUMN insider_parse_attempts INTEGER DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE sec_filings ADD COLUMN insider_last_attempt_at INTEGER DEFAULT 0",
+        [],
+    );
+    // Partial index for the backfill queue: without it, finding un-parsed
+    // Form 4s means a full scan of a 1M+ row table on every background cycle.
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sec_insider_backfill
+         ON sec_filings(filing_date DESC)
+         WHERE insider_flag = TRUE AND COALESCE(insider_parsed, FALSE) = FALSE",
+        [],
+    );
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS sec_filing_content (

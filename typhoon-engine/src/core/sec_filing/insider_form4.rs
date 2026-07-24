@@ -4,6 +4,32 @@ use std::path::Path;
 
 // ── Form 4 Insider Trade Parsing ────────────────────────────────────
 
+/// Derive the raw Form 4 **XML** URL from the stored filing URL.
+///
+/// EDGAR's `primaryDocument` for a Form 4 points at the *XSL-rendered* view —
+/// `.../000000248826000117/xslF345X06/wk-form4_1784318998.xml`. Despite the
+/// `.xml` suffix that path serves **HTML**, so every tag this module looks for
+/// (`rptOwnerName`, `transactionAmounts`, `isOfficer`) is absent and the parse
+/// silently yields zero transactions. That is why 537,648 stored Form 4 filings
+/// had produced exactly 0 rows in `sec_insider_trades`: the parser had never
+/// once seen XML. Dropping the `xsl*/` path segment gives the raw XML the
+/// filer submitted, at the same URL otherwise.
+///
+/// The stored URL is deliberately left alone — the rendered view is the correct
+/// thing to open in a browser. Only the parse fetch is redirected.
+pub fn form4_xml_url(url: &str) -> String {
+    // Rendered-view segments are `xslF345X02` … `xslF345X06` today, and EDGAR
+    // has added new revisions over time, so match the `xsl` prefix rather than
+    // a fixed list.
+    match url.rsplit_once('/') {
+        Some((dir, file)) => match dir.rsplit_once('/') {
+            Some((base, seg)) if seg.starts_with("xsl") => format!("{base}/{file}"),
+            _ => url.to_string(),
+        },
+        None => url.to_string(),
+    }
+}
+
 /// Fetch a Form 4 filing and parse insider trades. All DB writes are blocking.
 pub(super) async fn fetch_and_parse_form4(
     db_path: &Path,
@@ -13,10 +39,11 @@ pub(super) async fn fetch_and_parse_form4(
     url: &str,
 ) -> Result<(usize, usize), String> {
     // Async: fetch the filing with retry on 429
+    let xml_url = form4_xml_url(url);
     let mut body = String::new();
     for attempt in 0..3u32 {
         let resp = client
-            .get(url)
+            .get(&xml_url)
             .header("User-Agent", SEC_EDGAR_USER_AGENT)
             .send()
             .await
@@ -224,6 +251,38 @@ mod tests {
         assert_eq!(form4_transaction_code_label("G").1, 0);
         assert_eq!(form4_transaction_code_label("").0, "—");
         assert_eq!(form4_transaction_code_label("ZZ").0, "Other");
+    }
+
+    #[test]
+    fn form4_xml_url_strips_the_xsl_rendered_view_segment() {
+        // EDGAR's primaryDocument for a Form 4 points at the XSL-rendered view,
+        // which serves HTML despite the .xml suffix. Parsing it found none of
+        // the tags this module needs, so 537,648 stored Form 4 filings had
+        // produced 0 insider trades. Every rendered revision seen in the live
+        // corpus (xslF345X02..X06) must be stripped.
+        for seg in [
+            "xslF345X02",
+            "xslF345X03",
+            "xslF345X04",
+            "xslF345X05",
+            "xslF345X06",
+        ] {
+            assert_eq!(
+                form4_xml_url(&format!(
+                    "https://www.sec.gov/Archives/edgar/data/2488/000000248826000117/{seg}/wk-form4_1784318998.xml"
+                )),
+                "https://www.sec.gov/Archives/edgar/data/2488/000000248826000117/wk-form4_1784318998.xml"
+            );
+        }
+
+        // Already-raw URLs (the ~197 in the live corpus without a render
+        // segment) must pass through untouched, not lose a path component.
+        let raw = "https://www.sec.gov/Archives/edgar/data/2488/000000248826000117/wk-form4.xml";
+        assert_eq!(form4_xml_url(raw), raw);
+
+        // Degenerate inputs must not panic or mangle.
+        assert_eq!(form4_xml_url(""), "");
+        assert_eq!(form4_xml_url("edgardoc.xml"), "edgardoc.xml");
     }
 
     #[test]

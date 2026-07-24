@@ -584,6 +584,57 @@ pub(super) fn spawn_background_refresh(
                                         });
                                     }
                                 }
+                                // Form 4 insider backfill, offset from the content
+                                // backfill cycle so the two never share a slot and
+                                // double SEC request pressure.
+                                //
+                                // Insider parsing only ever ran inline over filings
+                                // inserted by the current scrape pass, so anything
+                                // that failed was never retried — and until the
+                                // `xslF345X0*` URL fix every Form 4 failed (the
+                                // parser was handed SEC's rendered HTML, not XML).
+                                // That is why 537k stored Form 4 filings yielded an
+                                // empty sec_insider_trades table and an "Insiders (0)"
+                                // tab. This drains the backlog newest-first.
+                                if bg_cycle_count % 10 == 7 {
+                                    let db_path = crate::app::platform::cache_db_path();
+                                    let _ = std::thread::Builder::new()
+                                        .name("typhoon-sec-insider-backfill".into())
+                                        .spawn(move || {
+                                            let rt = match tokio::runtime::Builder::new_current_thread()
+                                                .enable_all()
+                                                .build()
+                                            {
+                                                Ok(rt) => rt,
+                                                Err(e) => {
+                                                    tracing::warn!("SEC insider backfill skipped: runtime build failed: {e}");
+                                                    return;
+                                                }
+                                            };
+                                            rt.block_on(async {
+                                                let client = reqwest::Client::builder()
+                                                    .user_agent(sec_filing::SEC_EDGAR_USER_AGENT)
+                                                    .timeout(std::time::Duration::from_secs(10))
+                                                    .build()
+                                                    .unwrap_or_default();
+                                                match sec_filing::backfill_insider_trades(
+                                                    &db_path, &client, 15,
+                                                )
+                                                .await
+                                                {
+                                                    Ok((0, 0, 0)) => {}
+                                                    Ok((trades, alerts, failures)) => {
+                                                        tracing::info!(
+                                                            "BG: SEC insider backfill: {trades} trade(s), {alerts} alert(s), {failures} failed"
+                                                        );
+                                                    }
+                                                    Err(e) => tracing::warn!(
+                                                        "SEC insider backfill failed: {e}"
+                                                    ),
+                                                }
+                                            });
+                                        });
+                                }
                             }
                         }
                         bg_cycle_count += 1;

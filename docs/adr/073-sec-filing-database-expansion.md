@@ -365,3 +365,57 @@ A query only counts as a symbol search when **every** token is ticker-shaped.
 Accepting the ticker-shaped subset meant "WESTERN DIGITAL CORP" dispatched a
 query for `CORP` and replaced the snapshot rows the company-name filter was
 about to match — turning a working search into an empty table.
+
+## Update 2026-07-24 (7) — the Form 4 parser had never once seen XML
+
+Applying update 6's "on-demand instead of snapshot" shape to the Insiders tab
+started by measuring the table, which immediately said the diagnosis was wrong:
+
+| | |
+|---|---|
+| Form 4 filings stored | **537,648** |
+| Rows in `sec_insider_trades` | **0** |
+
+Not a window problem. An ingest problem, and total.
+
+EDGAR's `primaryDocument` for a Form 4 points at the **XSL-rendered view** —
+`.../000000248826000117/xslF345X06/wk-form4_1784318998.xml`. Despite the `.xml`
+suffix that path serves HTML. Fetched live, it contains `rptOwnerName` **zero**
+times; every tag `insider_form4.rs` looks for is absent, so `extract_xml_value`
+returned `Unknown`, `extract_transactions` returned an empty vec, and the parse
+"succeeded" with nothing to insert. 537,451 of the 537,648 stored Form 4s
+(99.96%) carry a render segment — `xslF345X02` through `xslF345X06`.
+
+Dropping that one path segment yields the raw XML the filer submitted. Verified
+against filings from the live corpus: WDC `0001266824-26-000160` →
+`Tregillis Cynthia L`, 3 non-derivative + 1 derivative transaction; AXIA
+`0001213900-26-079350` → `Batista de Lima Filho Pedro`, 2 + 2. Every one of
+those was previously zero. The parser itself was always correct — its unit
+tests pass on real XML shapes — it was simply never given XML.
+
+The stored URL is deliberately left alone: the rendered view is the right thing
+to open in a browser. Only the parse fetch is redirected, via `form4_xml_url`.
+
+Three follow-ons, because the fix alone would not have surfaced the backlog:
+
+- **Backfill.** Insider parsing only ever ran inline, over filings inserted
+  during the current scrape pass. A Form 4 that failed was never revisited, so
+  537k already-stored filings would have stayed unparsed forever. New
+  `insider_parsed` / `insider_parse_attempts` / `insider_last_attempt_at`
+  columns plus a partial index feed `get_unparsed_form4_filings`, drained
+  newest-first at 15/cycle by a BG worker offset from the content backfill so
+  the two never share a slot. Recent insider activity lands within minutes; the
+  historical tail takes ~12 days at SEC's fair-use pacing.
+- **Failures were invisible.** Every parse error logged at `debug!`, which is
+  how a 100% failure rate across 537k filings went unnoticed. A wholesale
+  failure now summarises at `warn!`.
+- **Bounding the result.** `get_all_insider_trades` had a 5-year cutoff and no
+  row cap — fine against an empty table, an unbounded ~1.5M-row `SELECT` cloned
+  into every app snapshot once the backfill drains, i.e. exactly the OOM shape
+  update 6 was about. Now capped by `MAX_INSIDER_SNAPSHOT_ROWS`; per-symbol
+  depth is `get_insider_trades(conn, Some(ticker), days)` on `idx_insider_ticker`.
+
+News was checked for the same defect and does not have it: `SearchNews` already
+queries SQLite via FTS5 and `LoadCachedNews` accepts a symbol filter. (It does
+use `cache.connection()` — the write mutex — rather than a BG read connection,
+which is worth revisiting separately.)

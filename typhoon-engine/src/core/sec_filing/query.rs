@@ -18,6 +18,11 @@ use rusqlite::{Connection, params};
 /// in memory), so this ceiling is tens of MB, not hundreds.
 pub const MAX_FILING_QUERY_ROWS: usize = 50_000;
 
+/// Ceiling on the insider-trade BG snapshot. Sized like the filings window:
+/// tens of MB, newest-first, enough to browse. Depth for one symbol is
+/// [`get_insider_trades`] with `Some(ticker)`, not a bigger snapshot.
+pub const MAX_INSIDER_SNAPSHOT_ROWS: usize = 50_000;
+
 /// Get recent filings, optionally filtered by ticker.
 ///
 /// With `Some(ticker)` this rides `idx_sec_ticker_date` and is the on-demand
@@ -211,21 +216,29 @@ pub fn get_all_filings(conn: &Connection) -> Result<Vec<SecFiling>, String> {
         .map_err(|e| format!("Collect filings failed: {e}"))
 }
 
-/// Get ALL insider trades (no date cutoff). For BG thread growing database.
+/// Recent insider trades for the BG snapshot: last 5 years, newest first,
+/// bounded by [`MAX_INSIDER_SNAPSHOT_ROWS`].
+///
+/// The date cutoff alone was enough only while the table was empty. Fixing the
+/// Form 4 parser (it had been handed SEC's rendered HTML instead of XML, so
+/// 537,648 stored Form 4 filings produced zero rows) turns this into ~1.5M
+/// trades as the backfill drains — an unbounded `SELECT` cloned into every app
+/// snapshot each BG cycle, which is precisely the shape that pushed the filings
+/// snapshot into the OOM killer. Same rule as filings: this is a browse window;
+/// per-symbol depth goes through `get_insider_trades(conn, Some(ticker), days)`,
+/// which rides `idx_insider_ticker`.
 pub fn get_all_insider_trades(conn: &Connection) -> Result<Vec<InsiderTrade>, String> {
-    // Memory optimization: limit to last 5 years (1825 days) to bound BG memory footprint.
-    // Older trades remain in DB and accessible via get_insider_trades(ticker, days).
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(1825))
         .format("%Y-%m-%d")
         .to_string();
     // prepare_cached: called every BG cycle.
     let mut stmt = conn.prepare_cached(
         "SELECT id, ticker, accession_number, insider_name, insider_title, transaction_date, transaction_type, shares, price, aggregate_value, is_officer, is_director, created_at
-         FROM sec_insider_trades WHERE transaction_date >= ?1 ORDER BY transaction_date DESC"
+         FROM sec_insider_trades WHERE transaction_date >= ?1 ORDER BY transaction_date DESC LIMIT ?2"
     ).map_err(|e| format!("Prepare all insider trades failed: {e}"))?;
 
     let rows = stmt
-        .query_map(params![cutoff], |row| {
+        .query_map(params![cutoff, MAX_INSIDER_SNAPSHOT_ROWS as i64], |row| {
             Ok(InsiderTrade {
                 id: row.get(0)?,
                 ticker: row.get(1)?,

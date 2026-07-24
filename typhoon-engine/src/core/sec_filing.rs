@@ -27,9 +27,9 @@ use content_text::decode_html_entities;
 pub use content_text::{polish_filing_text, strip_html_to_text};
 pub use diff::{diff_filing_content, find_previous_filing};
 use insider_form4::fetch_and_parse_form4;
-pub use insider_form4::form4_transaction_code_label;
 #[cfg(test)]
 use insider_form4::{extract_transactions, extract_xml_value};
+pub use insider_form4::{form4_transaction_code_label, form4_xml_url};
 pub use keywords::{add_keyword, check_keywords, check_keywords_in, get_keywords, remove_keyword};
 pub use query::{
     dismiss_alert, get_all_filings, get_all_insider_trades, get_filing_alerts, get_insider_trades,
@@ -41,8 +41,9 @@ pub use scoring::compute_importance;
 use scoring::{RELEVANT_FORMS, categorize_form};
 use scrape_index::{SecScrapeIndexState, prioritize_sec_scrape_symbols, ticker_scraped_on};
 pub use storage_content::{
-    filing_content_stats, get_filing_content, get_unfetched_filings,
-    mark_filing_content_fetch_failed, search_filings_fts, store_filing_content,
+    filing_content_stats, get_filing_content, get_unfetched_filings, get_unparsed_form4_filings,
+    mark_filing_content_fetch_failed, mark_form4_insider_parse_failed, mark_form4_insider_parsed,
+    search_filings_fts, store_filing_content,
 };
 pub use summary::summarize_filing;
 #[cfg(test)]
@@ -314,10 +315,13 @@ pub async fn scrape_filings_for_ticker(
     let mut total_alerts = new_filings.iter().filter(|f| f.is_late).count();
 
     // Step 4: For each new Form 4, fetch and parse insider trades
+    let mut form4_attempts = 0usize;
+    let mut form4_failures = 0usize;
     for f in &new_filings {
         if !f.insider_flag {
             continue;
         }
+        form4_attempts += 1;
 
         tokio::time::sleep(std::time::Duration::from_millis(RATE_LIMIT_MS)).await;
 
@@ -325,8 +329,28 @@ pub async fn scrape_filings_for_ticker(
             Ok((trades, alerts)) => {
                 total_insider_trades += trades;
                 total_alerts += alerts;
+                // Record the outcome so the backfill worker skips this row.
+                // Success with zero transactions still counts as parsed — a
+                // Form 4 can legitimately report only holdings.
+                let db = db_path.to_path_buf();
+                let acc = f.accession_number.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = open_conn(&db) {
+                        let _ = storage_content::mark_form4_insider_parsed(&conn, &acc);
+                    }
+                })
+                .await;
             }
             Err(e) => {
+                form4_failures += 1;
+                let db = db_path.to_path_buf();
+                let acc = f.accession_number.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = open_conn(&db) {
+                        let _ = storage_content::mark_form4_insider_parse_failed(&conn, &acc);
+                    }
+                })
+                .await;
                 tracing::debug!(
                     "Form 4 parse failed for {} {}: {e}",
                     f.ticker,
@@ -334,6 +358,15 @@ pub async fn scrape_filings_for_ticker(
                 );
             }
         }
+    }
+    // A *systematic* parse failure was invisible: every failure logged at debug,
+    // so the parser fetching rendered HTML instead of XML produced 0 insider
+    // trades from 537k filings without a single visible complaint. Summarise at
+    // warn when a run fails wholesale, which is the signal worth waking up for.
+    if form4_failures > 0 && form4_failures == form4_attempts {
+        tracing::warn!(
+            "SEC {upper_ticker}: all {form4_failures} Form 4 parse(s) failed — insider trades will be empty for this pass"
+        );
     }
 
     // Step 5: Update scrape index (blocking)
@@ -556,3 +589,67 @@ pub async fn scrape_all_portfolio_symbols(
 
 #[cfg(test)]
 mod tests;
+
+/// Drain a batch of the Form 4 insider-parse backlog.
+///
+/// Insider trades were only ever parsed inline, over filings inserted during
+/// the current scrape pass. Anything that failed was never revisited — and
+/// until [`form4_xml_url`] every Form 4 failed, because the parser was handed
+/// SEC's XSL-rendered HTML instead of the raw XML it looks for. The result was
+/// 537,648 stored Form 4 filings and an empty `sec_insider_trades` table.
+///
+/// This drains that backlog newest-first in bounded batches, so the Insiders
+/// tab fills in with recent activity first while the historical tail catches up
+/// over subsequent background cycles. Returns `(trades, alerts, failures)`.
+pub async fn backfill_insider_trades(
+    db_path: &Path,
+    client: &reqwest::Client,
+    limit: usize,
+) -> Result<(usize, usize, usize), String> {
+    let pending = {
+        let db = db_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let conn = open_conn(&db)?;
+            storage_content::get_unparsed_form4_filings(&conn, limit)
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking: {e}"))??
+    };
+    if pending.is_empty() {
+        return Ok((0, 0, 0));
+    }
+
+    let mut trades = 0usize;
+    let mut alerts = 0usize;
+    let mut failures = 0usize;
+    for f in &pending {
+        // Same SEC fair-use pacing as the inline path (4 req/s against their
+        // 10 req/s ceiling for identified user agents).
+        tokio::time::sleep(std::time::Duration::from_millis(RATE_LIMIT_MS)).await;
+        let db = db_path.to_path_buf();
+        let acc = f.accession_number.clone();
+        match fetch_and_parse_form4(db_path, client, &f.ticker, &acc, &f.url).await {
+            Ok((t, a)) => {
+                trades += t;
+                alerts += a;
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = open_conn(&db) {
+                        let _ = storage_content::mark_form4_insider_parsed(&conn, &acc);
+                    }
+                })
+                .await;
+            }
+            Err(e) => {
+                failures += 1;
+                tracing::debug!("Form 4 backfill failed for {} {acc}: {e}", f.ticker);
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = open_conn(&db) {
+                        let _ = storage_content::mark_form4_insider_parse_failed(&conn, &acc);
+                    }
+                })
+                .await;
+            }
+        }
+    }
+    Ok((trades, alerts, failures))
+}
