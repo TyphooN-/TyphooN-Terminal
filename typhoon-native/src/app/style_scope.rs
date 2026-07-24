@@ -36,18 +36,52 @@ pub(super) fn position_symbol_membership_signature(positions: &[PositionInfo]) -
     hasher.finish()
 }
 
+/// Hash of every **user-driven** control on the SEC Filings tab.
+///
+/// The rebuild gate treats a change here as "the user just touched a control",
+/// which is allowed through even while a broad EDGAR scrape or heavy sync is
+/// running — otherwise the scanner's own controls look dead. Scope is one of
+/// those controls and was missing: it fed the *data* key (marking the cache
+/// changed) but not this one, so flipping Scope mid-scrape hit the early-return
+/// and left the previous scope's list on screen. That read as "All and Kraken
+/// show nothing" while a scrape was in flight.
+pub(super) fn sec_filings_controls_key(
+    scope: EventSource,
+    sec_filters: &[bool; 7],
+    search_query: &str,
+    sort_column: usize,
+    sort_ascending: bool,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    scope.hash(&mut h);
+    sec_filters.hash(&mut h);
+    search_query.hash(&mut h);
+    sort_column.hash(&mut h);
+    sort_ascending.hash(&mut h);
+    h.finish()
+}
+
 pub(super) fn broker_scope_membership_signature(
     scope: EventSource,
     alpaca_positions_rev: u64,
     kraken_positions_rev: u64,
     kraken_catalog_rev: u64,
+    alpaca_catalog_rev: u64,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     match scope {
         EventSource::All => return 0,
-        EventSource::Alpaca => alpaca_positions_rev.hash(&mut hasher),
+        // Alpaca scope is catalog + positions (see `alpaca_scope_symbols`), so
+        // the signature has to move when the asset list lands — otherwise the
+        // cached scope set stays positions-only for the rest of the session.
+        EventSource::Alpaca => {
+            alpaca_positions_rev.hash(&mut hasher);
+            alpaca_catalog_rev.hash(&mut hasher);
+        }
         EventSource::Kraken => {
             kraken_positions_rev.hash(&mut hasher);
             kraken_catalog_rev.hash(&mut hasher);
@@ -67,6 +101,7 @@ impl TyphooNApp {
             self.alpaca_position_membership_rev,
             self.kraken_position_membership_rev,
             self.kraken_scope_catalog_rev,
+            self.alpaca_scope_catalog_rev,
         )
     }
 
@@ -142,12 +177,12 @@ impl TyphooNApp {
     pub(super) fn broker_scope_symbols(&self) -> Option<std::collections::HashSet<String>> {
         match self.broker_scope {
             EventSource::All => None,
-            EventSource::Alpaca => Some(
-                self.live_positions
-                    .iter()
-                    .map(|p| p.symbol.replace('/', "").to_uppercase())
-                    .collect(),
-            ),
+            // Alpaca's tradable universe, mirroring how Kraken scope is the whole
+            // Kraken catalog. This used to be open positions only, which made
+            // Alpaca a strict subset of the separate `Positions` scope, asymmetric
+            // with Kraken, and empty whenever the account was flat — the reason a
+            // scoped SEC/news scrape reported "Scope Alpaca has no symbols".
+            EventSource::Alpaca => Some(self.alpaca_scope_symbols()),
             EventSource::Kraken => Some(self.kraken_scope_symbols()),
             EventSource::Positions => {
                 // All symbols with open positions across any broker
@@ -198,6 +233,20 @@ impl TyphooNApp {
                 &self.kraken_pairs,
                 &self.kraken_futures_symbols,
             ),
+            // Alpaca's tradable equity catalog, active context first — the same
+            // shape as the ALL and Kraken branches. Falling through to the `_`
+            // arm meant a scoped scrape targeted open positions only, so a flat
+            // account produced "Scope Alpaca has no symbols" and no scrape.
+            EventSource::Alpaca => {
+                let priority = self.active_news_scrape_symbols();
+                let broad: std::collections::HashSet<String> = self
+                    .all_broker_assets
+                    .iter()
+                    .filter(|(_sym, _name, class)| class == "us_equity")
+                    .map(|(sym, _name, _class)| sym.clone())
+                    .collect();
+                normalize_sec_scrape_symbols_priority_order(priority, broad)
+            }
             _ => {
                 let raw = self.broker_scope_symbols().unwrap_or_default();
                 normalize_sec_scrape_symbols_priority_order(std::collections::HashSet::new(), raw)
@@ -257,6 +306,28 @@ impl TyphooNApp {
             .collect();
         syms.sort_unstable();
         syms.dedup();
+        syms
+    }
+
+    /// Alpaca scope membership: the tradable US-equity catalog plus anything
+    /// currently held. Positions are unioned in so a held symbol stays in scope
+    /// even before `all_broker_assets` has loaded (or if the asset list omits
+    /// it); before that fetch lands this degrades to positions-only, which is
+    /// the previous behaviour rather than an empty scope.
+    pub(super) fn alpaca_scope_symbols(&self) -> std::collections::HashSet<String> {
+        let mut syms: std::collections::HashSet<String> = self
+            .all_broker_assets
+            .iter()
+            .filter(|(_sym, _name, class)| class == "us_equity")
+            .map(|(sym, _name, _class)| sym.replace('/', "").to_uppercase())
+            .filter(|sym| !sym.is_empty())
+            .collect();
+        for p in &self.live_positions {
+            let symbol = p.symbol.replace('/', "").to_uppercase();
+            if !symbol.is_empty() {
+                syms.insert(symbol);
+            }
+        }
         syms
     }
 
@@ -380,14 +451,13 @@ impl TyphooNApp {
             self.sec_sort.ascending.hash(&mut h);
             h.finish()
         };
-        let filings_controls_key = {
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            self.sec_filters.hash(&mut h);
-            self.sec_search_query.hash(&mut h);
-            self.sec_sort.column.hash(&mut h);
-            self.sec_sort.ascending.hash(&mut h);
-            h.finish()
-        };
+        let filings_controls_key = sec_filings_controls_key(
+            scope,
+            &self.sec_filters,
+            &self.sec_search_query,
+            self.sec_sort.column,
+            self.sec_sort.ascending,
+        );
         let insiders_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             sec_data_key.hash(&mut h);

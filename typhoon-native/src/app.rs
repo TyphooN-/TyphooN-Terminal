@@ -560,6 +560,7 @@ impl TyphooNApp {
             alpaca_position_membership_rev: 0,
             kraken_position_membership_rev: 0,
             kraken_scope_catalog_rev: 0,
+            alpaca_scope_catalog_rev: 0,
             bg_rev: 0,
             outlier_scroll_pending: false,
             workspaces: std::collections::HashMap::new(),

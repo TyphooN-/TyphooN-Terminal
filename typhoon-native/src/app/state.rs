@@ -826,6 +826,11 @@ pub struct TyphooNApp {
     /// Bumped when the broad Kraken pair/futures membership feeding Kraken scope changes.
     /// Position membership has separate revisions because those lists change independently.
     pub(crate) kraken_scope_catalog_rev: u64,
+    /// Kraken's counterpart for Alpaca: bumped when `all_broker_assets` (the
+    /// tradable US-equity catalog that `alpaca_scope_symbols` reads) is
+    /// replaced, so the cached Alpaca scope set invalidates when assets land
+    /// instead of staying positions-only for the session.
+    pub(crate) alpaca_scope_catalog_rev: u64,
     /// Monotonic counter bumped each time `self.bg` is replaced from the BG thread.
     /// Used as a dirty-flag for any cache derived from `bg.*` state.
     pub(crate) bg_rev: u64,

@@ -134,3 +134,43 @@ Two defects combined:
 
 The index is created by `create_sec_tables` with `IF NOT EXISTS`, so it lands on
 the next start; on an existing 1M-row table that is a one-time build cost.
+
+## Update 2026-07-24 (2) — Scope was broken two different ways
+
+After the index/snapshot fix above the Filings tab populated, but switching
+Scope still showed nothing for All and Kraken while Alpaca showed rows, and
+scraping under Scope Alpaca logged "SEC EDGAR scrape skipped: Scope Alpaca has
+no symbols". Two independent defects.
+
+**1. Scope switches were swallowed by the rebuild gate.** The SEC tab cache has
+an early-return that holds the last cache while a broad EDGAR scrape or heavy
+sync runs, with an explicit carve-out so *user-driven* control changes still
+rebuild ("otherwise the scanner controls look broken"). That carve-out keys off
+`filings_controls_key`, which hashed filters, search and sort — but **not
+scope**. Scope was in the data key (`filings_key`), so flipping it marked the
+cache changed without marking the controls changed, and the gate returned
+early. The previous scope's list stayed on screen for the duration of a scrape.
+`sec_filings_controls_key` is now a named function that includes scope, pinned
+by a test asserting all four `EventSource` values produce distinct keys.
+
+**2. Alpaca scope meant "my open positions".** `broker_scope_symbols` returned
+`live_positions` for `EventSource::Alpaca`, while `EventSource::Kraken`
+returned the whole Kraken catalog and a separate `EventSource::Positions`
+already exists for "what I hold". So Alpaca was a strict subset of Positions,
+asymmetric with Kraken, and **empty whenever the account was flat** — which is
+what produced the skipped scrape. Alpaca scope is now
+`alpaca_scope_symbols()`: the tradable US-equity catalog from
+`all_broker_assets` unioned with open positions (so a held symbol stays in
+scope even before the asset list loads, and the pre-fetch state degrades to the
+old positions-only behaviour rather than to empty). `sec_scrape_scope_symbols`
+gained a matching `Alpaca` branch with active-context priority ordering,
+mirroring the existing `All` and `Kraken` branches instead of falling through
+to the positions-only `_` arm.
+
+That second change required a cache-invalidation fix: `cached_scope_syms` is
+keyed on `broker_scope_membership_signature`, which for Alpaca hashed only the
+*positions* revision. Since Alpaca scope now also depends on the asset catalog,
+a new `alpaca_scope_catalog_rev` (bumped in `handle_alpaca_all_assets`) feeds
+the signature — otherwise the cached scope set would stay positions-only for
+the whole session even after assets arrived. Tests assert the Alpaca signature
+moves with the catalog revision and that Kraken's does not.

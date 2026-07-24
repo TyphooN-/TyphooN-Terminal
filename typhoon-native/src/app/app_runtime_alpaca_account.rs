@@ -96,6 +96,9 @@ impl TyphooNApp {
         }
         self.all_broker_assets = assets;
         self.all_broker_assets_fetched = true;
+        // Alpaca scope membership is derived from this catalog — invalidate the
+        // cached scope set so a flat account stops reading as an empty scope.
+        self.alpaca_scope_catalog_rev = self.alpaca_scope_catalog_rev.wrapping_add(1);
         self.rebuild_chart_company_name_catalog();
         // Defer refill — the drain arm will set market_data_refill_requested
         // so heavy schedule_* work (rotations, kraken universes, alpaca pairs)

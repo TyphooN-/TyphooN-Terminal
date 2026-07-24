@@ -7,7 +7,7 @@ use typhoon_engine::core::screener::{DividendScreenEntry, SectorHeatmapEntry};
 
 use super::{
     EventSource, broker_scope_membership_signature, position_symbol_membership_signature,
-    refresh_arc_slice_cache,
+    refresh_arc_slice_cache, sec_filings_controls_key,
 };
 
 fn position(symbol: &str) -> PositionInfo {
@@ -144,9 +144,24 @@ fn position_membership_change_refreshes_source_and_derived_models_without_bg_cha
     ]);
     assert_eq!(canonical, reordered_with_duplicate);
 
-    let aapl_signature = broker_scope_membership_signature(EventSource::Positions, 1, 0, 0);
-    let msft_signature = broker_scope_membership_signature(EventSource::Positions, 2, 0, 0);
+    let aapl_signature = broker_scope_membership_signature(EventSource::Positions, 1, 0, 0, 0);
+    let msft_signature = broker_scope_membership_signature(EventSource::Positions, 2, 0, 0, 0);
     assert_ne!(aapl_signature, msft_signature);
+
+    // Alpaca scope is catalog + positions, so the asset-catalog revision has to
+    // move the signature. Without this the cached scope set stayed
+    // positions-only (empty on a flat account) for the whole session.
+    assert_ne!(
+        broker_scope_membership_signature(EventSource::Alpaca, 1, 0, 0, 0),
+        broker_scope_membership_signature(EventSource::Alpaca, 1, 0, 0, 1),
+        "Alpaca scope must invalidate when the asset catalog loads"
+    );
+    // Kraken scope must not react to the Alpaca catalog, and vice versa.
+    assert_eq!(
+        broker_scope_membership_signature(EventSource::Kraken, 0, 1, 1, 0),
+        broker_scope_membership_signature(EventSource::Kraken, 0, 1, 1, 9),
+        "Kraken scope is independent of the Alpaca catalog"
+    );
 
     let mut source: Arc<[Fundamentals]> = Arc::from([]);
     let mut sectors: Arc<[SectorHeatmapEntry]> = Arc::from([]);
@@ -203,4 +218,50 @@ fn position_membership_change_refreshes_source_and_derived_models_without_bg_cha
     assert_eq!(source[0].symbol, "MSFT");
     assert_eq!(sectors[0].symbol_count, 1);
     assert!(dividends.is_empty());
+}
+
+#[test]
+fn sec_filings_controls_key_tracks_scope_alongside_filters_and_sort() {
+    let filters = [true; 7];
+    let base = sec_filings_controls_key(EventSource::All, &filters, "", 0, false);
+
+    // Scope is a user-driven control: switching it must change the key so the
+    // rebuild gate lets it through mid-scrape. This is the regression that made
+    // All / Kraken show the previous scope's (empty) list while a broad EDGAR
+    // scrape was running.
+    for scope in [
+        EventSource::Alpaca,
+        EventSource::Kraken,
+        EventSource::Positions,
+    ] {
+        assert_ne!(
+            base,
+            sec_filings_controls_key(scope, &filters, "", 0, false),
+            "scope change must be visible to the SEC rebuild gate"
+        );
+    }
+
+    // The other controls still move it, and an unchanged view is stable.
+    let mut other = filters;
+    other[3] = false;
+    assert_ne!(
+        base,
+        sec_filings_controls_key(EventSource::All, &other, "", 0, false)
+    );
+    assert_ne!(
+        base,
+        sec_filings_controls_key(EventSource::All, &filters, "AAPL", 0, false)
+    );
+    assert_ne!(
+        base,
+        sec_filings_controls_key(EventSource::All, &filters, "", 2, false)
+    );
+    assert_ne!(
+        base,
+        sec_filings_controls_key(EventSource::All, &filters, "", 0, true)
+    );
+    assert_eq!(
+        base,
+        sec_filings_controls_key(EventSource::All, &filters, "", 0, false)
+    );
 }
