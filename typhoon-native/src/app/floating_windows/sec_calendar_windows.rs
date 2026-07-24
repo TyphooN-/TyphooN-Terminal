@@ -337,7 +337,24 @@ impl TyphooNApp {
                                 let avail = ui.available_height().max(200.0);
                                 egui::ScrollArea::vertical().id_salt("sec_filings_tab").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
                                     if idxs.is_empty() {
-                                        ui.label(egui::RichText::new("No filings. Click Scrape Now to fetch from SEC EDGAR.").color(sec_low));
+                                        // Distinguish "nothing scraped yet" from "rows exist but
+                                        // none survived this view". Telling the user to scrape
+                                        // when the table already holds a million filings sends
+                                        // them at the wrong problem.
+                                        let (stored_filings, _) = self.bg.sec_content_stats;
+                                        let msg = if stored_filings == 0 {
+                                            "No filings. Click Scrape Now to fetch from SEC EDGAR.".to_string()
+                                        } else if filings.is_empty() {
+                                            format!(
+                                                "{stored_filings} filing(s) stored, but the background snapshot is empty — the read failed or has not completed. Check the log; no re-scrape is needed."
+                                            )
+                                        } else {
+                                            format!(
+                                                "No filings match the current scope / form filters / search ({} of {stored_filings} stored filing(s) in the recent snapshot).",
+                                                filings.len()
+                                            )
+                                        };
+                                        ui.label(egui::RichText::new(msg).color(sec_low));
                                     } else {
                                         egui::Grid::new("sec_filings_grid").striped(true).num_columns(8).min_col_width(45.0).show(ui, |ui| {
                                             if SortState::header(ui, "Date", 0, &self.sec_sort) { self.sec_sort.toggle(0); }

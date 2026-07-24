@@ -202,10 +202,26 @@ pub(super) fn spawn_background_refresh(
                     // market-data backpressure can even engage. Keep the always-on BG
                     // snapshot to the recent visible set; deeper SEC browsing/search must
                     // stay on-demand instead of living in every app snapshot.
-                    data.sec_filings = sec_filing::get_recent_filings(conn, None, 1000)
-                        .unwrap_or_default();
-                    data.sec_alerts =
-                        sec_filing::get_filing_alerts(conn, false).unwrap_or_default();
+                    // Keep the previous snapshot on error instead of publishing an
+                    // empty one. `unwrap_or_default()` here made a failed query
+                    // (e.g. SQLITE_BUSY while the broad EDGAR scraper holds the
+                    // write lock) indistinguishable from "no filings", so the
+                    // scanner told the user to "Click Scrape Now to fetch from SEC
+                    // EDGAR" while a million rows sat in the table.
+                    match sec_filing::get_recent_filings(conn, None, 1000) {
+                        Ok(filings) => data.sec_filings = filings,
+                        Err(e) => tracing::warn!(
+                            "SEC recent-filings snapshot failed, keeping {} cached row(s): {e}",
+                            data.sec_filings.len()
+                        ),
+                    }
+                    match sec_filing::get_filing_alerts(conn, false) {
+                        Ok(alerts) => data.sec_alerts = alerts,
+                        Err(e) => tracing::warn!(
+                            "SEC filing-alerts snapshot failed, keeping {} cached row(s): {e}",
+                            data.sec_alerts.len()
+                        ),
+                    }
                     data.sec_content_stats = sec_filing::filing_content_stats(conn);
                     data.regulatory_alerts_by_symbol = regulatory_alerts::regulatory_alert_map(
                         &regulatory_alerts::get_regulatory_alerts(conn).unwrap_or_default(),

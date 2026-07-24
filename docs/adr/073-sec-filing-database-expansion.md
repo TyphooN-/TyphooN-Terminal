@@ -100,3 +100,37 @@ SEC filing database comparable to external terminal's functionality.
 
 904 tests pass (216 typhoon-transpiler + 553 engine + 78 cli + 57 web-protocol). Zero warnings.
 Zero production unwrap/expect violations (ADR-061 compliant).
+
+## Update 2026-07-24 — empty Filings tab with a million rows stored
+
+Reported symptom: the SEC Filing Scanner showed `Filings (0)` on every scope
+while its own status line read `763270/1025508 indexed` and `Alerts (5825)`.
+The database was fine — `SELECT COUNT(*) FROM sec_filings` returned 1,025,508
+and `sec_filing_alerts` 5,830. The tab count is `bg.sec_filings.len()` under
+scope `All`, so the background snapshot itself was empty.
+
+Two defects combined:
+
+1. **No index served the snapshot query.** `get_recent_filings(conn, None, n)`
+   runs `ORDER BY filing_date DESC LIMIT n` with no ticker predicate, but the
+   only date index was `idx_sec_ticker_date(ticker, filing_date DESC)` —
+   ticker-leading, so unusable for a global sort. `EXPLAIN QUERY PLAN` confirmed
+   `SCAN sec_filings ... USE TEMP B-TREE FOR ORDER BY`: a full scan plus a
+   1M-row temp sort, re-run every background cycle. Added
+   `idx_sec_filing_date ON sec_filings(filing_date DESC)`, which removes the
+   temp B-tree entirely (`SCAN ... USING COVERING INDEX idx_sec_filing_date`).
+
+2. **The failure was silent.** The snapshot did
+   `get_recent_filings(...).unwrap_or_default()`, so any error — most plausibly
+   `SQLITE_BUSY` while the broad EDGAR scraper holds the write lock, which is
+   exactly the state the reporting screenshots were taken in ("Scraping…"
+   active) — published an *empty* vector indistinguishable from "no filings".
+   The UI then told the user to "Click Scrape Now to fetch from SEC EDGAR",
+   pointing them at the one action guaranteed not to help. Both the filings and
+   alerts snapshots now keep their previous contents and log a warning on error,
+   and the empty-state label distinguishes three cases: nothing stored, rows
+   stored but the snapshot is empty (read failed / not yet complete), and rows
+   present but filtered out by scope / form filters / search.
+
+The index is created by `create_sec_tables` with `IF NOT EXISTS`, so it lands on
+the next start; on an existing 1M-row table that is a one-time build cost.

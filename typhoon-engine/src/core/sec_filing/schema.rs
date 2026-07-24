@@ -40,6 +40,14 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
         );
         CREATE INDEX IF NOT EXISTS idx_sec_ticker_date ON sec_filings(ticker, filing_date DESC);
         CREATE INDEX IF NOT EXISTS idx_sec_form ON sec_filings(form_type);
+        -- Global recency. `idx_sec_ticker_date` is ticker-leading, so it cannot
+        -- serve the un-tickered `ORDER BY filing_date DESC LIMIT n` the scanner's
+        -- background snapshot runs every cycle: without this index SQLite did a
+        -- full SCAN plus a TEMP B-TREE sort over the whole table (1M+ rows after a
+        -- broad EDGAR scrape) on every refresh, which is both a recurring stall and
+        -- the reason the query was fragile enough to fail under scrape contention
+        -- and leave the Filings tab empty.
+        CREATE INDEX IF NOT EXISTS idx_sec_filing_date ON sec_filings(filing_date DESC);
 
         CREATE TABLE IF NOT EXISTS sec_insider_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
