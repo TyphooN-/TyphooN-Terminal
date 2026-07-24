@@ -110,6 +110,10 @@ impl TyphooNApp {
         // per-key insert is O(1).
         let now_ms = chrono::Utc::now().timestamp_millis();
         for (symbol, tf, last_bar_ts_ms) in fresh {
+            // Real bars arrived, so this pair is not a permanent hole: drop any
+            // escalated snapshot-sweep backoff it accumulated while empty.
+            self.kraken_ws_snapshot_empty_streak
+                .remove(&(symbol.clone(), tf.clone()));
             self.kraken_ws_fresh_until
                 .insert((symbol, tf), now_ms.max(last_bar_ts_ms));
         }

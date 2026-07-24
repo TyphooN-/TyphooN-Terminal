@@ -159,6 +159,7 @@ impl TyphooNApp {
             &intervals_min,
             &self.kraken_ws_fresh_until,
             &self.kraken_ws_snapshot_attempt,
+            &self.kraken_ws_snapshot_empty_streak,
             now_ms,
             KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,
         ) else {
@@ -168,10 +169,20 @@ impl TyphooNApp {
         let pair_count = pairs.len();
         // Record the attempt so a no-data pair backs off instead of being
         // re-selected next cadence; a non-empty commit will set real WS-freshness.
+        // Every re-selection means the previous sweep of this pair committed no
+        // bars (freshness clears the streak), so count it and let the next retry
+        // window double.
         for ws in &pairs {
             if let Some((_src, symbol)) = kraken_ws_bar_cache_target(ws) {
-                self.kraken_ws_snapshot_attempt
-                    .insert((symbol, tf.to_string()), now_ms);
+                let key = (symbol, tf.to_string());
+                if self.kraken_ws_snapshot_attempt.contains_key(&key) {
+                    let streak = self
+                        .kraken_ws_snapshot_empty_streak
+                        .entry(key.clone())
+                        .or_insert(0);
+                    *streak = streak.saturating_add(1);
+                }
+                self.kraken_ws_snapshot_attempt.insert(key, now_ms);
             }
         }
         self.kraken_ws_ohlc_snapshot_sweep_in_flight = true;
@@ -247,6 +258,21 @@ const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(10);
 /// shorter than the smallest fresh window (1Min = 24 min), so pairs that DO get
 /// data are unaffected; pairs that don't simply retry every 20 min instead of 10s.
 const KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS: i64 = 20 * 60 * 1000;
+/// Doublings applied to the base retry backoff per consecutive empty sweep of a
+/// pair (20m → 40m → 80m → … → 21h at 6). A flat 20-minute retry meant a
+/// permanently empty `{SYM}x/USD` interval was re-probed ~72×/day forever: the
+/// overnight logs show the same 8/32/22-pair batches re-queued every 20 minutes
+/// all night, never converging. Escalating the backoff keeps the "it might start
+/// trading" probe without the churn; a single non-empty commit clears the streak
+/// and restores the 20-minute cadence immediately.
+const KRAKEN_WS_SNAPSHOT_SWEEP_MAX_BACKOFF_DOUBLINGS: u32 = 6;
+
+/// Effective per-pair retry backoff for a pair with `empty_streak` consecutive
+/// no-bar sweeps.
+fn kraken_ws_snapshot_retry_backoff_ms(empty_streak: u32) -> i64 {
+    let shift = empty_streak.min(KRAKEN_WS_SNAPSHOT_SWEEP_MAX_BACKOFF_DOUBLINGS);
+    KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS.saturating_mul(1i64 << shift)
+}
 
 fn enabled_kraken_ws_ohlc_intervals(enabled_sync_timeframes: &BTreeSet<String>) -> Vec<u32> {
     KRAKEN_WS_OHLC_INTERVALS_MIN
@@ -286,6 +312,7 @@ fn select_kraken_ws_snapshot_sweep_batch_high_first(
     intervals_high_first: &[u32],
     fresh_until: &std::collections::HashMap<(String, String), i64>,
     attempt: &std::collections::HashMap<(String, String), i64>,
+    empty_streak: &std::collections::HashMap<(String, String), u32>,
     now_ms: i64,
     batch_size: usize,
 ) -> Option<(u32, Vec<String>)> {
@@ -318,13 +345,16 @@ fn select_kraken_ws_snapshot_sweep_batch_high_first(
                         TyphooNApp::kraken_ws_pair_is_fresh_at(fresh_until, &symbol, tf, now_ms);
                     // Swept recently but still not fresh → Kraken serves no bars for
                     // this pair/interval. Back off instead of re-arming it every
-                    // cadence (which wastes WS/API cycles on no-data pairs).
-                    let backed_off =
-                        attempt
-                            .get(&(symbol.clone(), tf.to_string()))
-                            .is_some_and(|&t| {
-                                now_ms.saturating_sub(t) < KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS
-                            });
+                    // cadence (which wastes WS/API cycles on no-data pairs), and
+                    // widen that window with each consecutive empty sweep so a
+                    // permanent hole stops being re-probed 72×/day forever.
+                    let key = (symbol.clone(), tf.to_string());
+                    let window_ms = kraken_ws_snapshot_retry_backoff_ms(
+                        empty_streak.get(&key).copied().unwrap_or(0),
+                    );
+                    let backed_off = attempt
+                        .get(&key)
+                        .is_some_and(|&t| now_ms.saturating_sub(t) < window_ms);
                     !fresh && !backed_off
                 }
                 None => true,

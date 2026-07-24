@@ -216,6 +216,7 @@ fn snapshot_sweep_respects_enabled_sync_timeframe_controls() {
         &intervals,
         &fresh,
         &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
         0,
         250,
     )
@@ -233,6 +234,7 @@ fn snapshot_sweep_picks_highest_timeframe_with_missing_pairs() {
         &catalog,
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
+        &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
         10_000_000_000,
         250,
@@ -263,6 +265,7 @@ fn snapshot_sweep_skips_fresh_m5_to_the_m1_gap() {
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
         &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
         now_ms,
         250,
     )
@@ -285,6 +288,7 @@ fn snapshot_sweep_none_when_every_interval_is_fresh() {
             &catalog,
             &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
             &fresh,
+            &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
             now_ms,
             250,
@@ -314,6 +318,7 @@ fn snapshot_sweep_backs_off_recently_attempted_no_data_pairs() {
             &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
             &fresh,
             &attempt,
+            &std::collections::HashMap::new(),
             now_ms,
             250,
         )
@@ -328,11 +333,67 @@ fn snapshot_sweep_backs_off_recently_attempted_no_data_pairs() {
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
         &attempt,
+        &std::collections::HashMap::new(),
         later,
         250,
     )
     .expect("backoff elapsed → eligible again");
     assert_eq!(interval_min, 5, "retries M5 before M1 after backoff");
+    assert_eq!(pairs, vec!["AAPLx/USD".to_string()]);
+}
+
+#[test]
+fn snapshot_sweep_retry_backoff_escalates_with_consecutive_empty_sweeps() {
+    // A permanently empty pair must not be re-probed at the flat 20-minute
+    // cadence forever (the overnight 8/32/22-pair re-queue loop). Each empty
+    // sweep doubles its retry window, capped so it still gets a daily probe.
+    let base = KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS;
+    assert_eq!(kraken_ws_snapshot_retry_backoff_ms(0), base);
+    assert_eq!(kraken_ws_snapshot_retry_backoff_ms(1), base * 2);
+    assert_eq!(kraken_ws_snapshot_retry_backoff_ms(3), base * 8);
+    let capped = base * (1 << KRAKEN_WS_SNAPSHOT_SWEEP_MAX_BACKOFF_DOUBLINGS);
+    assert_eq!(kraken_ws_snapshot_retry_backoff_ms(6), capped);
+    assert_eq!(
+        kraken_ws_snapshot_retry_backoff_ms(99),
+        capped,
+        "streak growth stays bounded"
+    );
+
+    // With a streak recorded, an elapsed *base* window is no longer enough.
+    let now_ms = 10_000_000_000i64;
+    let fresh = std::collections::HashMap::new();
+    let mut attempt = std::collections::HashMap::new();
+    let mut streak = std::collections::HashMap::new();
+    for &interval_min in &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST {
+        let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap();
+        attempt.insert(("AAPL".to_string(), tf.to_string()), now_ms);
+        streak.insert(("AAPL".to_string(), tf.to_string()), 2u32);
+    }
+    let catalog = vec!["AAPL".to_string()];
+    assert!(
+        select_kraken_ws_snapshot_sweep_batch_high_first(
+            &catalog,
+            &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+            &fresh,
+            &attempt,
+            &streak,
+            now_ms + base,
+            250,
+        )
+        .is_none(),
+        "streak=2 → base window elapsed but 4× window has not"
+    );
+    let (interval_min, pairs) = select_kraken_ws_snapshot_sweep_batch_high_first(
+        &catalog,
+        &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
+        &fresh,
+        &attempt,
+        &streak,
+        now_ms + base * 4,
+        250,
+    )
+    .expect("escalated window elapsed → eligible again");
+    assert_eq!(interval_min, 5);
     assert_eq!(pairs, vec!["AAPLx/USD".to_string()]);
 }
 
@@ -344,6 +405,7 @@ fn snapshot_sweep_caps_batch_size_within_the_chosen_timeframe() {
         &catalog,
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
+        &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
         0,
         2,
@@ -378,6 +440,7 @@ fn snapshot_sweep_caps_m1_batch_smaller_than_m5() {
         &catalog,
         &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST,
         &fresh,
+        &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
         now_ms,
         KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE,

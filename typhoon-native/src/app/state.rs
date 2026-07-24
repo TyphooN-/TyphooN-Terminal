@@ -395,6 +395,12 @@ pub struct TyphooNApp {
     /// high-timeframe-first sweep). Not REST-visible, so it can't suppress REST
     /// refetch the way a real freshness anchor would.
     pub(crate) kraken_ws_snapshot_attempt: std::collections::HashMap<(String, String), i64>,
+    /// Consecutive snapshot sweeps of `(symbol, tf)` that produced no bars.
+    /// Drives an escalating per-pair retry backoff so a permanently empty
+    /// `{SYM}x/USD` interval decays from a 20-minute re-probe to a daily one
+    /// instead of churning the WS connection forever. Cleared as soon as the
+    /// pair commits real bars (see `handle_kraken_ws_bars_committed`).
+    pub(crate) kraken_ws_snapshot_empty_streak: std::collections::HashMap<(String, String), u32>,
     pub(crate) kraken_pairs: Vec<(String, String)>,
     /// Normalized pair/display symbols cached as a set so
     /// `kraken_spot_symbol_in_loaded_pairs` is O(1) — the previous linear

@@ -257,7 +257,11 @@ impl TyphooNApp {
                     }
                     m
                 };
-                ui.horizontal_wrapped(|ui| {
+                // One broker per line. Wrapping a single run-on row split brokers
+                // mid-label at arbitrary widths and made the reachable/no-data
+                // qualifiers hard to attribute; a vertical list reads cleanly at
+                // any window size.
+                ui.vertical(|ui| {
                     for (broker, total, healthy, pct) in broker_totals.iter() {
                         let color = if *total == 0 {
                             egui::Color32::from_rgb(150, 150, 150)
@@ -289,7 +293,6 @@ impl TyphooNApp {
                                 "Raw % counts all {total} expected cells. {no_data} are provider-no-data (every applicable source has tombstoned them), so they can never become healthy on this lane. Reachable % excludes them: healthy / (total − no-data)."
                             ));
                         }
-                        ui.label(egui::RichText::new("|").color(AXIS_TEXT));
                     }
                 });
                 ui.separator();

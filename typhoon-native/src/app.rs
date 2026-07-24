@@ -2863,6 +2863,7 @@ impl TyphooNApp {
             kraken_open_orders: Vec::new(),
             kraken_ws_fresh_until: std::collections::HashMap::new(),
             kraken_ws_snapshot_attempt: std::collections::HashMap::new(),
+            kraken_ws_snapshot_empty_streak: std::collections::HashMap::new(),
             kraken_pairs: Vec::new(),
             kraken_pairs_normalized: std::collections::HashSet::new(),
             kraken_equity_pair_by_base: std::collections::HashMap::new(),

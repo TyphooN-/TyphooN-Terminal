@@ -103,3 +103,42 @@ Non-tokenized equities still depend on iapi demand repair and assist/merged lane
 - Raising any provider's request rate. The limiters are the real ceiling; only
   request **reduction** (TF derivation) and **redirection** (Lever 1) help.
 - Changing the raw coverage definition. Lever 2 is purely additive.
+
+## Update 2026-07-24 — the last non-converging loop, and reading the gauge
+
+An overnight log review (window hidden the whole time; the ADR-134 pump logged
+123,511 passes / 373,855 broker messages, so nothing was frozen) showed sync
+throughput oscillating between 1 and ~2,200 cells/min and never settling at
+zero, with the Sync Status headline sitting at "98.8% synced · 885 reachable
+cells still to sync · 17,983 unavailable (no-data)".
+
+**That headline is the honest gauge and it was already correct.** 100% is not
+reachable by construction: the 17,983 unavailable cells are provider-no-data,
+and the per-TF `% Synced` column keeps them in its denominator — which is why a
+lane like Alpaca 15Min reads 60.2% while having exactly **one** genuinely
+unsynced cell (12,586 symbols, 5,002 no-data). The residual reachable work is
+churn, not backlog: every intraday bar close re-opens cells that were just
+closed. Reading the per-TF percentages as a backlog is the recurring
+misinterpretation; the reachable chips and the headline are the numbers to
+trust (ADR-107's `sync_status` semantics).
+
+One genuine non-converging loop did surface. The Kraken xStock WS OHLC snapshot
+sweep re-queued the *same* 8 / 32 / 22-pair batches every ~20 minutes all night.
+`KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS` was a **flat** 20 minutes, and
+freshness is only recorded on a non-empty commit, so a `{SYM}x/USD` interval
+Kraken serves no bars for was re-probed ~72×/day forever — WS connects,
+subscribes, commits nothing, and re-arms.
+
+Fix: the per-pair retry backoff now escalates with consecutive empty sweeps —
+`kraken_ws_snapshot_retry_backoff_ms(streak)` doubles the 20-minute base per
+empty sweep, capped at `KRAKEN_WS_SNAPSHOT_SWEEP_MAX_BACKOFF_DOUBLINGS` (6, so
+~21h). The streak lives in `kraken_ws_snapshot_empty_streak` and is **cleared
+the moment the pair commits real bars** (`handle_kraken_ws_bars_committed`), so
+a token that starts trading returns to the 20-minute cadence immediately. This
+keeps the "it might list later" probe while removing the churn; it does not
+change coverage numbers, because those pairs were never producing data.
+
+Also fixed here: the broker summary line in Sync Status rendered every broker in
+one `horizontal_wrapped` row, which split labels at arbitrary widths and made
+the `reachable` / `no-data` qualifiers hard to attribute to a broker. It is one
+broker per line now.
