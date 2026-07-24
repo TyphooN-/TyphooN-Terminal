@@ -375,40 +375,12 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_scope_symbols(&self) -> std::collections::HashSet<String> {
-        let mut syms = std::collections::HashSet::new();
-        for p in &self.kr_positions {
-            let symbol = normalize_market_data_symbol(&p.symbol)
-                .replace('/', "")
-                .to_uppercase();
-            if !symbol.is_empty() {
-                syms.insert(symbol);
-            }
-        }
-        for (pair, display) in &self.kraken_pairs {
-            let display_or_pair = if display.trim().is_empty() {
-                pair.as_str()
-            } else {
-                display.as_str()
-            };
-            let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(display_or_pair)
-                .replace('/', "")
-                .to_uppercase();
-            if !symbol.is_empty() {
-                syms.insert(symbol);
-            }
-            if let Some(equity) = kraken_xstock_fundamental_symbol(pair, display) {
-                syms.insert(equity.to_uppercase());
-            }
-        }
-        for symbol in &self.kraken_futures_symbols {
-            let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol)
-                .replace('/', "")
-                .to_uppercase();
-            if !symbol.is_empty() {
-                syms.insert(symbol);
-            }
-        }
-        syms
+        kraken_scope_membership_symbols(
+            &self.kr_positions,
+            &self.kraken_equity_universe_symbols,
+            &self.kraken_pairs,
+            &self.kraken_futures_symbols,
+        )
     }
 
     /// Fundamentals filtered by the current `broker_scope`. Returns a Vec of refs
@@ -1212,6 +1184,71 @@ fn normalize_sec_scrape_symbols_priority_order(
     syms
 }
 
+/// Kraken scope **membership**: what the filtered views (fundamentals, SEC
+/// filings/insiders/timeline) test their rows against.
+///
+/// The equity universe is the load-bearing part. It used to be absent: xStock
+/// equities were derived only from `kraken_pairs` via
+/// `kraken_xstock_fundamental_symbol`, which needs a `.EQ` suffix that the
+/// **public** AssetPairs feed does not carry (that feed is crypto + spot FX;
+/// `.EQ` shows up on private balances). So the set collapsed to crypto pairs
+/// and futures, which share no tickers with the equity-keyed fundamentals or
+/// filing tables — Kraken scope reported "0 fundamentals in scope" and an empty
+/// Filings tab for the whole session, no matter how much the scraper fetched.
+///
+/// Worse, it disagreed with `kraken_sec_scrape_scope_symbols`, which has always
+/// used the equity universe: the scraper pulled filings for Kraken's equities
+/// and this filter then discarded every one of them. Both now start from the
+/// same universe. `kraken_equity_universe_symbols` arrives bare, uppercase and
+/// `.EQ`-stripped, matching `Fundamentals::symbol` and `SecFiling::ticker`.
+fn kraken_scope_membership_symbols(
+    kr_positions: &[PositionInfo],
+    kraken_equity_universe_symbols: &[String],
+    kraken_pairs: &[(String, String)],
+    kraken_futures_symbols: &[String],
+) -> std::collections::HashSet<String> {
+    let mut syms = std::collections::HashSet::new();
+    for p in kr_positions {
+        let symbol = normalize_market_data_symbol(&p.symbol)
+            .replace('/', "")
+            .to_uppercase();
+        if !symbol.is_empty() {
+            syms.insert(symbol);
+        }
+    }
+    for symbol in kraken_equity_universe_symbols {
+        let symbol = symbol.trim().trim_end_matches(".EQ").to_uppercase();
+        if !symbol.is_empty() {
+            syms.insert(symbol);
+        }
+    }
+    for (pair, display) in kraken_pairs {
+        let display_or_pair = if display.trim().is_empty() {
+            pair.as_str()
+        } else {
+            display.as_str()
+        };
+        let symbol = typhoon_engine::core::kraken::normalize_pair_symbol(display_or_pair)
+            .replace('/', "")
+            .to_uppercase();
+        if !symbol.is_empty() {
+            syms.insert(symbol);
+        }
+        if let Some(equity) = kraken_xstock_fundamental_symbol(pair, display) {
+            syms.insert(equity.to_uppercase());
+        }
+    }
+    for symbol in kraken_futures_symbols {
+        let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(symbol)
+            .replace('/', "")
+            .to_uppercase();
+        if !symbol.is_empty() {
+            syms.insert(symbol);
+        }
+    }
+    syms
+}
+
 fn kraken_sec_scrape_scope_symbols(
     kr_positions: &[PositionInfo],
     kraken_equity_universe_symbols: &[String],
@@ -1320,6 +1357,51 @@ mod tests {
             kraken_sec_scrape_scope_symbols(&positions, &catalog, &spot_pairs, &futures),
             vec!["AAPL".to_string(), "HRTX".to_string(), "WOK".to_string(),]
         );
+
+        // The membership set must cover everything the scrape targeted, or the
+        // scraper fetches filings the filter then throws away. It legitimately
+        // holds *more* (crypto/futures pairs are in Kraken's scope for the
+        // non-equity views); what it may never do is miss an equity.
+        let membership =
+            kraken_scope_membership_symbols(&positions, &catalog, &spot_pairs, &futures);
+        for equity in kraken_sec_scrape_scope_symbols(&positions, &catalog, &spot_pairs, &futures) {
+            assert!(
+                membership.contains(&equity),
+                "{equity} was scraped under Kraken scope but is not in scope membership"
+            );
+        }
+    }
+
+    #[test]
+    fn kraken_scope_membership_includes_the_equity_universe() {
+        // Regression: the universe was absent and xStock equities were derived
+        // only from `kraken_pairs`, which needs a `.EQ` suffix the public
+        // AssetPairs feed does not carry. Kraken scope collapsed to crypto +
+        // futures, sharing no tickers with the equity-keyed fundamentals or
+        // filing tables — hence "Broker scope → Kraken (0 fundamentals in
+        // scope)" for a whole session.
+        let catalog = vec!["BABY.EQ".to_string(), "AAPL".to_string()];
+        let spot_pairs = vec![
+            ("XXBTZUSD".to_string(), "XBT/USD".to_string()),
+            ("ETHUSD".to_string(), "ETH/USD".to_string()),
+        ];
+        let futures = vec!["PI_XBTUSD".to_string()];
+
+        let syms = kraken_scope_membership_symbols(&[], &catalog, &spot_pairs, &futures);
+
+        // Bare, uppercase, `.EQ`-stripped — the format `Fundamentals::symbol`
+        // and `SecFiling::ticker` use, so `set.contains(...)` actually hits.
+        assert!(syms.contains("AAPL"));
+        assert!(syms.contains("BABY"));
+        assert!(!syms.contains("BABY.EQ"));
+
+        // Crypto and futures still belong to Kraken scope for the non-equity views.
+        assert!(syms.contains("ETHUSD"));
+
+        // Without the universe the set is equity-free, which is the bug.
+        let without_universe = kraken_scope_membership_symbols(&[], &[], &spot_pairs, &futures);
+        assert!(!without_universe.contains("AAPL"));
+        assert!(!without_universe.contains("BABY"));
     }
 
     #[test]

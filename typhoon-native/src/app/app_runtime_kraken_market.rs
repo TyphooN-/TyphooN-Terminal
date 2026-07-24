@@ -290,6 +290,11 @@ impl TyphooNApp {
         self.kraken_equity_universe_set = digest.universe_set;
         self.kraken_equity_universe_symbols = digest.symbols;
         self.kraken_equity_names = digest.names;
+        // Kraken scope membership is built from this universe, so the cached
+        // scope set and the SEC cache identity both have to move when it lands
+        // — the bg_rev bump below only reaches caches keyed on bg_rev, and the
+        // SEC caches key on the membership signature instead.
+        self.kraken_scope_catalog_rev = self.kraken_scope_catalog_rev.wrapping_add(1);
         self.rebuild_chart_company_name_catalog();
         if let Some(map) = digest.regulatory_alerts {
             self.bg.regulatory_alerts_by_symbol = map;

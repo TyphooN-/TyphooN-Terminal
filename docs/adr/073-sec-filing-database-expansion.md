@@ -225,3 +225,44 @@ The general rule this establishes: **state mutated in `ui()` must not be read
 through a cache refreshed only in `logic()`.** Refresh at the point of use, and
 key derived caches on the resolved value rather than on the selector that
 produced it.
+
+## Update 2026-07-24 (4) — Kraken scope had no equities in it at all
+
+With the frame-lag fix above the scope counts became truthful, and the truth
+was: `Broker scope → Kraken (0 fundamentals in scope)` — every time, all
+session, against `All (12338)` and `Alpaca (11961)`. Previously this was
+invisible, because the logged count belonged to the *previous* scope.
+
+`kraken_scope_symbols()` — the membership set behind the fundamentals filter
+and every SEC cache — was built from `kr_positions` + `kraken_pairs` +
+`kraken_futures_symbols`. Equities were supposed to come out of `kraken_pairs`
+via `kraken_xstock_fundamental_symbol`, which requires a `.EQ` suffix. That
+suffix appears on *private* balances and the iapi catalog; the **public**
+AssetPairs feed this list is loaded from exposes tokenized equities as
+`{SYM}x/USD`, and the helper deliberately refuses to infer an equity from an
+`x`/`X` suffix (it cannot tell `AAPLx` from `AVAX`, `FLUX`, `CVX` without a
+catalog). So the derivation never fired: 875 pairs loaded, zero equities
+extracted, and a scope set of pure crypto/futures tickers that shares nothing
+with the equity-keyed `all_fundamentals` and `sec_filings.ticker`.
+
+The catalog the helper lacks is `kraken_equity_universe_symbols`, and
+`kraken_sec_scrape_scope_symbols` — the **scrape** path — has always used it.
+The two Kraken scope derivations disagreed: the scraper fetched filings for
+Kraken's tradable equities and the display filter then discarded every one of
+them. That is the shape of the earlier Alpaca defect (Update 2 above) in the
+opposite direction — there the scrape target was too narrow, here the
+membership set was.
+
+`kraken_scope_membership_symbols` is now a named function that unions the
+equity universe in (bare, uppercase, `.EQ`-stripped, matching
+`Fundamentals::symbol` / `SecFiling::ticker`), keeping crypto pairs and futures
+for the non-equity views. A test asserts every symbol the Kraken scrape path
+targets is present in the membership set — the two may not drift apart again.
+
+Matching invalidation, exactly as `alpaca_scope_catalog_rev` needed in Update 2:
+`kraken_scope_catalog_rev` was bumped in `handle_kraken_pairs` and
+`handle_kraken_futures_instruments` but **not** where the universe digest is
+applied. The digest bumps `bg_rev`, which is enough for `cached_scope_syms`
+(bg_rev is in its key) but not for the SEC caches, which key on
+`broker_scope_membership_signature()` alone. Without the bump the Filings tab
+would keep the pre-universe (empty) filter result after the catalog landed.
