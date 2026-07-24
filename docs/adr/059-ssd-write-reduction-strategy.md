@@ -1,6 +1,17 @@
 # ADR-059: SSD Write Reduction Strategy
 
-**Status:** Implemented | **Date:** 2026-04-08
+**Status:** Implemented (policy current; several described components removed) | **Date:** 2026-04-08
+
+> **Scope note (2026-07-24).** The write-reduction *policy* still holds and the
+> load-bearing mechanisms are live: `put_kv_dedup` throttles the `broker:*` KV
+> keys (`app_runtime_alpaca_account.rs`, `app_runtime_kraken_market.rs`) and the
+> cache still opens with `PRAGMA wal_autocheckpoint=2000`
+> (`typhoon-engine/src/core/cache.rs`). The components this ADR names as write
+> sources are gone: DARWIN analytics and the MT5 `BarCacheWriter` were removed
+> with the broker scope reduction (ADR-111), and the `put_kv_if_changed!` macro
+> and `deploy_ramdisk.sh` are no longer in the tree. Read the numbers below as
+> the 2026-04 measurement, not current topology. Current storage-write policy
+> lives in ADR-089 (compression/compaction) and ADR-121 (retention).
 
 ## Context
 

@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-04-15
 **Supersedes/extends:** ADR-079 through ADR-079
-**Related:** `typhoon-engine/src/core/research.rs`, `typhoon-engine/src/core/lan_sync.rs`,
+**Related:** `typhoon-engine/src/core/research/`, `typhoon-engine/src/core/lan_sync.rs`,
 `typhoon-native/src/app.rs`, `docs/RESEARCH_PACKET.md`
 
 ## Context
@@ -67,7 +67,7 @@ Ship two new features as a single bundle:
    copied to clipboard or saved to a `.md` file via a native file
    dialog.
 
-## Engine changes (`typhoon-engine/src/core/research.rs`)
+## Engine changes (`typhoon-engine/src/core/research/`)
 
 1. **Types**:
    - `WebArticle { title, url, source, published_at, summary,

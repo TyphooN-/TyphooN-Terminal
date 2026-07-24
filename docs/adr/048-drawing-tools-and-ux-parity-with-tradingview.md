@@ -87,9 +87,14 @@ selected drawing moves all its points, and Esc/click-away deselects.
 
 ### Gap #3: Control points — DONE
 Implemented: selected drawings render small square drag handles at each
-endpoint (`typhoon-chart-ui/src/render/chart_helpers/planning_overlays.rs`),
-and `drag_control_point` (`typhoon-chart-ui/src/state.rs`) resizes that
-specific point while `None` means whole-drawing drag.
+endpoint (`typhoon-chart-ui/src/render/chart_helpers/planning_overlays.rs`).
+Handles, hit-testing, and resize all read one registry in
+`typhoon-chart-ui/src/drawing_interaction.rs` — `drawing_anchors` enumerates a
+variant's control points, `drawing_set_anchor` moves the grabbed one, and
+`translate_drawing` moves the whole drawing when no anchor is grabbed
+(dispatched from `typhoon-native/src/app/app_runtime_central_panel.rs`). Using
+one registry for both draw and grab is what keeps every variant's handles
+exactly where the hit test looks.
 
 ### Gap #7: Cross-TF drawings — still open (assessed 2026-07-04, deliberately not rushed)
 - Requires storing drawings as `HashMap<String, Vec<Drawing>>` keyed by symbol

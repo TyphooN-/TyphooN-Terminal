@@ -71,6 +71,14 @@ Do not attempt one giant "support everything" patch. That would create a brittle
 
 ## Proposed module layout
 
+> **As-built note (2026-07-24).** The engine-side names below all landed under
+> `typhoon-engine/src/broker/kraken/` *except* `ws_v2_account.rs` (see Phase 4 —
+> not implemented). The native-side supervisor names below were never used: the
+> app-level stream supervision lives in
+> `typhoon-native/src/app/app_runtime_kraken_ws.rs` and
+> `app_runtime_kraken_market.rs` (L1/L2/trade + L3 status), not in
+> `kraken_market_ws.rs` / `kraken_l3_ws.rs`.
+
 Under `typhoon-engine/src/broker/kraken/`:
 
 - `ws_v2.rs`
@@ -251,7 +259,15 @@ Verification:
 - Parser tests for snapshot last 50 trades and live update frames.
 - Live smoke for one symbol.
 
-### Phase 4 — v2 authenticated account streams
+### Phase 4 — v2 authenticated account streams — NOT IMPLEMENTED
+
+**Status (2026-07-24): not started.** Account streaming is still the v1 path in
+`typhoon-engine/src/broker/kraken/private_ws.rs` (`ownTrades` + `openOrders`),
+supervised by `typhoon-native/src/app/app_runtime_kraken_private.rs` with the
+reconnect/half-open watchdog. `ws_v2_account.rs` does not exist. This is a
+deliberate hold, not an oversight: v1 delivers the fills and open orders the UI
+consumes, and a v2 migration buys live balance/ledger deltas at the cost of a
+second authenticated token path. Revisit when balance streaming is needed.
 
 Implement `ws_v2_account.rs` for:
 

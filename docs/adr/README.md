@@ -13,6 +13,15 @@ Current count: 111 ADRs (plus this index; removed-feature ADRs were deleted 2026
 
 **2026-06 consolidation:** execution-log passes were merged into durable parents and replaced with short redirect stubs (so cross-references keep resolving, numbers stay permanent): perf/O(1) passes (060, 072, 074, 075, 076, 105) → **ADR-098** (now "Performance & O(1) Optimization Program"); GPU parity passes (041, 071) → **ADR-030**; transpiler phase 2 (068) → **ADR-067**. Full pre-merge detail remains in git history.
 
+**Deleted ADRs still referenced by number.** Two removed-feature ADRs are cited
+by surviving documents; the citations are deliberate provenance, not broken
+links. **ADR-052** (WASM web client Phase 1) is referenced by ADR-066 as the
+origin of the deferred phone-order-entry work — both the client and that work
+are gone with the web/LAN removal (ADR-111). **ADR-081** was an indicator
+expansion pass (ALMA / VIDYA / HMA / Chaikin MFI and neighbours); RESEARCH_PACKET.md
+still tags those primitives with it to distinguish them from same-family
+indicators introduced by ADR-079. Their detail is in git history.
+
 Selected thematic groups for onboarding (the root README contains the exhaustive numbered index):
 
 - **Chart/rendering UX:** ADR-001, 002, 004, 005, 007, 016, 017, 027, 030, 048, 098, 119, 123.

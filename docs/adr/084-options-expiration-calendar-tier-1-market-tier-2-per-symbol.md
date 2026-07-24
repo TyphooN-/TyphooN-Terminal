@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-04-17
 **Supersedes/extends:** ADR-079 (Options chain fetch), ADR-079 (BBSQUEEZE)
-**Related:** `typhoon-engine/src/core/research.rs`, `typhoon-native/src/app.rs`, `typhoon-engine/src/core/lan_sync.rs`
+**Related:** `typhoon-engine/src/core/research/`, `typhoon-native/src/app.rs`, `typhoon-engine/src/core/lan_sync.rs`
 
 ## Context
 

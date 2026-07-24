@@ -177,7 +177,7 @@ Parameter ranges (e.g., `5..50`, `1.0..3.0`) define the optimization grid.
 
 ### GPU Compute Shaders
 
-**`strategy_eval.wgsl`** — One thread per parameter combination:
+**`BACKTEST_EVAL_SHADER`** (WGSL, inlined in `typhoon-native/src/gpu_compute/shaders.rs`) — one thread per parameter combination:
 ```wgsl
 @group(0) @binding(0) var<storage, read> bars: array<Bar>;
 @group(0) @binding(1) var<storage, read> indicators: array<f32>;  // pre-computed
@@ -234,7 +234,7 @@ fn eval_strategy(@builtin(global_invocation_id) id: vec3<u32>) {
 
 ### Robustness Scoring Shader
 
-**`robustness.wgsl`** — Neighbor stability analysis:
+**`ROBUSTNESS_SHADER`** (same module) — neighbor stability analysis:
 ```wgsl
 // For each parameter combo, check if its N nearest neighbors
 // produce similar results. Score = 1.0 - normalized_variance.

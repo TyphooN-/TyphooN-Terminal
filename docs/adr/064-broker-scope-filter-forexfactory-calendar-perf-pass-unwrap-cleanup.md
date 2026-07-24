@@ -87,15 +87,17 @@ The handler-side match arms still accept the old names, so muscle-memory doesn't
 
 **Problem:** `dispatch_indicator` created **two fresh GPU buffers per call** (`ind_out` storage + `ind_params` uniform). With 31 indicator pipelines × multiple charts × 60 fps, this is hot allocation churn.
 
-**Fix:** Hoist both buffers to `GpuContext` fields (`ind_out_buffer`, `ind_params_buffer`), initialize once in `upload_bars` alongside the existing `readback_buffer`, then re-bind them in each `dispatch_indicator` call instead of re-creating.
+**Fix:** Hoist both buffers to `GpuCompute` fields (`ind_out_buffer`, `ind_params_buffer` in `typhoon-native/src/gpu_compute.rs`), initialize once in `upload_bars` alongside the existing `readback_buffer`, then re-bind them in each `dispatch_indicator` call instead of re-creating.
 
 Both buffers have fixed size per context-lifecycle (`bar_count * 4` for output, 8 bytes for params), so sharing is safe — there's only one indicator computation in flight at a time on the single GPU queue.
 
 ### 5. Cache pragma alignment
 
-`read_conn` was opened with `PRAGMA cache_size=-32000` (32 MB) while `write_conn` used `-64000` (64 MB). For mixed read/write workloads this left the read path with an undersized page cache.
+The read connection was opened with `PRAGMA cache_size=-32000` (32 MB) while the write connection used `-64000` (64 MB). For mixed read/write workloads this left the read path with an undersized page cache.
 
-**Fix:** aligned both to `-64000`. Trivial change, real improvement on hot KV reads during LAN client sync.
+**Fix:** aligned both to `-64000`. Trivial change, real improvement on hot KV reads.
+
+**Superseded:** the fixed pragma is now a RAM-scaled baseline — `sqlite_scaled_cache_kib` scales `cache_size` (and mmap) by installed RAM in `typhoon-engine/src/core/cache.rs`, and the write connection is the `conn: Mutex<Connection>` field with `read_conn` a `ReadConnPool` (ADR-098).
 
 ### 6. Unwrap cleanup (ADR-061 enforcement)
 

@@ -48,11 +48,11 @@ The alert layer is consumed at three points, all reading the same in-memory `reg
 
 1. **Chart header badge** — the original surface: `!! Reg SHO !!` drawn before the EXT/daily-close chip so a compliance badge is never the element pushed off the right edge.
 2. **Watchlist badge** — the ticker renders red with a `!!` drawn on the *top* layer (after the value columns) so the right-aligned Last/Chg text can never overpaint it.
-3. **`REG_SHO` / `HALTS` floating windows** — `REG_SHO` / `HALTS` (registered in the command palette) open floating `egui_extras` tables. Both windows expose clickable sortable column headers for Symbol, Last, Bid, Ask, Dly Close, Chg% (implemented 2026-06-16); sort state is held in `AppState` (`reg_sho_sort`, `halts_sort`) and applied before row emission. The sort closures explicitly bind the alert tuples as `_alerts_*` to silence unused-variable warnings.
+3. **`REG_SHO` / `HALTS` floating windows** — `REG_SHO` / `HALTS` (registered in the command palette) open floating `egui_extras` tables. Both windows expose clickable sortable column headers for Symbol, Last, Bid, Ask, Dly Close, Chg% (implemented 2026-06-16); sort state is held on `TyphooNApp` (`reg_sho_sort`, `halts_sort` in `typhoon-native/src/app/state.rs`) and applied before row emission. The sort closures explicitly bind the alert tuples as `_alerts_*` to silence unused-variable warnings.
 
 Window data population:
 
-- The window is **cache-based** ("live from cache"). On open it loads cached **daily** bars for every threshold symbol not already in the watchlist, **off the render thread** (`spawn_blocking` + mpsc, mirroring the MTF-grid loader) to avoid the SQLite-read stall when a bulk bar-sync writer holds the single conn mutex. Results merge into `reg_sho_prices` and fill Last / Dly Close / Chg% for the whole list.
+- The window is **cache-based** ("live from cache"). On open it loads cached **daily** bars for every threshold symbol not already in the watchlist, **off the render thread** (`spawn_blocking` + mpsc, mirroring the MTF-grid loader) to avoid the SQLite-read stall when a bulk bar-sync writer holds the single conn mutex. Results merge into `regulatory_prices` (refreshed by `refresh_regulatory_prices`, drained via `regulatory_prices_rx`) and fill Last / Dly Close / Chg% for the whole list.
 - Live **Bid/Ask** come only from watchlisted symbols (the only ones with a live quote subscription); absent values render `—`, never a misleading `0.0000`.
 - Per-row **Actions**: `+WL` (add to watchlist — shows `✓WL` when already present, and forces an immediate quote refresh), `D1` / `W1` (open or focus a chart at that timeframe via `SymbolAction::OpenChartTf`).
 

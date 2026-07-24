@@ -94,14 +94,20 @@ Rationale:
   is ubiquitous, in-tree via `sha2`, and gives 64-char hex primary keys
   that are comfortable to read in the stats window.
 
-### LAN sync
+### LAN sync (removed — historical)
 
-`ai_response_cache` added to `SYNCABLE_TABLES` with
-`table_timestamp_column = updated_at` and the standard CREATE TABLE
-stanza in `create_table_sql`. Hits on one peer refresh `updated_at`,
-which causes the next delta sync window to ship the updated hit_count
-back out — so peers converge on a shared view of "which entries are
-being actively used."
+The cross-client half of this ADR rode the LAN sync tables: `ai_response_cache`
+was added to `SYNCABLE_TABLES` with `table_timestamp_column = updated_at` and a
+CREATE TABLE stanza, so hits on one peer refreshed `updated_at` and the next
+delta window shipped the updated `hit_count` back out.
+
+LAN sync was removed with the web/mobile client (ADR-111), so there is no
+cross-client convergence today. What remains — and is what the rest of this ADR
+describes — is the local cache: the table is created by
+`create_ai_response_cache_table` in
+`typhoon-engine/src/core/ai_response_cache.rs` (a regular table, **not** the
+`kv_cache` KV store) with `idx_ai_response_cache_updated` for the retention
+sweep.
 
 ### Native intercept (cache-aside)
 

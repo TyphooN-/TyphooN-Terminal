@@ -153,7 +153,7 @@ A real test of "what does HTML rendering buy us?" reveals: paragraph breaks, hyp
   - `extract_article_drops_script_and_style_blocks`
   - `extract_image_uses_twitter_card_fallback`
   - `extract_image_ignores_non_absolute_urls`
-- **New deps**: `scraper = "0.27"` (engine, ~500 KB binary impact), `egui_extras = "0.34"` with `image` + `all_loaders`, `egui_commonmark = "0.23"` with `load-images`. All four build cleanly against eframe 0.34.
+- **New deps** (versions as landed): `scraper = "0.27"` (engine, ~500 KB binary impact), `egui_extras = "0.34"` with `image` + `all_loaders`, `egui_commonmark = "0.23"` with `load-images`, against eframe 0.34. Current tree: `egui_extras`/`eframe` 0.35 and `egui_commonmark` 0.24, and the broad `all_loaders` bundle was trimmed to the explicitly-used loaders per ADR-031.
 - **Schema**: no migrations. `image_url` column already existed (ADR-078) — the extractor just starts populating it for sources that previously left it blank.
 
 ## Threat model carve-outs (for future reviewers)

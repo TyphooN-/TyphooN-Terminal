@@ -24,7 +24,7 @@ This ADR is now the single human-readable record for the research/indicator expa
 
 ## Current architecture
 
-- Research and indicator data models live primarily under `typhoon-engine/src/core/research.rs` and related broker/cache plumbing.
+- Research and indicator data models live primarily under `typhoon-engine/src/core/research/` and related broker/cache plumbing.
 - UI surfaces live in the native egui app with command-palette entry points and cache-first fetch behavior.
 - LAN/web/client reuse should expose cached research packets rather than duplicating provider fetches per client.
 - Provider-entitled or paid-feed-only surfaces are tracked as data-gated roadmap work, not active implementation gaps.

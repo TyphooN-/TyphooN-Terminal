@@ -12,8 +12,9 @@ separate ways:
 - `typhoon-engine/src/core/kraken.rs` fetches public Spot OHLCV bars.
 - `typhoon-engine/src/core/kraken_futures.rs` fetches public Futures instruments and
   chart candles.
-- `typhoon-engine/src/broker/kraken_broker.rs` owns authenticated account and order
-  REST calls.
+- `typhoon-engine/src/broker/kraken/` owns authenticated account and order REST
+  calls (`mod.rs` + `order_types.rs` + `helpers.rs`; the module was a single
+  `kraken_broker.rs` file when this ADR was written).
 
 The official Spot REST surface includes market data, account data, trading,
 funding, subaccounts, earn, and transparency endpoints. The trading surface
@@ -135,8 +136,12 @@ Native quick-trade and chart-position controls can route crypto orders to
 Kraken. Close-all, partial-close, cancel-order, and exit synchronization use
 the same net-position EA semantics as Alpaca.
 
-The LAN web/mobile protocol now accepts `kraken` for order, cancel, and close
-commands. Web order types are normalized to Kraken names:
+Order types are normalized to Kraken names by
+`normalize_kraken_order_type` (`typhoon-engine/src/broker/kraken/helpers.rs`),
+which lowercases and maps `_` → `-`, with `is_supported_kraken_order_type`
+gating the accepted set. (This normalization was introduced for the LAN
+web/mobile protocol, which has since been removed — ADR-111; it now serves the
+native order path.)
 
 - `stop` / `stop_loss` -> `stop-loss`
 - `stop_limit` / `stop_loss_limit` -> `stop-loss-limit`

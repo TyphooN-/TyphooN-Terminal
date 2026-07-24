@@ -33,7 +33,7 @@ The requirement is:
 ## Decision
 
 Introduce `typhoon-engine/src/core/news.rs` as a standalone module analogous to
-`core/research.rs`: typed articles, pure async fetchers, sync SQLite upsert
+`core/research/`: typed articles, pure async fetchers, sync SQLite upsert
 helpers, and a fetch orchestrator for bulk scraping.
 
 ### Sources
@@ -308,4 +308,4 @@ Engine test suite now at **577 passing** (was 565).
 
 - ADR-073 — SEC filing expansion (pattern for in-terminal content viewer)
 - ADR-076-105 — Deeper wiring passes (LAN sync whitelist precedent)
-- `typhoon-engine/src/core/research.rs` — Module layout template for this module
+- `typhoon-engine/src/core/research/` — Module layout template for this module

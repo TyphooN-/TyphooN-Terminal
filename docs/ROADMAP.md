@@ -70,9 +70,9 @@ is scheduled on `master`.
 - [x] Volume Profile (POC, Value Area High/Low)
 - [x] SMA Outfit stack/trigger/distance/cross analysis (`SMA_INTELLIGENCE`; ADR-131/133)
 - [ ] Historical outfit behavior correlation, out-of-sample scoring, and ranking (deferred pending an accepted outcome horizon/objective)
-- [x] Monte Carlo VaR (from DARWIN daily returns)
+- [x] Monte Carlo VaR — now computed from cached bar closes (`compute_var_from_closes`, `typhoon-engine/src/core/var.rs`); the original DARWIN daily-return source was removed 2026-06 with the Darwinex adapter (ADR-111)
 - [x] Stress test (8 historical scenarios)
-- [x] VaR multiplier (per-DARWIN corridor status)
+- [x] ~~VaR multiplier (per-DARWIN corridor status)~~ *(removed 2026-06 — DARWIN corridors went with the Darwinex adapter; per-symbol VaR remains)*
 - [x] Screener (cache symbol browser)
 
 ### Phase 7: Broker Connection
@@ -84,15 +84,15 @@ is scheduled on `master`.
 
 ### Phase 8: Data & Analytics
 - [x] ~~Crypto backfill (CryptoCompare — BTC from 2010, 2000 bars/request)~~ *(removed 2026-06 — Kraken async recent/gap-fill retained)*
-- [x] DARWIN signal vs quote comparison
+- [x] ~~DARWIN signal vs quote comparison~~ *(removed 2026-06 — see Deprecated & Removed)*
 - [x] MTF SMA (H1/H4/D1/W1 200SMA + W1/MN1 100SMA — Tomato + Magenta)
 - [x] ATR Projection MTF (M15/H1/H4/D1/W1/MN1 horizontal levels)
 - [x] Previous Candle Levels (H1/H4/D1/W1/MN1)
 - [x] ~~CLI/TUI (search, movers, fills)~~ *(removed 2026-06 — archived on `deprecated/cli-tui`)*
  - **Custom timeframes** (M2/M3/H2/H3/Y1 etc.): removed. Only native base timeframes + MN1 remain.
-- [x] Monthly Returns Heatmap (Darwinex-style grid per DARWIN)
-- [x] Drawdown Analytics (combined + per-DARWIN dashboard, best/worst days)
-- [x] Divergence Index (signal vs quote return divergence)
+- [x] ~~Monthly Returns Heatmap (Darwinex-style grid per DARWIN)~~ *(removed 2026-06 — see Deprecated & Removed)*
+- [x] ~~Drawdown Analytics (combined + per-DARWIN dashboard, best/worst days)~~ *(removed 2026-06 — see Deprecated & Removed)*
+- [x] ~~Divergence Index (signal vs quote return divergence)~~ *(removed 2026-06 — DARWIN signal/quote series only)*
 - [x] CAGR, Recovery Factor, Drawdown Duration
 - [x] ~~LAN Sync (export/import cache data between machines)~~ *(removed 2026-06; historical implementation only)*
 - [x] Storage Manager (view, delete, compact zstd-22 per symbol/source, configurable idle auto-compact)

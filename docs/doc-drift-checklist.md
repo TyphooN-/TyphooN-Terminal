@@ -13,7 +13,53 @@ async/blocking, and explicit TODO/stub risks.
 - [x] Fixed / in sync
 - [~] Acceptable historical (intentional record, git-history pointer, or ADR title)
 
-**Latest full comb-over (2026-07-22 implementation alignment):**
+**Latest full comb-over (2026-07-24 — mechanical symbol/path verification):**
+
+This sweep changed method: instead of reading prose, every backticked source
+path and code-shaped identifier in `docs/` + `README.md` was extracted and
+checked against the workspace (303 paths, 744 code-shaped identifiers). That
+found drift the prose-reading passes had missed:
+
+- **ADR-004** described the MTF path with three names that no longer exist —
+  a `get_multi_tf_bars` command, a JS-era `projectHTFToChartTime()`, and a
+  `TF_RANK` map — plus a "300ms delay between each timeframe fetch to avoid
+  Alpaca 429" rule. MTF now reads the local bar cache (no provider fetch, so no
+  such rate limit), derives missing HTF rows with `aggregate_bars_to_htf`, ranks
+  with `mtf_timeframe_rank`, and paces the grid fill with
+  `MTF_GRID_FILL_PER_BATCH` off the render thread.
+- **ADR-048** credited control-point resize to `drag_control_point` in
+  `state.rs`; it is the `drawing_anchors` / `drawing_set_anchor` /
+  `translate_drawing` registry in `drawing_interaction.rs`.
+- **ADR-064** named the GPU struct `GpuContext` (it is `GpuCompute`) and
+  described fixed `cache_size` pragmas since superseded by RAM scaling.
+- **ADR-120** put the scanner sort state on `AppState` (it is `TyphooNApp`) and
+  named the price map `reg_sho_prices` (it is `regulatory_prices`).
+- **ADR-051** presented `kraken_broker.rs` as current (now the `kraken/`
+  module) and framed the order-type normalization as a LAN web/mobile feature.
+- **ADR-083**'s cross-client half rode LAN sync, which is gone; the surviving
+  local table is created by `create_ai_response_cache_table`.
+- **ADR-038** cited `strategy_eval.wgsl` / `robustness.wgsl` as files; all WGSL
+  is inlined as `&str` consts in `gpu_compute/shaders.rs`.
+- **ADR-109** Phase 4 (v2 authenticated account streams) was never implemented
+  and now says so explicitly; its "proposed module layout" native names were
+  never used either.
+- **ADR-059** is a 2026-04 record whose named write sources (DARWIN analytics,
+  `BarCacheWriter`, `put_kv_if_changed!`, `deploy_ramdisk.sh`) are all gone,
+  though the policy and `put_kv_dedup` / `wal_autocheckpoint=2000` survive.
+- **ROADMAP** still listed six DARWIN-sourced analytics as current completed
+  features; they are now struck through like the other removals, and Monte
+  Carlo VaR is re-attributed to `compute_var_from_closes`.
+- **ADR-052 / ADR-081** are cited by number but were deleted; `docs/adr/README.md`
+  now records what they were so the citations resolve as provenance.
+- `typhoon-engine/src/core/research.rs` became a module directory; four ADRs
+  still pointed at the file.
+
+Verified-correct claims (no change needed): 111 ADRs, 89 drawing tools (exact
+`Drawing` enum count), "40+ indicators on GPU" (49 `compute_*_gpu` entry
+points), no broken ADR file links, and every vendored-eframe symbol ADR-134
+cites.
+
+**Prior comb-over (2026-07-22 implementation alignment):**
 
 - Corrected the active ADR count to 111 and extended the README index through
   ADR-134.
