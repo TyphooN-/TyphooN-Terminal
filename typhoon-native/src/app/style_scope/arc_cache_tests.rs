@@ -7,7 +7,7 @@ use typhoon_engine::core::screener::{DividendScreenEntry, SectorHeatmapEntry};
 
 use super::{
     EventSource, broker_scope_membership_signature, position_symbol_membership_signature,
-    refresh_arc_slice_cache, sec_filings_controls_key,
+    refresh_arc_slice_cache, sec_filings_controls_key, sec_scope_identity_key,
 };
 
 fn position(symbol: &str) -> PositionInfo {
@@ -263,5 +263,49 @@ fn sec_filings_controls_key_tracks_scope_alongside_filters_and_sort() {
     assert_eq!(
         base,
         sec_filings_controls_key(EventSource::All, &filters, "", 0, false)
+    );
+}
+
+#[test]
+fn sec_scope_identity_key_tracks_the_resolved_symbol_set_not_just_the_enum() {
+    // The SEC data caches filter on the resolved symbol set. Alpaca and Kraken
+    // scope both start positions-only and widen when the broker asset catalog
+    // lands; keying on the enum alone pinned the filtered result to whichever
+    // set existed the first time that scope was rendered.
+    for scope in [
+        EventSource::Alpaca,
+        EventSource::Kraken,
+        EventSource::Positions,
+    ] {
+        assert_ne!(
+            sec_scope_identity_key(scope, 11),
+            sec_scope_identity_key(scope, 12),
+            "a widened scope membership must invalidate the SEC caches"
+        );
+        assert_eq!(
+            sec_scope_identity_key(scope, 11),
+            sec_scope_identity_key(scope, 11),
+            "a stable scope must not churn the SEC caches"
+        );
+    }
+
+    // Distinct scopes stay distinct even at an identical signature — ALL always
+    // reports 0, so it would otherwise collide with a flat broker scope.
+    let same_signature: Vec<u64> = [
+        EventSource::All,
+        EventSource::Alpaca,
+        EventSource::Kraken,
+        EventSource::Positions,
+    ]
+    .iter()
+    .map(|scope| sec_scope_identity_key(*scope, 0))
+    .collect();
+    let mut deduped = same_signature.clone();
+    deduped.sort_unstable();
+    deduped.dedup();
+    assert_eq!(
+        deduped.len(),
+        same_signature.len(),
+        "every scope needs its own SEC cache identity"
     );
 }

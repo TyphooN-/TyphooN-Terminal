@@ -174,3 +174,54 @@ a new `alpaca_scope_catalog_rev` (bumped in `handle_alpaca_all_assets`) feeds
 the signature — otherwise the cached scope set would stay positions-only for
 the whole session even after assets arrived. Tests assert the Alpaca signature
 moves with the catalog revision and that Kraken's does not.
+
+## Update 2026-07-24 (3) — Scope All showed 0 rows: the scope set lagged by a frame
+
+Both fixes above were correct and both were live, and Scope **All** still
+rendered `Filings (0)` against a 1000-row snapshot — while Alpaca and Kraken
+looked fine. The remaining defect is not in the scope resolution at all; it is
+a read-your-own-write ordering bug between eframe's `logic()` and `ui()`.
+
+`rebuild_sec_caches` keys its caches on `self.broker_scope` (the enum) but
+*filters* on `self.cached_scope_syms` (the resolved symbol set). The set was
+resolved in exactly one place: the `logic()` pump, once per frame. `broker_scope`
+is mutated from `ui()` — the menu-bar Scope chip, the scope window, the
+scrape-status window, the `SCOPE` command. eframe runs `logic()` before `ui()`,
+and the menu bar draws before the floating windows, so on the frame the user
+cycles Scope the SEC window sees the **new enum** and the **old symbol set**.
+
+That alone would be a one-frame flicker. What made it permanent is that the
+rebuild stored the wrongly-filtered result under the *new* scope's key: the next
+frame, with the set finally caught up, the key already matched and the guarded
+rebuild was skipped. The lag latched for as long as the scope stayed put.
+
+This is why the symptom looked scope-specific rather than universal — every
+scope was rendering its predecessor in the cycle `All → Alpaca → Kraken`:
+
+| Chip reads | Filter actually applied | Result |
+|---|---|---|
+| All | Kraken's ~159 xStock tickers | ~0 rows vs an unscoped recent-filings snapshot |
+| Alpaca | All's "no filter" | every row — "works fine" |
+| Kraken | Alpaca's ~12k us_equity catalog | plenty of rows — "works fine" |
+
+Only the narrowest-into-widest transition produced a visibly empty table, so the
+two scopes inheriting a wider filter masked the bug.
+
+Two changes:
+
+- The refresh is now `refresh_broker_scope_cache()`, called by the pump as
+  before *and* at the top of `rebuild_sec_caches` (plus at the two sites that
+  log a scope count immediately after mutating `broker_scope`, which had the
+  same off-by-one-frame count). It is O(1) when nothing moved — the key compare
+  is the whole cost — so calling it again at a point of use is free.
+- The SEC data caches key on `sec_scope_identity_key(scope, membership_signature)`
+  instead of the bare enum. The enum is not a sufficient identity: the same
+  scope resolves to different sets across a session (Alpaca and Kraken both
+  start positions-only and widen when the broker catalog lands), so an
+  enum-keyed cache pinned the filtered result to whatever the set was the first
+  time that scope rendered.
+
+The general rule this establishes: **state mutated in `ui()` must not be read
+through a cache refreshed only in `logic()`.** Refresh at the point of use, and
+key derived caches on the resolved value rather than on the selector that
+produced it.

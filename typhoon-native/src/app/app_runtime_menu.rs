@@ -428,6 +428,10 @@ impl TyphooNApp {
                                     self.fund_source_kraken = true;
                                 }
                             }
+                            // The scope set is resolved by the logic() pump, which
+                            // already ran this frame — without this it reports the
+                            // count for the scope we just left.
+                            let _ = self.refresh_broker_scope_cache();
                             let n = self.scoped_fundamentals().len();
                             self.log.push_back(LogEntry::info(format!(
                                 "Broker scope → {} ({} fundamentals in scope)",

@@ -111,16 +111,10 @@ impl eframe::App for TyphooNApp {
             self.auto_compact_in_progress,
         );
         // PERF: rebuild scope caches only when fundamentals, scope selection, position
-        // membership, or the broad Kraken catalog changes.
-        let scope_key = (
-            self.bg_rev,
-            self.broker_scope,
-            self.broker_scope_membership_signature(),
-        );
-        if self.cached_scope_key != Some(scope_key) {
-            self.cached_scope_syms = self.broker_scope_symbols();
-            self.cached_scope_key = Some(scope_key);
-        }
+        // membership, or the broad Kraken catalog changes. Consumers that run in
+        // `ui()` after a scope change call this again themselves — the pump refresh
+        // is a frame behind anything the user just clicked.
+        let scope_key = self.refresh_broker_scope_cache();
         // PERF: Cache active_symbols() + HashSet until its chart/position/watchlist inputs change
         // (used by 5+ windows for "Active Only" filters).
         let active_symbols_key = self.active_symbols_cache_key();

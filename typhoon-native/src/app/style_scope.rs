@@ -63,6 +63,23 @@ pub(super) fn sec_filings_controls_key(
     h.finish()
 }
 
+/// Scope identity for the SEC data caches (tab counts, filings, insiders,
+/// timeline).
+///
+/// Those caches are filtered by the resolved **symbol set**, not by the enum,
+/// and the same enum resolves to different sets over a session: Alpaca and
+/// Kraken scope both start out as positions-only and widen when the broker
+/// asset catalog lands. Keying on the enum alone pinned the filtered result to
+/// whatever the set happened to be the first time that scope was rendered.
+pub(super) fn sec_scope_identity_key(scope: EventSource, membership_signature: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    scope.hash(&mut h);
+    membership_signature.hash(&mut h);
+    h.finish()
+}
+
 pub(super) fn broker_scope_membership_signature(
     scope: EventSource,
     alpaca_positions_rev: u64,
@@ -103,6 +120,32 @@ impl TyphooNApp {
             self.kraken_scope_catalog_rev,
             self.alpaca_scope_catalog_rev,
         )
+    }
+
+    /// Re-resolve `cached_scope_syms` if anything feeding the scope set moved.
+    /// O(1) when nothing changed — the key compare is the entire cost, so this
+    /// is cheap to call again at a point of use.
+    ///
+    /// It has to be callable from `ui()`, not just the `logic()` pump, because
+    /// `broker_scope` is mutated *during* `ui()` — the menu-bar Scope chip, the
+    /// scope window, the scrape-status window, the command palette. A consumer
+    /// that only ever saw the `logic()` refresh reads a symbol set belonging to
+    /// the scope it was showing one frame ago.
+    ///
+    /// Returns the key the current set was resolved under, so caches derived
+    /// from it (the scoped-fundamentals snapshot) key off the same value and
+    /// cannot drift from the set they were built from.
+    pub(super) fn refresh_broker_scope_cache(&mut self) -> (u64, EventSource, u64) {
+        let scope_key = (
+            self.bg_rev,
+            self.broker_scope,
+            self.broker_scope_membership_signature(),
+        );
+        if self.cached_scope_key != Some(scope_key) {
+            self.cached_scope_syms = self.broker_scope_symbols();
+            self.cached_scope_key = Some(scope_key);
+        }
+        scope_key
     }
 
     pub(super) fn dark_visuals() -> egui::Visuals {
@@ -414,6 +457,21 @@ impl TyphooNApp {
     pub(super) fn rebuild_sec_caches(&mut self) {
         use std::hash::{Hash, Hasher};
 
+        // Every cache below filters on the resolved scope *set*
+        // (`cached_scope_syms`), which the `logic()` pump refreshes once per
+        // frame — before `ui()` runs. The Scope chip lives in the menu bar,
+        // which `ui()` draws before this window, so on the frame the user
+        // cycles Scope the enum is already the new value while the set is still
+        // the previous scope's. The caches were then built with the *old*
+        // filter and stored under the *new* scope's key, so the following
+        // frame — when the pump had caught up — found a matching key and never
+        // rebuilt, latching the one-frame lag permanently. Cycling
+        // Kraken → All rendered All through Kraken's ~159 xStock tickers
+        // against an unscoped recent-filings snapshot: zero rows. Alpaca and
+        // Kraken looked fine only because they inherited the wider preceding
+        // scope's filter.
+        let _ = self.refresh_broker_scope_cache();
+
         let sec_data_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             self.bg.sec_filings.len().hash(&mut h);
@@ -433,18 +491,24 @@ impl TyphooNApp {
             h.finish()
         };
         let scope = self.broker_scope;
+        // Scope identity for the data caches: the enum plus the membership
+        // signature, so a scope whose symbol set widens (broker catalog lands
+        // behind a positions-only start) re-filters instead of holding the
+        // narrow first result.
+        let scope_identity =
+            sec_scope_identity_key(scope, self.broker_scope_membership_signature());
 
         // Tab counts — (SEC data, scope)
         let counts_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             sec_data_key.hash(&mut h);
-            scope.hash(&mut h);
+            scope_identity.hash(&mut h);
             h.finish()
         };
         let filings_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             sec_data_key.hash(&mut h);
-            scope.hash(&mut h);
+            scope_identity.hash(&mut h);
             self.sec_filters.hash(&mut h);
             self.sec_search_query.hash(&mut h);
             self.sec_sort.column.hash(&mut h);
@@ -461,7 +525,7 @@ impl TyphooNApp {
         let insiders_key = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             sec_data_key.hash(&mut h);
-            scope.hash(&mut h);
+            scope_identity.hash(&mut h);
             self.sec_search_query.hash(&mut h);
             h.finish()
         };

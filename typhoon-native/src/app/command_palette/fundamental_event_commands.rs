@@ -260,6 +260,9 @@ impl TyphooNApp {
                         self.fund_source_kraken = true;
                     }
                 }
+                // Re-resolve before reading: the pump's refresh ran before this
+                // frame's input, so the cached set is still the old scope's.
+                let _ = self.refresh_broker_scope_cache();
                 let n = self.scoped_fundamentals().len();
                 self.log.push_back(LogEntry::info(format!(
                     "Broker scope → {label} ({} fundamentals in scope)",
