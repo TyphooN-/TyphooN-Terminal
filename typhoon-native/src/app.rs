@@ -99,6 +99,7 @@ mod kraken_ohlc_ws;
 mod kraken_sync;
 mod market_data_sync;
 mod market_map_model;
+mod news_auto_scrape;
 mod platform;
 mod research_sort_indices;
 mod session_persistence;
@@ -417,6 +418,13 @@ impl TyphooNApp {
             news_loading_started_at: None,
             news_input_hash: 0,
             news_initial_load_done: false,
+            news_auto_scrape_enabled: true,
+            news_auto_scrape_interval_secs: news_auto_scrape::DEFAULT_INTERVAL_SECS,
+            news_auto_scrape_last_at: None,
+            news_auto_scrape_cursor: 0,
+            news_auto_scrape_universe: Vec::new(),
+            news_auto_scrape_universe_key: None,
+            news_auto_scrape_sweeps: 0,
             news_db_total: None,
             marketaux_key: String::new(),
             alpha_vantage_key: String::new(),

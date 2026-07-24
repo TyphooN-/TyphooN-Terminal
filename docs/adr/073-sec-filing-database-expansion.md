@@ -266,3 +266,49 @@ applied. The digest bumps `bg_rev`, which is enough for `cached_scope_syms`
 (bg_rev is in its key) but not for the SEC caches, which key on
 `broker_scope_membership_signature()` alone. Without the bump the Filings tab
 would keep the pre-universe (empty) filter result after the catalog landed.
+
+## Update 2026-07-24 (5) — News had no auto-scrape at all
+
+SEC and fundamentals both auto-start at startup and retry themselves when a
+broker universe lands. News had every equivalent piece —
+`news_scrape_scope_symbols`, `BrokerCmd::NewsScrapeSymbols`, a
+`research_news_scrape_index` freshness table, a full multi-provider fetch — and
+**no caller**. Every path into it was a button. The corpus therefore only grew
+for symbols the user manually fetched, which is what "news does not sync unless
+I force it on select pairs" describes.
+
+`app/news_auto_scrape.rs` adds the missing scheduler. It is a *rotating sweep*
+rather than a copy of the SEC one-shot, because the two have opposite
+requirements: SEC auto-scrape is capped at 512 symbols and never repeats
+(filings are not time-sensitive within a session), whereas news is worthless
+stale and the universe is 10k+ symbols, so a single bounded pass would cover a
+few percent of it once and never again. A cursor advances one batch per tick,
+keeping per-tick cost bounded while still reaching the whole universe.
+
+Per-frame cost is the design constraint. The steady state is four scalar
+compares before any allocation — enabled, scrape already in flight, heavy sync,
+interval elapsed. Only a firing tick allocates, and even then the 10k+ scope
+expansion is cached behind the scope membership signature, so a firing tick is
+O(batch), not O(universe). The News window already refuses to expand ALL per
+frame; this holds the same line.
+
+Sizing: 128 symbols per batch against the broker's 500ms inter-symbol pacing is
+a ≤64s worst-case run inside a 10-minute default interval, so the sweep never
+overlaps itself or pins `news_loading` (and therefore `heavy_sync_in_progress`)
+on. Half the batch is reserved for the active set (watchlist / positions / MTF
+grid / charts) and half for the rotation — a fixed share, not "whatever the
+active set did not use", or a user holding 128+ active symbols would starve the
+cursor and the broad universe would never be reached. Rate limiting is
+server-side and already existed: `fresh_news_symbols` skips anything scraped
+within 30 minutes, so re-listing a symbol costs a skip, not a fetch.
+
+`NEWSAUTO [ON|OFF|<minutes>]` toggles and re-paces it at runtime.
+
+While wiring this up, `news_scrape_scope_symbols` turned out to carry the same
+`_ =>` fall-through that `sec_scrape_scope_symbols` had before Update 2: Scope
+Alpaca and Scope Kraken both collapsed to the active set, so a background sweep
+could never reach the broad universe for anyone not parked on Scope ALL. Both
+now have real branches — Alpaca's `us_equity` catalog, and Kraken's equity
+universe plus spot/FX pairs (crypto belongs in a *news* scope in a way it does
+not for filings: the pipeline has CryptoPanic/CoinDesk providers and dedups
+fetches by base asset).

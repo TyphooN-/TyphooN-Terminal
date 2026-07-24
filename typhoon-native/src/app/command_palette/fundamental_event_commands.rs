@@ -220,6 +220,43 @@ impl TyphooNApp {
                 }
                 self.show_company_info_window = true;
             }
+            s if s.starts_with("NEWSAUTO") => {
+                // NEWSAUTO [ON|OFF|<minutes>] — background rotating news sweep.
+                use super::super::news_auto_scrape::{NewsAutoCommand, parse_news_auto_command};
+                let arg = s.trim_start_matches("NEWSAUTO").trim();
+                match parse_news_auto_command(arg) {
+                    NewsAutoCommand::Enable => {
+                        self.news_auto_scrape_enabled = true;
+                        // Clear the stamp so the sweep resumes on the next tick
+                        // instead of waiting out an interval that elapsed while
+                        // it was off.
+                        self.news_auto_scrape_last_at = None;
+                    }
+                    NewsAutoCommand::Disable => self.news_auto_scrape_enabled = false,
+                    NewsAutoCommand::Interval(secs) => {
+                        self.news_auto_scrape_interval_secs = secs;
+                        self.news_auto_scrape_last_at = None;
+                    }
+                    NewsAutoCommand::Invalid => {
+                        self.log.push_back(LogEntry::err(format!(
+                            "Unknown NEWSAUTO '{arg}'. Valid: ON, OFF, or interval in minutes"
+                        )));
+                        return true;
+                    }
+                    NewsAutoCommand::Report => {}
+                }
+                self.log.push_back(LogEntry::info(format!(
+                    "News auto-scrape {} — every {}m, {} symbols/batch, universe {}",
+                    if self.news_auto_scrape_enabled {
+                        "ON"
+                    } else {
+                        "OFF"
+                    },
+                    self.news_auto_scrape_interval_secs / 60,
+                    super::super::news_auto_scrape::BATCH,
+                    self.news_auto_scrape_universe.len(),
+                )));
+            }
             s if s.starts_with("SCOPE") => {
                 // SCOPE [ALL|ALPACA|KRAKEN] — global broker filter for fundamentals.
                 let arg = s.trim_start_matches("SCOPE").trim();

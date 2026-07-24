@@ -336,6 +336,45 @@ impl TyphooNApp {
                 }
                 raw.extend(self.active_news_scrape_symbols());
             }
+            // Alpaca's tradable equity catalog, mirroring the same branch in
+            // `sec_scrape_scope_symbols`. Falling through to `_` made Scope
+            // Alpaca mean "the handful of symbols already on screen", so the
+            // background sweep could never reach the broad universe for anyone
+            // not parked on Scope ALL.
+            EventSource::Alpaca => {
+                for (sym, _name, class) in &self.all_broker_assets {
+                    if class == "us_equity" {
+                        raw.insert(sym.clone());
+                    }
+                }
+                raw.extend(self.active_news_scrape_symbols());
+            }
+            // Kraken's tradable universe: xStock equities plus spot/FX pairs.
+            // Crypto belongs here in a way it does not for SEC filings — the
+            // news pipeline has CryptoPanic/CoinDesk providers and dedups
+            // fetches by base asset, so the ~875 pairs collapse to far fewer
+            // requests. Defer while the equity universe is still loading, the
+            // same way ALL does, rather than committing to an active-only sweep.
+            EventSource::Kraken => {
+                if self.kraken_enabled
+                    && self.kraken_scrape_xstocks
+                    && self.kraken_equity_universe_symbols.is_empty()
+                {
+                    return Vec::new();
+                }
+                raw.extend(self.kraken_equity_universe_symbols.iter().cloned());
+                for (pair, display) in &self.kraken_pairs {
+                    let display_or_pair = if display.trim().is_empty() {
+                        pair.as_str()
+                    } else {
+                        display.as_str()
+                    };
+                    raw.insert(display_or_pair.to_string());
+                }
+                raw.extend(self.active_news_scrape_symbols());
+            }
+            // Positions scope is "what I hold", which the active set already
+            // covers (it unions both brokers' open positions).
             _ => raw.extend(self.active_news_scrape_symbols()),
         }
         let mut syms: Vec<String> = raw

@@ -201,6 +201,9 @@ impl eframe::App for TyphooNApp {
             "kraken_ws_scheduling",
             self.tick_kraken_ws_scheduling(now_instant)
         );
+        // Rotating background news sweep. O(1) until its interval elapses;
+        // news was the only research table with no auto-scrape at all.
+        timed_tick!("news_auto_scrape", self.tick_news_auto_scrape(now_instant));
         timed_tick!(
             "news_body_hydrator",
             self.tick_news_body_hydrator(now_instant)

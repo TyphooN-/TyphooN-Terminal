@@ -131,6 +131,10 @@ pub(crate) const COMMANDS: &[Command] = &[
         desc: "Market news & events",
     },
     Command {
+        name: "NEWSAUTO",
+        desc: "Background news sweep: NEWSAUTO [ON|OFF|<minutes>] (rotates the whole scope universe)",
+    },
+    Command {
         name: "CALENDAR",
         desc: "Economic calendar — FOMC, NFP, CPI, PMI, earnings releases",
     },

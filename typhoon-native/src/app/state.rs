@@ -598,6 +598,30 @@ pub struct TyphooNApp {
     /// firing every frame the window stays open, while still
     /// re-triggering on the next restart.
     pub(crate) news_initial_load_done: bool,
+    /// Background news auto-scrape (ADR-073 update 5). News had every piece of
+    /// the SEC/fundamentals scrape machinery — scope symbols, `NewsScrapeSymbols`,
+    /// a freshness index — but nothing ever *called* it, so the corpus only grew
+    /// for symbols the user manually fetched. These drive the rotating sweep.
+    pub(crate) news_auto_scrape_enabled: bool,
+    /// Seconds between sweep batches. Tunable via the `NEWSAUTO` command; the
+    /// broker skips symbols scraped inside its own 30-minute freshness window,
+    /// so a shorter interval buys coverage, not duplicate network.
+    pub(crate) news_auto_scrape_interval_secs: u64,
+    /// Last batch dispatch. `None` until the first tick so a fresh session
+    /// sweeps immediately rather than idling for a full interval.
+    pub(crate) news_auto_scrape_last_at: Option<std::time::Instant>,
+    /// Rotation cursor into `news_auto_scrape_universe`. Advancing it per batch
+    /// is what turns a bounded per-tick cost into full-universe coverage over
+    /// time, instead of re-scraping the head of the list forever.
+    pub(crate) news_auto_scrape_cursor: usize,
+    /// Cached scope expansion, rebuilt only when the membership signature moves.
+    /// The ALL universe is 10k+ symbols; expanding it per frame is exactly the
+    /// render-thread O(N) the News window already refuses to do.
+    pub(crate) news_auto_scrape_universe: Vec<String>,
+    pub(crate) news_auto_scrape_universe_key: Option<u64>,
+    /// Completed passes over the universe — surfaced in the log so a sweep that
+    /// is making no progress is visible without instrumenting the broker.
+    pub(crate) news_auto_scrape_sweeps: u64,
     /// Total rows in the `research_news` SQLite table, pushed from the broker
     /// via `BrokerMsg::NewsDbTotal` after each cache load / fresh fetch / scope
     /// scrape so the header shows "· N in DB" even when the in-memory list is
