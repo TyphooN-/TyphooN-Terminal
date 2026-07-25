@@ -916,9 +916,17 @@ pub struct TyphooNApp {
     /// set from scratch every pass; `alpaca_no_data_workset` now rebuilds only
     /// when the source lengths change. Paired with its length signature below.
     pub(super) cached_alpaca_no_data_workset: std::collections::HashSet<String>,
-    /// `(no_data_pairs.len, alpaca unresolvable.len, retry_queue.len)` at the
-    /// last `cached_alpaca_no_data_workset` rebuild. `None` forces a rebuild.
-    pub(super) cached_alpaca_no_data_workset_sig: Option<(usize, usize, usize)>,
+    /// Tombstones temporarily released back into the dispatch pool so a stale
+    /// no-data verdict can be disproven. See
+    /// `rotate_alpaca_no_data_revalidation_slice`; `rev` bumps on every rotation
+    /// so the workset cache below rebuilds even though no map length changed.
+    pub(super) alpaca_no_data_revalidate_slice: std::collections::HashSet<String>,
+    pub(super) alpaca_no_data_revalidate_next_ts: i64,
+    pub(super) alpaca_no_data_revalidate_rev: u64,
+    /// `(no_data_pairs.len, alpaca unresolvable.len, retry_queue.len,
+    /// revalidate_rev)` at the last `cached_alpaca_no_data_workset` rebuild.
+    /// `None` forces a rebuild.
+    pub(super) cached_alpaca_no_data_workset_sig: Option<(usize, usize, usize, u64)>,
     /// Rolling per-source count of (symbol,timeframe) cells successfully synced
     /// in the current throughput window, keyed by canonical source. Flushed to a
     /// `tracing::info` "Sync throughput" line every 60s so the operator can see
@@ -1233,6 +1241,12 @@ pub struct TyphooNApp {
     /// out-of-sync cells keep the fast cadence until they catch up. Keys are the
     /// `SYMBOL:TF` form from `alpaca_fetch_key`.
     pub(crate) bg_refetch_empty_streak: std::collections::HashMap<String, u32>,
+    /// Newest cached bar timestamp for each in-flight Alpaca cell, snapshotted at
+    /// dispatch. Settling compares against it to decide whether the fetch really
+    /// surfaced a bar — the write timestamp cannot answer that, since a re-store
+    /// of unchanged bars still bumps it. Entries are removed on settle; keys are
+    /// the `SYMBOL:TF` form from `alpaca_fetch_key`.
+    pub(crate) bg_refetch_probe_last_bar_ts: std::collections::HashMap<String, i64>,
     /// Cursor-limited broad sync rotation. Each refill scans only a bounded slice
     /// of the broker universe in high-timeframe-first order, while the pending
     /// fetch sets keep foreground/manual and background requests deduplicated.

@@ -25,18 +25,19 @@ fn provider_window_native_lane_can_refresh_after_one_period() {
             "1Day",
             state,
             false,
+            false,
             provider_window_target_bars,
         )
         .is_none()
     );
 
-    let candidate = classify_alpaca_sync_candidate_with_stale_multiplier(
+    let candidate = classify_alpaca_sync_candidate_with_policy(
         now_s,
         "TNDM",
         "1Day",
         state,
         false,
-        1,
+        BackgroundStalePolicy::new(1, false),
         provider_window_target_bars,
     )
     .expect("one-period native provider-window refresh should be due");
@@ -239,6 +240,7 @@ fn low_timeframe_reserve_selects_low_tf_while_main_lane_stays_high_tf_first() {
         3,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &never_blocked,
     );
@@ -262,7 +264,7 @@ fn low_timeframe_reserve_selects_low_tf_while_main_lane_stays_high_tf_first() {
         3,
         &mut cursor,
         now_s,
-        24,
+        BackgroundStalePolicy::broad(false),
         alpaca_sync_target_bars,
         &never_blocked,
     );
@@ -463,6 +465,7 @@ fn select_alpaca_sync_workset_rotating_bounds_background_scan() {
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -484,6 +487,7 @@ fn select_alpaca_sync_workset_rotating_bounds_background_scan() {
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -514,6 +518,7 @@ fn select_alpaca_sync_workset_rotating_prioritizes_focus_before_background_scan(
         1,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -548,6 +553,7 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -580,6 +586,7 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -613,6 +620,7 @@ fn select_alpaca_sync_workset_rotating_walks_all_symbols_mn1_before_lower_timefr
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -663,6 +671,7 @@ fn select_alpaca_sync_workset_rotating_advances_cursor_by_actual_tail_window() {
         4,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -712,6 +721,7 @@ fn select_alpaca_sync_workset_rotating_keeps_global_high_tf_priority_across_slic
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -751,6 +761,7 @@ fn select_alpaca_sync_workset_rotating_gives_focus_the_full_batch() {
         3,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -783,6 +794,7 @@ fn select_alpaca_sync_workset_rotating_does_not_foreground_m1_m5() {
         1,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -858,6 +870,7 @@ fn select_alpaca_sync_workset_rotating_skips_pending_without_advancing_priority(
         3,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -913,6 +926,7 @@ fn high_timeframe_backfill_preempts_lower_timeframe_stale_refresh() {
         1,
         &mut cursor,
         now_s,
+        false,
         |_| Some(100),
         &|_, _| false,
     );
@@ -1028,6 +1042,7 @@ fn rotating_selector_descends_past_timeframe_whose_candidates_are_dispatch_block
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, _| false,
     );
@@ -1050,6 +1065,7 @@ fn rotating_selector_descends_past_timeframe_whose_candidates_are_dispatch_block
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|_, tf| tf == "1Month",
     );
@@ -1085,6 +1101,7 @@ fn rotating_selector_blocked_candidates_do_not_consume_batch_slots() {
         2,
         &mut cursor,
         now_s,
+        false,
         alpaca_sync_target_bars,
         &|symbol, _| symbol == "AAPL",
     );
@@ -1094,4 +1111,139 @@ fn rotating_selector_blocked_candidates_do_not_consume_batch_slots() {
         selected[0].symbol, "MSFT",
         "the blocked candidate must not eat the only batch slot"
     );
+}
+
+/// The weekend treadmill: a 1Hour equity cell whose newest bar is Friday's is
+/// permanently past its 24-period bar-age window, and no fetch can ever produce
+/// a newer one while the session is shut. With the market idle it must fall back
+/// to the check-age anchor instead, or the whole catalog re-fetches on its
+/// `period/2` cooldown until the next open.
+#[test]
+fn idle_market_intraday_uses_check_age_not_bar_age() {
+    let now_s = 1_700_000_000i64;
+    let state = Some(SyncCacheState {
+        last_bar_ts_s: now_s - 25 * 3600, // Friday close, 25h ago
+        write_ts_s: now_s - 300,          // re-probed 5 minutes ago
+        bar_count: 4_000,
+    });
+
+    // Live session: bar age past 24 periods is the signal, so this is due.
+    let live = classify_alpaca_sync_candidate(
+        now_s,
+        "AAPL",
+        "1Hour",
+        state,
+        false,
+        false,
+        provider_window_target_bars,
+    )
+    .expect("bar-age anchor should make a 25h-old 1Hour cell due while trading");
+    assert_eq!(live.bucket, AlpacaSyncBucket::Stale);
+
+    // Idle: we checked 5 minutes ago and nothing can have printed since.
+    assert!(
+        classify_alpaca_sync_candidate(
+            now_s,
+            "AAPL",
+            "1Hour",
+            state,
+            false,
+            true,
+            provider_window_target_bars,
+        )
+        .is_none(),
+        "an idle intraday cell checked within its window must not re-fetch"
+    );
+}
+
+/// Liveness: the idle anchor still expires. A cell nobody has looked at for a
+/// full staleness window is due again even while the market is shut, so the
+/// slice can never wedge waiting on a clock change.
+#[test]
+fn idle_market_intraday_still_due_after_full_check_window() {
+    let now_s = 1_700_000_000i64;
+    let state = Some(SyncCacheState {
+        last_bar_ts_s: now_s - 60 * 3600,
+        write_ts_s: now_s - 25 * 3600, // unchecked for 25 periods (window is 24)
+        bar_count: 4_000,
+    });
+
+    let candidate = classify_alpaca_sync_candidate(
+        now_s,
+        "AAPL",
+        "1Hour",
+        state,
+        false,
+        true,
+        provider_window_target_bars,
+    )
+    .expect("idle cell past its check window must still re-probe");
+    assert_eq!(candidate.bucket, AlpacaSyncBucket::Stale);
+}
+
+/// Daily and higher settle once at the close, so a weekend does not invalidate
+/// their bar-age anchor — only the sub-daily rows that need a live session.
+#[test]
+fn idle_market_leaves_daily_on_bar_age_anchor() {
+    let now_s = 1_700_000_000i64;
+    let state = Some(SyncCacheState {
+        last_bar_ts_s: now_s - 25 * 86_400,
+        write_ts_s: now_s - 300,
+        bar_count: 4_000,
+    });
+
+    let candidate = classify_alpaca_sync_candidate(
+        now_s,
+        "AAPL",
+        "1Day",
+        state,
+        false,
+        true,
+        provider_window_target_bars,
+    )
+    .expect("1Day keeps the bar-age anchor regardless of the session clock");
+    assert_eq!(candidate.bucket, AlpacaSyncBucket::Stale);
+}
+
+/// Coverage work is never gated by the clock: a cell with no cached bars is
+/// Missing whether or not a session is printing.
+#[test]
+fn idle_market_still_dispatches_missing_cells() {
+    let now_s = 1_700_000_000i64;
+    let candidate = classify_alpaca_sync_candidate(
+        now_s,
+        "AAPL",
+        "15Min",
+        None,
+        false,
+        true,
+        alpaca_sync_target_bars,
+    )
+    .expect("an uncached cell is Missing regardless of market state");
+    assert_eq!(candidate.bucket, AlpacaSyncBucket::Missing);
+}
+
+/// Focus cells (open chart / MTF grid) keep their own fast rule — the idle
+/// anchor is a broad-universe policy and must not slow a chart the user is
+/// looking at.
+#[test]
+fn idle_market_does_not_gate_focus_cells() {
+    let now_s = 1_700_000_000i64;
+    let state = Some(SyncCacheState {
+        last_bar_ts_s: now_s - 25 * 3600,
+        write_ts_s: now_s - 1_900,
+        bar_count: 4_000,
+    });
+
+    let candidate = classify_alpaca_sync_candidate(
+        now_s,
+        "AAPL",
+        "1Hour",
+        state,
+        true,
+        true,
+        provider_window_target_bars,
+    )
+    .expect("focus cells bypass the background idle anchor");
+    assert_eq!(candidate.bucket, AlpacaSyncBucket::Stale);
 }

@@ -56,6 +56,51 @@ pub(super) struct SyncCacheState {
     pub bar_count: i64,
 }
 
+/// How the background (non-focus) lane decides a cached cell is due again.
+///
+/// `periods` is the staleness window in whole timeframe periods (the historical
+/// `background_stale_periods` multiplier: 24 for the broad assist lanes, 1 for
+/// the native Kraken equities lane).
+///
+/// `market_idle` is the fix for the weekend/holiday treadmill. Background
+/// staleness is normally anchored on the age of the newest cached *bar*, which
+/// is the right signal while a session is printing. Once the regular session
+/// shuts, that anchor becomes unsatisfiable: the newest 1Hour equity bar keeps
+/// aging past its 24-period window and no fetch can ever produce a newer one, so
+/// every intraday cell in the ~12.4k catalog reads Stale forever and re-fetches
+/// on its `period/2` cooldown until the next open. Measured on a Saturday: 2411
+/// Alpaca rows rewritten in 20 minutes, newest bar obtained by any of them still
+/// Friday's — the entire idle-hours RPM budget spent re-storing bars the cache
+/// already had, while Sync Status stayed pinned (its `recently_checked` rule
+/// counts those rewrites as healthy).
+///
+/// While idle, intraday equity cells therefore switch to a "have we actually
+/// looked lately" anchor (`write_ts_s`), which matches what Sync Status already
+/// reports and still guarantees liveness: a caught-up cell is re-probed once per
+/// staleness window instead of once per half-period (≈48× less churn at 15Min).
+/// Daily and higher settle at the close and keep the bar-age anchor, and the
+/// instant the clock leaves CLOSED/OVERNIGHT the aggressive rule returns, so the
+/// resync at the open is unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BackgroundStalePolicy {
+    pub periods: i64,
+    pub market_idle: bool,
+}
+
+impl BackgroundStalePolicy {
+    pub(super) fn new(periods: i64, market_idle: bool) -> Self {
+        Self {
+            periods,
+            market_idle,
+        }
+    }
+
+    /// Broad assist-lane default: the 24-period window, calendar-aware.
+    pub(super) fn broad(market_idle: bool) -> Self {
+        Self::new(24, market_idle)
+    }
+}
+
 /// Persisted "bounded full-history fetch already exhausted available data"
 /// marker. Pairs still participate in Missing/Stale sync; only repeat
 /// Backfill scheduling is suppressed.
@@ -193,26 +238,27 @@ pub(super) fn classify_alpaca_sync_candidate(
     timeframe: &str,
     state: Option<SyncCacheState>,
     focus: bool,
+    market_idle: bool,
     target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Option<AlpacaSyncCandidate> {
-    classify_alpaca_sync_candidate_with_stale_multiplier(
+    classify_alpaca_sync_candidate_with_policy(
         now_s,
         symbol,
         timeframe,
         state,
         focus,
-        24,
+        BackgroundStalePolicy::broad(market_idle),
         target_bars_for_tf,
     )
 }
 
-pub(super) fn classify_alpaca_sync_candidate_with_stale_multiplier(
+pub(super) fn classify_alpaca_sync_candidate_with_policy(
     now_s: i64,
     symbol: &str,
     timeframe: &str,
     state: Option<SyncCacheState>,
     focus: bool,
-    background_stale_periods: i64,
+    stale_policy: BackgroundStalePolicy,
     target_bars_for_tf: fn(&str) -> Option<u32>,
 ) -> Option<AlpacaSyncCandidate> {
     let timeframe = normalize_sync_timeframe_key(timeframe)?;
@@ -245,8 +291,19 @@ pub(super) fn classify_alpaca_sync_candidate_with_stale_multiplier(
         let stale_due = if focus {
             age_s >= period_s && write_age_s >= foreground_sync_write_cooldown_secs(period_s)
         } else {
-            let stale_periods = background_stale_periods.max(1);
-            age_s >= period_s.saturating_mul(stale_periods)
+            let stale_periods = stale_policy.periods.max(1);
+            let window_s = period_s.saturating_mul(stale_periods);
+            // See BackgroundStalePolicy: with no session printing, bar age can
+            // never be satisfied by fetching, so an idle intraday cell is due on
+            // "not checked within the window" instead of "no bar within the
+            // window". Every other case keeps the original bar-age anchor.
+            if stale_policy.market_idle
+                && super::market_data_sync::is_intraday_equity_sync_tf(timeframe)
+            {
+                write_age_s >= window_s
+            } else {
+                age_s >= window_s
+            }
         };
         if stale_due {
             return Some(AlpacaSyncCandidate {
@@ -330,6 +387,7 @@ where
                 tf,
                 state,
                 focus,
+                false,
                 target_bars_for_tf,
             ) else {
                 continue;
@@ -628,10 +686,11 @@ pub(super) fn select_alpaca_sync_workset_rotating(
     background_scan_limit: usize,
     cursor: &mut usize,
     now_s: i64,
+    market_idle: bool,
     target_bars_for_tf: fn(&str) -> Option<u32>,
     is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
 ) -> Vec<AlpacaSyncCandidate> {
-    select_alpaca_sync_workset_rotating_with_stale_multiplier(
+    select_alpaca_sync_workset_rotating_with_stale_policy(
         symbols,
         timeframes,
         state_map,
@@ -644,7 +703,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
         background_scan_limit,
         cursor,
         now_s,
-        24,
+        BackgroundStalePolicy::broad(market_idle),
         target_bars_for_tf,
         is_dispatch_blocked,
     )
@@ -659,7 +718,7 @@ pub(super) fn select_alpaca_sync_workset_rotating(
 /// overnight "lane goes silent for 8h while 1Day sits at 1.8%" wedge: blocked
 /// candidates must neither consume batch slots nor hold the TF descent hostage.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
+pub(super) fn select_alpaca_sync_workset_rotating_with_stale_policy(
     symbols: &[String],
     timeframes: &[String],
     state_map: &HashMap<(String, String), SyncCacheState>,
@@ -672,7 +731,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
     background_scan_limit: usize,
     cursor: &mut usize,
     now_s: i64,
-    background_stale_periods: i64,
+    stale_policy: BackgroundStalePolicy,
     target_bars_for_tf: fn(&str) -> Option<u32>,
     is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
 ) -> Vec<AlpacaSyncCandidate> {
@@ -726,7 +785,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
                     pending_fetches,
                     &mut staged_selected,
                     now_s,
-                    background_stale_periods,
+                    stale_policy,
                     target_bars_for_tf,
                     is_dispatch_blocked,
                     &mut missing,
@@ -751,7 +810,7 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_multiplier(
                     pending_fetches,
                     &mut staged_selected,
                     now_s,
-                    background_stale_periods,
+                    stale_policy,
                     target_bars_for_tf,
                     is_dispatch_blocked,
                     &mut missing,
@@ -800,7 +859,7 @@ pub(super) fn select_low_timeframe_sync_reserve_rotating(
     background_scan_limit: usize,
     cursor: &mut usize,
     now_s: i64,
-    background_stale_periods: i64,
+    stale_policy: BackgroundStalePolicy,
     target_bars_for_tf: fn(&str) -> Option<u32>,
     is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
 ) -> Vec<AlpacaSyncCandidate> {
@@ -844,7 +903,7 @@ pub(super) fn select_low_timeframe_sync_reserve_rotating(
                 pending_fetches,
                 &mut staged_selected,
                 now_s,
-                background_stale_periods,
+                stale_policy,
                 target_bars_for_tf,
                 is_dispatch_blocked,
                 &mut missing,
@@ -868,7 +927,7 @@ pub(super) fn select_low_timeframe_sync_reserve_rotating(
                     pending_fetches,
                     &mut staged_selected,
                     now_s,
-                    background_stale_periods,
+                    stale_policy,
                     target_bars_for_tf,
                     is_dispatch_blocked,
                     &mut missing,
@@ -908,7 +967,7 @@ fn collect_sync_candidate_for_timeframe(
     pending_fetches: &HashSet<String>,
     staged_selected: &mut HashSet<String>,
     now_s: i64,
-    background_stale_periods: i64,
+    stale_policy: BackgroundStalePolicy,
     target_bars_for_tf: fn(&str) -> Option<u32>,
     is_dispatch_blocked: &dyn Fn(&str, &str) -> bool,
     missing: &mut Vec<AlpacaSyncCandidate>,
@@ -930,13 +989,13 @@ fn collect_sync_candidate_for_timeframe(
     let state = state_map
         .get(&(symbol_key.clone(), tf.to_string()))
         .copied();
-    let Some(candidate) = classify_alpaca_sync_candidate_with_stale_multiplier(
+    let Some(candidate) = classify_alpaca_sync_candidate_with_policy(
         now_s,
         &symbol_key,
         tf,
         state,
         focus,
-        background_stale_periods,
+        stale_policy,
         target_bars_for_tf,
     ) else {
         return;

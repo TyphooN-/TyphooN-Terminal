@@ -382,3 +382,45 @@ fn background_fetch_backpressure_preserves_focus_symbols() {
         BACKGROUND_RETRY_PENDING_FETCH_CAP * 10
     ));
 }
+
+#[test]
+fn no_data_revalidation_slice_takes_the_oldest_marks_past_the_cutoff() {
+    let now_s = 1_700_000_000i64;
+    let mk = |key: &str, marked_at: i64| {
+        (
+            key.to_string(),
+            AlpacaNoDataPair {
+                symbol: key.split(':').next().unwrap_or(key).to_string(),
+                timeframe: "1Hour".to_string(),
+                marked_at,
+                reason: "batch full-history window returned no rows".to_string(),
+            },
+        )
+    };
+    let pairs = std::collections::HashMap::from([
+        mk("AAA:1Hour", now_s - 400 * 86_400), // oldest
+        mk("BBB:1Hour", now_s - 200 * 86_400),
+        mk("CCC:1Hour", now_s - 100 * 86_400),
+        mk("DDD:1Hour", now_s - 3 * 86_400), // inside the TTL, never released
+    ]);
+    let cutoff = now_s - 30 * 86_400;
+
+    // Bounded: only the two oldest eligible marks come back this rotation.
+    assert_eq!(
+        select_no_data_revalidation_slice(&pairs, cutoff, 2),
+        vec!["AAA:1Hour".to_string(), "BBB:1Hour".to_string()]
+    );
+    // A fresh tombstone is never released, however big the slice.
+    assert_eq!(
+        select_no_data_revalidation_slice(&pairs, cutoff, 99),
+        vec![
+            "AAA:1Hour".to_string(),
+            "BBB:1Hour".to_string(),
+            "CCC:1Hour".to_string()
+        ]
+    );
+    assert!(select_no_data_revalidation_slice(&pairs, cutoff, 0).is_empty());
+    // Nothing past the cutoff yet: the sweep stays idle rather than releasing
+    // marks that were just written.
+    assert!(select_no_data_revalidation_slice(&pairs, now_s - 500 * 86_400, 8).is_empty());
+}

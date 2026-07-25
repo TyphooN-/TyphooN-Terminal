@@ -249,6 +249,33 @@ pub(super) fn is_intraday_equity_sync_tf(tf: &str) -> bool {
     matches!(tf, "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour")
 }
 
+/// The `slice` oldest no-data tombstones marked at or before `cutoff_s`, oldest
+/// first. Pure half of [`TyphooNApp::rotate_alpaca_no_data_revalidation_slice`]:
+/// picks which permanently-skipped cells get one more chance this rotation.
+/// Ties break on the key so the order is deterministic across runs.
+pub(super) fn select_no_data_revalidation_slice(
+    pairs: &std::collections::HashMap<String, AlpacaNoDataPair>,
+    cutoff_s: i64,
+    slice: usize,
+) -> Vec<String> {
+    if slice == 0 {
+        return Vec::new();
+    }
+    let mut due: Vec<(i64, &String)> = pairs
+        .iter()
+        .filter(|(_, pair)| pair.marked_at <= cutoff_s)
+        .map(|(key, pair)| (pair.marked_at, key))
+        .collect();
+    // Partition first: this runs on the dispatch (render) thread against a
+    // ~50k-entry map, so only the retained slice is worth fully ordering.
+    if due.len() > slice {
+        due.select_nth_unstable(slice - 1);
+        due.truncate(slice);
+    }
+    due.sort_unstable();
+    due.into_iter().map(|(_, key)| key.clone()).collect()
+}
+
 /// The regular US-equities market is idle — fully CLOSED (weekends, holidays, the
 /// overnight gap before a non-trading day) or in the overnight (Blue Ocean)
 /// session — so no regular session is printing bars for the broad universe. The
@@ -259,6 +286,16 @@ pub(super) fn is_intraday_equity_sync_tf(tf: &str) -> bool {
 /// before `·` ("CLOSED" vs "OVERNIGHT"), so a substring test is unambiguous.
 fn market_status_is_idle(status: &str) -> bool {
     status.contains("CLOSED") || status.contains("OVERNIGHT")
+}
+
+impl TyphooNApp {
+    /// `market_status_is_idle` against the live clock string. Read by every
+    /// broad-lane selector so background staleness can switch to its
+    /// check-age anchor while no session is printing (see
+    /// [`BackgroundStalePolicy`]).
+    pub(super) fn equity_market_is_idle(&self) -> bool {
+        market_status_is_idle(&self.market_clock_status)
+    }
 }
 
 /// Longest a caught-up cell waits between idle re-probes, in whole timeframe
@@ -1456,6 +1493,11 @@ impl TyphooNApp {
         let empty_backfill = std::collections::HashMap::new();
         let mut dispatched = 0usize;
         let now_s = chrono::Utc::now().timestamp();
+        // Assist lanes (Alpaca/Yahoo) serve US-session instruments, so their
+        // background staleness follows the equity clock. The native Kraken
+        // equities lane below does not: Kraken quotes tokenized xStocks around
+        // the clock, so it stays on the bar-age anchor year-round.
+        let market_idle = self.equity_market_is_idle();
 
         let native_available_slots = memory_bounded_scan_slots(
             queue_window,
@@ -1487,7 +1529,7 @@ impl TyphooNApp {
                 self.is_fetch_on_cooldown("kraken-equities", &symbol, tf)
             };
             // Tier priority (MTF Grid > Active > Background) + high-TF-first is applied inside the workset selector
-            let mut candidates = select_alpaca_sync_workset_rotating_with_stale_multiplier(
+            let mut candidates = select_alpaca_sync_workset_rotating_with_stale_policy(
                 &native_symbols,
                 &native_timeframes,
                 &self.cached_kraken_equities_sync_state,
@@ -1500,7 +1542,7 @@ impl TyphooNApp {
                 scan_limit,
                 &mut cursor,
                 now_s,
-                1,
+                BackgroundStalePolicy::new(1, false),
                 kraken_equities_sync_target_bars,
                 &equities_dispatch_blocked,
             );
@@ -1571,6 +1613,7 @@ impl TyphooNApp {
                         },
                         &mut cursor,
                         now_s,
+                        market_idle,
                         alpaca_sync_target_bars,
                         &alpaca_dispatch_blocked,
                     );
@@ -1659,6 +1702,7 @@ impl TyphooNApp {
                         yahoo_scan_limit,
                         &mut cursor,
                         now_s,
+                        market_idle,
                         alpaca_sync_target_bars,
                         &yahoo_dispatch_blocked,
                     );
@@ -1839,10 +1883,22 @@ impl TyphooNApp {
             if self.is_fetch_on_cooldown("alpaca", &symbol, tf) {
                 continue;
             }
+            // Same adaptive idle backoff `queue_alpaca_fetch` applies. It was
+            // previously only on the single-symbol path, which the broad
+            // universe never takes (everything non-focus batches), so the
+            // ~12.4k rotation re-probed unthrottled through every closed
+            // session — the gate existed but covered nothing.
+            if is_intraday_equity_sync_tf(tf)
+                && market_status_is_idle(&self.market_clock_status)
+                && self.bg_intraday_refetch_backed_off(&symbol, tf)
+            {
+                continue;
+            }
             if !self.pending_alpaca_fetches.insert(fetch_key) {
                 continue;
             }
             self.mark_fetch_queued("alpaca", &symbol, tf);
+            self.mark_alpaca_refetch_probe(&symbol, tf);
             let deep = candidate.bucket != AlpacaSyncBucket::Stale;
             let entry = by_tf.entry((tf.to_string(), deep)).or_default();
             entry.0.push(symbol);
@@ -1901,14 +1957,45 @@ impl TyphooNApp {
         chrono::Utc::now().timestamp().saturating_sub(last) < window
     }
 
+    /// Snapshot the newest cached bar for an Alpaca cell at dispatch time, so
+    /// [`Self::note_alpaca_refetch_outcome`] can tell "this fetch surfaced a new
+    /// bar" from "this fetch re-stored what we already had".
+    pub(super) fn mark_alpaca_refetch_probe(&mut self, symbol: &str, timeframe: &str) {
+        let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
+            return;
+        };
+        let sym = normalize_market_data_symbol(symbol).replace('/', "");
+        if sym.is_empty() {
+            return;
+        }
+        let last_bar_ts_s = self
+            .cached_alpaca_sync_state
+            .get(&(sym.clone(), tf.to_string()))
+            .map(|s| s.last_bar_ts_s)
+            .unwrap_or(0);
+        self.bg_refetch_probe_last_bar_ts
+            .insert(alpaca_fetch_key(&sym, tf), last_bar_ts_s);
+    }
+
     /// Adaptive-backoff bookkeeping, run when an Alpaca background fetch settles
-    /// successfully. A fetch that wrote new bars advanced the cell's `write_ts_s`
-    /// past its queue time (`note_cached_sync_success` runs on the preceding
-    /// `BarsFetched`, which the broker emits only for count > 0), so the streak is
-    /// cleared and the cell keeps the fast base cadence. A fetch that wrote nothing
+    /// successfully. A fetch that surfaced a newer bar clears the streak and the
+    /// cell keeps the fast base cadence; a fetch that returned nothing new
     /// (caught up / idle market) grows the streak so the cell re-probes at most
     /// once per timeframe period instead of on the faster base cadence.
-    pub(super) fn note_alpaca_refetch_outcome(&mut self, symbol: &str, timeframe: &str) {
+    ///
+    /// The signal is the cell's newest **bar** timestamp, not its write
+    /// timestamp. `store_json_bars_in_cache` returns the merged row's *total*
+    /// bar count, so a re-fetch that adds nothing still reports count > 0,
+    /// emits `BarsFetched`, and rewrites the row — which advanced `write_ts_s`
+    /// past the queue time and cleared the streak every single time. The
+    /// backoff could therefore never engage for any cell that had bars, which
+    /// is every cell it was written to protect.
+    pub(super) fn note_alpaca_refetch_outcome(
+        &mut self,
+        symbol: &str,
+        timeframe: &str,
+        success: bool,
+    ) {
         let Some(tf) = normalize_sync_timeframe_key(timeframe) else {
             return;
         };
@@ -1917,17 +2004,24 @@ impl TyphooNApp {
             return;
         }
         let cell_key = alpaca_fetch_key(&sym, tf);
-        let queued = self
-            .fetch_last_queued_ts
-            .get(&format!("alpaca:{cell_key}"))
-            .copied()
-            .unwrap_or(0);
-        let wrote = self
+        let before = self.bg_refetch_probe_last_bar_ts.remove(&cell_key);
+        if !success {
+            // Retry machinery owns this cell; the snapshot is dropped above so a
+            // never-succeeding fetch cannot leak an entry per dispatch.
+            return;
+        }
+        let now_last_bar = self
             .cached_alpaca_sync_state
             .get(&(sym, tf.to_string()))
-            .map(|s| s.write_ts_s)
+            .map(|s| s.last_bar_ts_s)
             .unwrap_or(0);
-        if queued > 0 && wrote >= queued {
+        // No dispatch snapshot (restart, or a fetch this process did not queue):
+        // fail open on the fast cadence rather than inventing a streak.
+        let gained_bar = match before {
+            Some(before) => now_last_bar > before,
+            None => true,
+        };
+        if gained_bar {
             self.bg_refetch_empty_streak.remove(&cell_key);
         } else {
             let entry = self.bg_refetch_empty_streak.entry(cell_key).or_insert(0);
@@ -1953,9 +2047,11 @@ impl TyphooNApp {
         if !self.alpaca_no_data_loaded {
             self.alpaca_no_data_load();
         }
-        if self
-            .alpaca_no_data_pairs
-            .contains_key(&alpaca_fetch_key(&symbol, tf))
+        let fetch_key_probe = alpaca_fetch_key(&symbol, tf);
+        if (self.alpaca_no_data_pairs.contains_key(&fetch_key_probe)
+            && !self
+                .alpaca_no_data_revalidate_slice
+                .contains(&fetch_key_probe))
             || self.is_unresolvable_fetch_key("alpaca", &symbol, tf)
         {
             tracing::debug!(
@@ -2002,6 +2098,7 @@ impl TyphooNApp {
             tf,
             state,
             focus,
+            self.equity_market_is_idle(),
             alpaca_sync_target_bars,
         ) else {
             return false;
@@ -2028,6 +2125,7 @@ impl TyphooNApp {
             return false;
         }
         self.mark_fetch_queued("alpaca", &symbol, tf);
+        self.mark_alpaca_refetch_probe(&symbol, tf);
         let _ = self.broker_tx.send(BrokerCmd::AlpacaFetchBars {
             symbol,
             timeframe: tf.to_string(),
@@ -2363,6 +2461,7 @@ impl TyphooNApp {
     /// pending-fetch and cooldown gates are the real duplicate guard), so a rare
     /// same-length retry swap that briefly reuses the cache is harmless.
     pub(super) fn refresh_alpaca_no_data_workset(&mut self) {
+        self.rotate_alpaca_no_data_revalidation_slice();
         let unresolvable_len = self
             .unresolvable_fetch_keys_by_broker
             .get("alpaca")
@@ -2371,12 +2470,18 @@ impl TyphooNApp {
             self.alpaca_no_data_pairs.len(),
             unresolvable_len,
             self.alpaca_retry_queue.len(),
+            self.alpaca_no_data_revalidate_rev,
         );
         if self.cached_alpaca_no_data_workset_sig == Some(sig) {
             return;
         }
         let mut set = std::collections::HashSet::with_capacity(sig.0 + sig.1 + sig.2);
-        set.extend(self.alpaca_no_data_pairs.keys().cloned());
+        set.extend(
+            self.alpaca_no_data_pairs
+                .keys()
+                .filter(|key| !self.alpaca_no_data_revalidate_slice.contains(*key))
+                .cloned(),
+        );
         if let Some(unresolvable) = self.unresolvable_fetch_keys_by_broker.get("alpaca") {
             set.extend(unresolvable.iter().cloned());
         }
@@ -2387,6 +2492,77 @@ impl TyphooNApp {
         );
         self.cached_alpaca_no_data_workset = set;
         self.cached_alpaca_no_data_workset_sig = Some(sig);
+    }
+
+    /// Rotate the bounded slice of no-data tombstones that is allowed back into
+    /// the dispatch pool for re-validation.
+    ///
+    /// A tombstone means "Alpaca's deep-history window returned no rows", which
+    /// is permanent for a delisted name but wrong for one that has since started
+    /// printing (new listing, feed coverage change, a symbol that was simply
+    /// dormant across the probed window). Nothing ever re-tested them: the skip
+    /// check runs before the fetch, so a tombstone was self-confirming, and
+    /// `marked_at` was recorded but never read. On this cache that is 49.6k
+    /// marks, 17.8k of which the Merged lane counts as permanently unreachable.
+    ///
+    /// Releasing them all at once would recreate the session-start storm, so
+    /// this hands back only the `SLICE` oldest marks past `TTL` per `INTERVAL`
+    /// and re-stamps `marked_at` so they rotate to the back of the queue. A cell
+    /// that comes back with bars drains its tombstone (`alpaca_no_data_drain`);
+    /// one that is still empty is re-tombstoned by the normal deep-window path.
+    fn rotate_alpaca_no_data_revalidation_slice(&mut self) {
+        /// How stale a tombstone must be before it is worth re-testing. Roughly
+        /// one sweep period: with `SLICE`/`INTERVAL_SECS` below the whole set is
+        /// re-tested in ~4 days, so a 7-day TTL means each cell is re-probed
+        /// about weekly and the sweep is never starved by its own re-stamping.
+        const TTL_SECS: i64 = 7 * 86_400;
+        /// Marks released per rotation. 128 per 15min ≈ 12k/day, so the full
+        /// 49.6k tombstone set is re-tested about every four days — ~9 cells/min
+        /// against a ~600 req/min budget, and batched 16-50 symbols per request.
+        /// Negligible, and only ever spent on cells the scheduler would
+        /// otherwise never look at again.
+        const SLICE: usize = 128;
+        const INTERVAL_SECS: i64 = 900;
+
+        let now_s = chrono::Utc::now().timestamp();
+        if now_s < self.alpaca_no_data_revalidate_next_ts {
+            return;
+        }
+        self.alpaca_no_data_revalidate_next_ts = now_s + INTERVAL_SECS;
+
+        let due = select_no_data_revalidation_slice(
+            &self.alpaca_no_data_pairs,
+            now_s.saturating_sub(TTL_SECS),
+            SLICE,
+        );
+        if due.is_empty() {
+            if !self.alpaca_no_data_revalidate_slice.is_empty() {
+                self.alpaca_no_data_revalidate_slice.clear();
+                self.alpaca_no_data_revalidate_rev =
+                    self.alpaca_no_data_revalidate_rev.wrapping_add(1);
+            }
+            return;
+        }
+
+        self.alpaca_no_data_revalidate_slice = due
+            .into_iter()
+            .map(|key| {
+                // Re-stamp now so the slice advances even when a released cell
+                // does not get dispatched this cycle; without it the same oldest
+                // marks would be picked forever and the sweep would never move.
+                if let Some(pair) = self.alpaca_no_data_pairs.get_mut(&key) {
+                    pair.marked_at = now_s;
+                }
+                key
+            })
+            .collect();
+        self.alpaca_no_data_revalidate_rev = self.alpaca_no_data_revalidate_rev.wrapping_add(1);
+        self.alpaca_no_data_mark_dirty();
+        tracing::debug!(
+            "Alpaca no-data re-validation: released {} of {} tombstone(s) for re-probe",
+            self.alpaca_no_data_revalidate_slice.len(),
+            self.alpaca_no_data_pairs.len()
+        );
     }
 
     pub(super) fn schedule_alpaca_pairs(&mut self, symbols: &[String]) -> usize {
@@ -2408,6 +2584,7 @@ impl TyphooNApp {
 
         let full_tilt = self.full_tilt_sync_enabled();
         let now_s = chrono::Utc::now().timestamp();
+        let market_idle = self.equity_market_is_idle();
         if alpaca_background_sync_paused_until(self.alpaca_sync_pause_until_ts, now_s) {
             return 0;
         }
@@ -2468,6 +2645,7 @@ impl TyphooNApp {
             scan_limit,
             &mut cursor,
             now_s,
+            market_idle,
             alpaca_sync_target_bars,
             &alpaca_dispatch_blocked,
         );
@@ -2491,7 +2669,7 @@ impl TyphooNApp {
                 scan_limit,
                 &mut cursor,
                 now_s,
-                24,
+                BackgroundStalePolicy::broad(market_idle),
                 alpaca_sync_target_bars,
                 &alpaca_dispatch_blocked,
             );
@@ -2597,6 +2775,7 @@ impl TyphooNApp {
             scan_limit,
             &mut cursor,
             now_s,
+            false,
             kraken_sync_target_bars,
             &kraken_dispatch_blocked,
         );
@@ -2620,7 +2799,7 @@ impl TyphooNApp {
                 scan_limit,
                 &mut cursor,
                 now_s,
-                24,
+                BackgroundStalePolicy::new(24, false),
                 kraken_sync_target_bars,
                 &kraken_dispatch_blocked,
             );
@@ -2723,6 +2902,7 @@ impl TyphooNApp {
             scan_limit,
             &mut cursor,
             now_s,
+            false,
             kraken_futures_sync_target_bars,
             &futures_dispatch_blocked,
         );
