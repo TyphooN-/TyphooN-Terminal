@@ -2461,6 +2461,7 @@ impl TyphooNApp {
     /// pending-fetch and cooldown gates are the real duplicate guard), so a rare
     /// same-length retry swap that briefly reuses the cache is harmless.
     pub(super) fn refresh_alpaca_no_data_workset(&mut self) {
+        self.reconcile_alpaca_no_data_against_cached_bars();
         self.rotate_alpaca_no_data_revalidation_slice();
         let unresolvable_len = self
             .unresolvable_fetch_keys_by_broker
@@ -2492,6 +2493,60 @@ impl TyphooNApp {
         );
         self.cached_alpaca_no_data_workset = set;
         self.cached_alpaca_no_data_workset_sig = Some(sig);
+    }
+
+    /// Drop every no-data tombstone whose cell actually holds cached bars.
+    ///
+    /// A tombstone means "the provider serves nothing here", so a cell that has
+    /// bars contradicts its own marker — and because the tombstone is consulted
+    /// *before* dispatch, the contradiction is permanent: the cell is frozen at
+    /// whatever wrote it and Alpaca never refreshes it again. Measured on this
+    /// cache: 14,721 of 49,605 tombstones (29.7%) sat on cells with bars.
+    ///
+    /// The dominant source is derived timeframes. `derive_and_store_higher_tfs`
+    /// rolls a base write up into `30Min` (from 15Min), `4Hour` (from 1Hour) and
+    /// `1Week`/`1Month` (from 1Day), writing those rows straight to the cache
+    /// without emitting `BarsFetched` — so `alpaca_no_data_drain`, which hangs
+    /// off that message, never runs for them. The split is exactly that shape:
+    /// 41.3% of tombstones on the four derived timeframes sit on cells with
+    /// bars, versus 16.9% on base timeframes, and 1Day — the one timeframe that
+    /// is neither derived nor derived-from-below — is at 0.0%.
+    ///
+    /// Reconciling here rather than emitting synthetic `BarsFetched` for each
+    /// derived row keeps the broker drain path (and the render thread) free of
+    /// 2-3x message traffic during heavy sync, and heals tombstones left behind
+    /// by any other path, not just derivation.
+    fn reconcile_alpaca_no_data_against_cached_bars(&mut self) {
+        /// Full pass is ~50k map lookups (≈2ms); once every few minutes is far
+        /// more often than derived writes can meaningfully change the answer.
+        const INTERVAL_SECS: i64 = 300;
+
+        let now_s = chrono::Utc::now().timestamp();
+        if now_s < self.alpaca_no_data_reconcile_next_ts {
+            return;
+        }
+        self.alpaca_no_data_reconcile_next_ts = now_s + INTERVAL_SECS;
+        // Before the first storage snapshot every cell reads as having no bars,
+        // so a pass now would be a no-op at best and is skipped outright.
+        if !self.broad_sync_state_ready() || self.cached_alpaca_sync_state.is_empty() {
+            return;
+        }
+
+        let state = &self.cached_alpaca_sync_state;
+        let before = self.alpaca_no_data_pairs.len();
+        self.alpaca_no_data_pairs.retain(|_, pair| {
+            state
+                .get(&(pair.symbol.clone(), pair.timeframe.clone()))
+                .is_none_or(|cached| cached.bar_count <= 0)
+        });
+        let dropped = before - self.alpaca_no_data_pairs.len();
+        if dropped > 0 {
+            self.alpaca_no_data_mark_dirty();
+            tracing::info!(
+                "Alpaca no-data reconcile: dropped {dropped} tombstone(s) contradicted by cached bars ({} remain)",
+                self.alpaca_no_data_pairs.len()
+            );
+        }
     }
 
     /// Rotate the bounded slice of no-data tombstones that is allowed back into

@@ -923,6 +923,9 @@ pub struct TyphooNApp {
     pub(super) alpaca_no_data_revalidate_slice: std::collections::HashSet<String>,
     pub(super) alpaca_no_data_revalidate_next_ts: i64,
     pub(super) alpaca_no_data_revalidate_rev: u64,
+    /// Next due time for `reconcile_alpaca_no_data_against_cached_bars`, the
+    /// sweep that drops tombstones contradicted by cached bars.
+    pub(super) alpaca_no_data_reconcile_next_ts: i64,
     /// `(no_data_pairs.len, alpaca unresolvable.len, retry_queue.len,
     /// revalidate_rev)` at the last `cached_alpaca_no_data_workset` rebuild.
     /// `None` forces a rebuild.

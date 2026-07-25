@@ -424,3 +424,66 @@ fn no_data_revalidation_slice_takes_the_oldest_marks_past_the_cutoff() {
     // marks that were just written.
     assert!(select_no_data_revalidation_slice(&pairs, now_s - 500 * 86_400, 8).is_empty());
 }
+
+/// A tombstone says "the provider serves nothing here", so a cell holding bars
+/// contradicts its own marker. Because the tombstone is consulted before
+/// dispatch, leaving it in place freezes the cell forever — the derived
+/// timeframes (30Min/4Hour/1Week/1Month) hit this because
+/// `derive_and_store_higher_tfs` writes their rows without a `BarsFetched` to
+/// drive `alpaca_no_data_drain`.
+#[test]
+fn no_data_reconcile_drops_only_tombstones_contradicted_by_cached_bars() {
+    let mk = |symbol: &str, timeframe: &str| {
+        (
+            alpaca_fetch_key(symbol, timeframe),
+            AlpacaNoDataPair {
+                symbol: symbol.to_string(),
+                timeframe: timeframe.to_string(),
+                marked_at: 1_700_000_000,
+                reason: "batch full-history window returned no rows".to_string(),
+            },
+        )
+    };
+    let mut pairs = std::collections::HashMap::from([
+        mk("A", "30Min"),    // derived row landed bars -> contradicted
+        mk("A", "1Week"),    // derived row landed bars -> contradicted
+        mk("ZZZZ", "30Min"), // genuinely empty -> tombstone stands
+        mk("YYYY", "1Hour"), // row exists but is empty -> tombstone stands
+    ]);
+    let state = std::collections::HashMap::from([
+        (
+            ("A".to_string(), "30Min".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: 1,
+                write_ts_s: 1,
+                bar_count: 1498,
+            },
+        ),
+        (
+            ("A".to_string(), "1Week".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: 1,
+                write_ts_s: 1,
+                bar_count: 204,
+            },
+        ),
+        (
+            ("YYYY".to_string(), "1Hour".to_string()),
+            SyncCacheState {
+                last_bar_ts_s: 0,
+                write_ts_s: 1,
+                bar_count: 0,
+            },
+        ),
+    ]);
+
+    pairs.retain(|_, pair| {
+        state
+            .get(&(pair.symbol.clone(), pair.timeframe.clone()))
+            .is_none_or(|cached| cached.bar_count <= 0)
+    });
+
+    let mut left: Vec<&str> = pairs.keys().map(String::as_str).collect();
+    left.sort_unstable();
+    assert_eq!(left, vec!["YYYY:1Hour", "ZZZZ:30Min"]);
+}

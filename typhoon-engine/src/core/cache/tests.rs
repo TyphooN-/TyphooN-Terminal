@@ -1791,8 +1791,13 @@ fn data_sanity_repair_rewrites_invalid_duplicate_and_future_bars() {
     let cache = SqliteCache::open(&db_path).unwrap();
     let now_ms = chrono::Utc::now().timestamp_millis();
     let day = 86_400_000i64;
-    let d1 = now_ms - 3 * day;
-    let d2 = now_ms - 2 * day;
+    // Anchor the historical bars to a UTC day boundary. Offsetting from `now`
+    // instead put the +1h/+2h bars in the *next* 1Day bucket whenever the suite
+    // ran after 22:00 UTC, so the duplicate-bucket drop never happened and
+    // `bars_dropped` came back 2 instead of 3.
+    let day_start_ms = now_ms - now_ms.rem_euclid(day);
+    let d1 = day_start_ms - 3 * day;
+    let d2 = day_start_ms - 2 * day;
     let bars = [
         (d1, 1.0, 2.0, 0.5, 1.5, 10.0),               // valid
         (d2, 1.5, 2.5, 1.0, 2.0, 12.0),               // valid, superseded by dup below
