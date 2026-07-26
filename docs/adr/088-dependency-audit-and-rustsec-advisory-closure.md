@@ -424,3 +424,24 @@ the only reported update holds remain the non-advisory base64, generic-array,
 and wgpu ecosystem constraints documented in ADR-031. Final resolver probes
 also applied compatible `cc` 1.4.0 and `either` 1.17.0 updates and moved the
 dev-only, default-feature-free `serial_test` line from 3.5 to 4.0.1.
+
+## 2026-07-26 upstream owner verification
+
+The post-reduction graph remains at its compatible floor: 537 packages, 500
+unique names, 34 true duplicate families, and 37 extra versions. No direct
+manifest drift or safe local duplicate removal was found. `cargo audit --deny
+warnings`, `cargo deny check advisories`, and the fail-closed duplicate gate
+remain clean; the only resolver holds are the non-advisory `base64`
+0.22.1→0.23.0, `generic-array` 0.14.7→0.14.9, and wgpu 29.0.4→30.0.0
+ecosystem constraints detailed in ADR-031.
+
+Reverse-edge and feature tracing corrected the duplicate exception rationale:
+winit 0.30.13 enables ahash's defaults while also selecting `no-rng`, so
+ahash's `runtime-rng` default retains `getrandom` 0.3 and its `r-efi` 5 target
+metadata. `tempfile` is not an owner; it already uses `getrandom` 0.4.
+Removing this edge locally would mean disabling Wayland or carrying another
+fork, so the exact-version exception stays until a winit 0.30.x patch fixes the
+declaration or the egui stack upgrades winit. Runtime seeding remains active,
+so this is a duplicate-cost issue rather than weakened hash seeding. The
+`redox_syscall` 0.5.18 exception now names
+its sole owner, `parking_lot_core` 0.9.12.

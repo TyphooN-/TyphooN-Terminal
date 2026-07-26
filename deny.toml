@@ -34,7 +34,7 @@ skip = [
 
     { crate = "objc2-ui-kit@0.2.2", reason = "winit 0.30 still owns the objc2 0.5 platform stack" },
     { crate = "redox_syscall@0.4.1", reason = "winit 0.30 Redox support spans syscall generations" },
-    { crate = "redox_syscall@0.5.18", reason = "parking_lot and winit Redox support span syscall generations" },
+    { crate = "redox_syscall@0.5.18", reason = "parking_lot_core 0.9.12 Redox support has not moved to redox_syscall 0.9" },
     { crate = "rustix@0.38.44", reason = "winit 0.30 Smithay 0.19 path has not moved to rustix 1" },
     { crate = "smithay-client-toolkit@0.19.2", reason = "winit 0.30 has not adopted Smithay client toolkit 0.20" },
     { crate = "thiserror@1.0.69", reason = "winit 0.30 Smithay and Android support still use thiserror 1" },
@@ -49,7 +49,7 @@ skip = [
 
     # Independent current upstream stacks have not converged yet.
 
-    { crate = "getrandom@0.3.4", reason = "ahash and tempfile still require getrandom 0.3" },
-    { crate = "r-efi@5.3.0", reason = "getrandom 0.3 target support still requires r-efi 5" },
+    { crate = "getrandom@0.3.4", reason = "winit 0.30.13's Wayland edge enables ahash defaults beside no-rng; unblock on a fixed winit 0.30 patch or egui-stack upgrade" },
+    { crate = "r-efi@5.3.0", reason = "winit 0.30.13's ahash default edge retains getrandom 0.3 target support and r-efi 5" },
     { crate = "syn@2.0.119", reason = "current proc macros are split across the syn 2 to syn 3 migration" },
 ]

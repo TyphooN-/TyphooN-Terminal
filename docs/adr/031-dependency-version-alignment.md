@@ -610,3 +610,30 @@ unification at this ceiling. During final re-resolution, newly published
 `cc` 1.4.0 and `either` 1.17.0 were individually compatible and applied;
 the dev-only `serial_test` requirement moved 3.5 → 4.0.1 with default features
 still disabled.
+
+## 2026-07-26 upstream owner re-trace
+
+A fresh lockfile and target-feature audit found no additional safe local
+unification after the image-stack reduction. The graph remains at **537
+packages / 500 unique names / 34 true multi-version families / 37 extra
+versions**. `cargo update --workspace --dry-run --verbose` reports only the
+documented `base64` 0.22.1→0.23.0, `generic-array` 0.14.7→0.14.9, and wgpu
+29.0.4→30.0.0 holds; the manifest
+drift scan remains clean.
+
+The audit did correct two exception-owner records in `deny.toml`. `getrandom`
+0.3 is not retained by `tempfile` (which already uses 0.4): winit 0.30.13's
+Unix `ahash` declaration asks for `no-rng` but leaves ahash defaults enabled,
+which re-enables `runtime-rng` and `getrandom` 0.3. That same edge owns the
+`r-efi` 5 target-support line. No downstream feature can subtract an upstream
+default, so local removal would require dropping Wayland support or adding a
+winit fork; both are worse than retaining the current reviewed exception. The
+runtime-seeded hash path is security-neutral-to-positive; the cost here is the
+extra dependency generation, not weaker hash seeding. Revisit on a winit
+0.30.x patch that disables ahash defaults or an egui-stack winit upgrade.
+`redox_syscall` 0.5.18 was also re-attributed precisely to
+`parking_lot_core` 0.9.12 rather than winit.
+
+Repeated single-version nodes such as `pest` in `cargo tree -d` are Cargo
+resolver host/target units with different feature sets, not duplicate lockfile
+packages. Cargo metadata remains the source for the true-family metric above.
