@@ -1190,7 +1190,7 @@ struct MergedBaseEntry {
 /// build takes ~1s), short enough that live daily/hourly updates still reach the
 /// derived charts promptly. A higher-timeframe aggregation's forming bar is
 /// anchored separately, so this staleness never touches the live edge.
-const MERGED_BASE_MEMO_TTL_MS: i64 = 15_000;
+const MERGED_BASE_MEMO_TTL_MS: i64 = 60_000;
 
 #[allow(clippy::type_complexity)]
 fn merged_base_memo() -> &'static std::sync::RwLock<
