@@ -518,7 +518,7 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
         _ => "Other",
     }
 }
-const NEWS_LOADING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
+const NEWS_LOADING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
 const FUNDAMENTALS_SCRAPE_STALE_AFTER: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 const SEC_SCRAPE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
