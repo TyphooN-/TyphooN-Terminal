@@ -560,15 +560,25 @@ impl TyphooNApp {
         ctx: &egui::Context,
         now_instant: std::time::Instant,
     ) {
-        if self.heavy_sync_in_progress && self.deferred_chart_loads.len() > 8 {
-            return;
-        }
-        // Keep every open chart tab warm, not just the active tab or currently
-        // visible MTF cells. Users should be able to switch tabs without that
-        // click being the first time bars/indicators are loaded.
-        for idx in open_chart_preload_indices(&self.charts) {
-            if self.should_queue_empty_chart_reload(idx, now_instant) {
-                self.queue_chart_reload(idx);
+        // Heavy broad sync + news/sec (the exact condition that produced the
+        // 2687ms "deferred_chart_loads" stall in 2026-07 logs) must not block
+        // the render/pump thread. Skip chart preloads and cap work aggressively.
+        // MTF/focused cells are still served via WS + demand paths; cold tab
+        // restores can wait.
+        if self.heavy_sync_in_progress {
+            if self.deferred_chart_loads.len() > 2 {
+                return;
+            }
+            // Skip all preload queuing during heavy to avoid any queue work or
+            // should_queue checks that could accumulate cost.
+        } else {
+            // Keep every open chart tab warm, not just the active tab or currently
+            // visible MTF cells. Users should be able to switch tabs without that
+            // click being the first time bars/indicators are loaded.
+            for idx in open_chart_preload_indices(&self.charts) {
+                if self.should_queue_empty_chart_reload(idx, now_instant) {
+                    self.queue_chart_reload(idx);
+                }
             }
         }
 
@@ -646,14 +656,24 @@ impl TyphooNApp {
         // not-yet-loading charts up to the concurrency cap.
         let mut gpu = self.gpu_indicators.take();
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let finalize_cap = DEFERRED_CHART_FINALIZE_PER_FRAME;
-        let inflight_cap = DEFERRED_CHART_MAX_INFLIGHT;
-        let scan_window = DEFERRED_CHART_SCAN_WINDOW;
-        let finalize_budget = if self.pump_hidden {
-            DEFERRED_CHART_FINALIZE_BUDGET_HIDDEN
+        // Tighter caps during heavy sync (trading-critical bar sync + WS take
+        // precedence; observed 2.6s stall on startup heavy_sync + news).
+        let (finalize_cap, scan_window, finalize_budget) = if self.heavy_sync_in_progress {
+            (2usize, 4usize, std::time::Duration::from_millis(4))
+        } else if self.pump_hidden {
+            (
+                DEFERRED_CHART_FINALIZE_PER_FRAME,
+                DEFERRED_CHART_SCAN_WINDOW,
+                DEFERRED_CHART_FINALIZE_BUDGET_HIDDEN,
+            )
         } else {
-            DEFERRED_CHART_FINALIZE_BUDGET_VISIBLE
+            (
+                DEFERRED_CHART_FINALIZE_PER_FRAME,
+                DEFERRED_CHART_SCAN_WINDOW,
+                DEFERRED_CHART_FINALIZE_BUDGET_VISIBLE,
+            )
         };
+        let inflight_cap = DEFERRED_CHART_MAX_INFLIGHT;
         let pass_started = std::time::Instant::now();
         let mut finalized = 0usize;
         let mut scanned = 0usize;
