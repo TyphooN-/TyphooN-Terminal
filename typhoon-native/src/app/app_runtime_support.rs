@@ -189,7 +189,7 @@ fn format_json_scalar(value: &serde_json::Value) -> String {
     }
 }
 
-const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 32;
+const HEAVY_SYNC_PENDING_FETCH_THRESHOLD: usize = 64;
 const HEAVY_SYNC_DEFERRED_CHART_THRESHOLD: usize = 4;
 pub(super) fn should_auto_start_background_scope_scrape(
     _scope: EventSource,
