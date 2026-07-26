@@ -1,9 +1,9 @@
 use super::*;
 use typhoon_engine::core::fallback_bars::yahoo_chart_supports_timeframe;
 
-const ALPACA_BATCH_FETCH_MAX_SYMBOLS: usize = 50;
-const ALPACA_BATCH_FETCH_INTRADAY_SYMBOLS: usize = 16;
-const ALPACA_BATCH_FETCH_LOW_TF_SYMBOLS: usize = 8;
+const ALPACA_BATCH_FETCH_MAX_SYMBOLS: usize = 64;
+const ALPACA_BATCH_FETCH_INTRADAY_SYMBOLS: usize = 24;
+const ALPACA_BATCH_FETCH_LOW_TF_SYMBOLS: usize = 12;
 pub(super) const BACKGROUND_RETRY_PENDING_FETCH_CAP: usize = 256;
 
 fn full_tilt_low_tf_reserve_slots(
