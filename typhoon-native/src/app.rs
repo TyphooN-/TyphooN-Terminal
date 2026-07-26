@@ -748,6 +748,7 @@ impl TyphooNApp {
             alpaca_no_data_revalidate_next_ts: 0,
             alpaca_no_data_revalidate_rev: 0,
             alpaca_no_data_reconcile_next_ts: 0,
+            alpaca_backfill_complete_reconcile_next_ts: 0,
             alpaca_sync_cursor: 0,
             kraken_spot_sync_cursors: [0; 4],
             kraken_equities_sync_cursor: 0,

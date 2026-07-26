@@ -252,6 +252,9 @@ impl TyphooNApp {
         if !self.alpaca_no_data_loaded {
             self.alpaca_no_data_load();
         }
+        if !self.alpaca_backfill_complete_loaded {
+            self.alpaca_backfill_complete_load();
+        }
         let timeframe = normalize_sync_timeframe_key(timeframe)
             .unwrap_or(timeframe)
             .to_string();
@@ -260,6 +263,17 @@ impl TyphooNApp {
         }
         let symbol = normalize_market_data_symbol(symbol).replace('/', "");
         let key = alpaca_fetch_key(&symbol, &timeframe);
+        // A cell that has already saturated the provider window is not a no-data
+        // cell: the deep-window probe returns no rows because nothing OLDER
+        // exists, not because Alpaca has nothing. Tombstoning it is a lie the
+        // scheduler then acts on (the tombstone is consulted before dispatch), so
+        // the cell freezes. Measured on this cache: 20,612 pairs carried both
+        // marks, every one with bars > 0 in its backfill entry and the tombstone
+        // written *after* the backfill completed — including names like A@1Day
+        // (1465/1465 bars). Refuse the tombstone and let the settled mark stand.
+        if self.alpaca_backfill_complete_pairs.contains_key(&key) {
+            return false;
+        }
         let entry = AlpacaNoDataPair {
             symbol,
             timeframe,

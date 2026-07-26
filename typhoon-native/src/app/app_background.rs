@@ -379,17 +379,22 @@ pub(super) fn spawn_background_refresh(
                     // Reclaims freed pages from DELETEs/compaction without full VACUUM.
                     if last_vacuum.elapsed() >= VACUUM_INTERVAL {
                         let _ = cache.incremental_vacuum(500);
-                        // LRU eviction: bar_cache soft limit = 500 MB.
-                        // Skips entries newer than 7 days.
-                        if let Ok((evicted, freed)) = cache.evict_lru(500 * 1024 * 1024) {
-                            if evicted > 0 {
-                                tracing::info!(
-                                    "BG: LRU evicted {} bar_cache entries ({} MB freed)",
-                                    evicted,
-                                    freed / (1024 * 1024)
-                                );
-                            }
-                        }
+                        // NO automatic bar_cache eviction. A 500 MB soft cap used to
+                        // run here and it was actively destructive: bar_cache is the
+                        // product of every rate-limited provider request the sync
+                        // makes, and at ~677 MB for a partially-filled 12.9k × 7 TF
+                        // universe the cap deleted history (oldest `timestamp` first,
+                        // sparing only 7 days) far faster than 600 req/min could
+                        // rebuild it. One tick on 2026-07-26 dropped 59,624 entries
+                        // (1.1 GB) — Yahoo's whole daily backbone, 37k series — and
+                        // Merged 1Day fell from 99.6% to 1.5% while the provider rows
+                        // still read ~99% off their now-orphaned backfill-complete
+                        // marks. It also fed the no-data tombstone treadmill: evict,
+                        // re-probe, "no rows", tombstone, reconcile, repeat forever.
+                        // The bar table is 1.4% of a 36 GB file; the space is in the
+                        // research/news/SEC tables. `SqliteCache::evict_lru` is kept
+                        // for a deliberate operator call, but nothing schedules it —
+                        // bar deletion is a Storage Manager action the user takes.
                         // News retention: age purge + hard row cap. Keeps the
                         // news corpus bounded so the header COUNT and FTS search
                         // stay cheap regardless of how many full-universe news

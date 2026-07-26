@@ -2462,6 +2462,7 @@ impl TyphooNApp {
     /// same-length retry swap that briefly reuses the cache is harmless.
     pub(super) fn refresh_alpaca_no_data_workset(&mut self) {
         self.reconcile_alpaca_no_data_against_cached_bars();
+        self.reconcile_alpaca_backfill_complete_against_cached_bars();
         self.rotate_alpaca_no_data_revalidation_slice();
         let unresolvable_len = self
             .unresolvable_fetch_keys_by_broker
@@ -2545,6 +2546,58 @@ impl TyphooNApp {
             tracing::info!(
                 "Alpaca no-data reconcile: dropped {dropped} tombstone(s) contradicted by cached bars ({} remain)",
                 self.alpaca_no_data_pairs.len()
+            );
+        }
+    }
+
+    /// Drop every backfill-complete mark whose cell no longer holds any bars.
+    ///
+    /// The mirror of [`Self::reconcile_alpaca_no_data_against_cached_bars`], and
+    /// the more damaging of the two leaks. A backfill-complete mark means "the
+    /// provider window is saturated, there is nothing left to fetch", so it
+    /// suppresses the full-history request (`should_request_full_backfill`) *and*
+    /// counts the cell healthy-settled in Sync Status. When the bars behind it
+    /// disappear the mark becomes a claim about data that no longer exists: the
+    /// cell reads 100% on the provider lane, 0% on Merged, and nothing ever
+    /// refetches it.
+    ///
+    /// Bars did disappear, in bulk — the 30-minute maintenance tick used to run a
+    /// 500 MB cap over `bar_cache` and deleted 59,624 entries in a single pass.
+    /// That eviction is gone (see `app_background`), but 21.5k+ marks it already
+    /// orphaned are still on disk, and any future explicit purge leaves the same
+    /// residue. Dropping the mark is enough to re-arm the cell; the normal
+    /// deep-window path re-fetches and re-marks it.
+    fn reconcile_alpaca_backfill_complete_against_cached_bars(&mut self) {
+        /// Same cadence as the no-data reconcile: a full pass is a map lookup per
+        /// mark (~77k, low single-digit ms) and bars cannot vanish faster.
+        const INTERVAL_SECS: i64 = 300;
+
+        let now_s = chrono::Utc::now().timestamp();
+        if now_s < self.alpaca_backfill_complete_reconcile_next_ts {
+            return;
+        }
+        self.alpaca_backfill_complete_reconcile_next_ts = now_s + INTERVAL_SECS;
+        // Before the first storage snapshot every cell reads as having no bars, so
+        // a pass now would clear the entire mark set on false evidence.
+        if !self.broad_sync_state_ready() || self.cached_alpaca_sync_state.is_empty() {
+            return;
+        }
+
+        let state = &self.cached_alpaca_sync_state;
+        let before = self.alpaca_backfill_complete_pairs.len();
+        self.alpaca_backfill_complete_pairs.retain(|_, pair| {
+            state
+                .get(&(pair.symbol.clone(), pair.timeframe.clone()))
+                .is_some_and(|cached| cached.bar_count > 0)
+        });
+        let dropped = before - self.alpaca_backfill_complete_pairs.len();
+        if dropped > 0 {
+            if self.alpaca_backfill_complete_dirty_since.is_none() {
+                self.alpaca_backfill_complete_dirty_since = Some(std::time::Instant::now());
+            }
+            tracing::info!(
+                "Alpaca backfill-complete reconcile: dropped {dropped} orphaned mark(s) with no cached bars ({} remain) — those cells are fetchable again",
+                self.alpaca_backfill_complete_pairs.len()
             );
         }
     }

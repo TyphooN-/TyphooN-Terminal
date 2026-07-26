@@ -926,6 +926,9 @@ pub struct TyphooNApp {
     /// Next due time for `reconcile_alpaca_no_data_against_cached_bars`, the
     /// sweep that drops tombstones contradicted by cached bars.
     pub(super) alpaca_no_data_reconcile_next_ts: i64,
+    /// Next due time for `reconcile_alpaca_backfill_complete_against_cached_bars`,
+    /// the sweep that drops "provider window saturated" marks whose bars are gone.
+    pub(super) alpaca_backfill_complete_reconcile_next_ts: i64,
     /// `(no_data_pairs.len, alpaca unresolvable.len, retry_queue.len,
     /// revalidate_rev)` at the last `cached_alpaca_no_data_workset` rebuild.
     /// `None` forces a rebuild.

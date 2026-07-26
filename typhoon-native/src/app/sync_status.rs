@@ -716,7 +716,6 @@ impl BarSyncInputs {
             &prepared_spot_fetch_symbols,
             &prepared_futures_fetch_symbols,
             &detailed_rows,
-            &checked_or_complete_parts,
             &no_data_contains,
         );
         self.add_kraken_equities_merged_rows(
@@ -1020,7 +1019,6 @@ impl BarSyncInputs {
         prepared_spot_fetch_symbols: &PreparedFetchSymbols<'_>,
         prepared_futures_fetch_symbols: &PreparedFetchSymbols<'_>,
         detailed: &DetailedSyncRows<'_>,
-        checked_or_complete_parts: &dyn Fn(&str, &str, &str, &str) -> bool,
         no_data_contains: &dyn Fn(&str, &str, &str) -> bool,
     ) {
         let timeframes = &self.timeframes;
@@ -1088,20 +1086,22 @@ impl BarSyncInputs {
                         _ => Some(symbol.as_str()),
                     }
                     .unwrap_or(symbol);
-                    let provider_settled =
-                        checked_or_complete_parts(source, symbol, fetch_symbol, tf);
+                    // Reached only when the cell has NO cache row at all (the
+                    // `detailed.contains_key` guard above). A provider-settled mark
+                    // on a cell with zero bars is not health — it is a mark whose
+                    // data is gone, and crediting it was why the Alpaca/Yahoo lanes
+                    // read ~99% while Merged (which counts actual bars) read 38%.
+                    // Measured on this cache: 21,520 such marks before the 500 MB
+                    // bar_cache eviction was removed, ~50k after one of its passes.
+                    // Count it as the empty cell it is; the backfill-complete
+                    // reconcile drops the orphaned mark and re-arms the fetch.
                     let provider_unreachable = no_data_contains(source, fetch_symbol, tf);
                     if let Some(&idx) = row_index.get(&row_key) {
                         let row = &mut rows[idx];
                         row.total += 1;
-                        if provider_settled {
-                            row.healthy += 1;
-                            row.settled += 1;
-                        } else {
-                            row.empty += 1;
-                            if provider_unreachable {
-                                row.unreachable += 1;
-                            }
+                        row.empty += 1;
+                        if provider_unreachable {
+                            row.unreachable += 1;
                         }
                         row.pct_healthy = if row.total == 0 {
                             0.0
@@ -1114,13 +1114,13 @@ impl BarSyncInputs {
                             broker: row_key.0.clone(),
                             tf: row_key.1.clone(),
                             total: 1,
-                            healthy: u64::from(provider_settled),
+                            healthy: 0,
                             stale: 0,
-                            empty: u64::from(!provider_settled),
-                            settled: u64::from(provider_settled),
-                            unreachable: u64::from(!provider_settled && provider_unreachable),
+                            empty: 1,
+                            settled: 0,
+                            unreachable: u64::from(provider_unreachable),
                             note: None,
-                            pct_healthy: if provider_settled { 100.0 } else { 0.0 },
+                            pct_healthy: 0.0,
                         });
                         row_index.insert(row_key.clone(), idx);
                     }
@@ -1287,8 +1287,14 @@ mod tests {
         assert!((result.overall_pct - 100.0).abs() < f32::EPSILON);
     }
 
+    /// A cell with no cache row is empty even when the provider has flagged it
+    /// backfill-complete: the mark describes bars that are no longer there (bulk
+    /// eviction, an explicit purge, a corporate-action reset), and crediting it as
+    /// healthy is what let the provider lanes read ~99% while the Merged lane —
+    /// which counts actual bars — read 38%. Only the no-data overlay still applies,
+    /// so the reachable % stays honest too.
     #[test]
-    fn expected_missing_rows_honor_provider_settled_and_no_data_marks() {
+    fn expected_missing_rows_count_orphaned_settled_marks_as_empty_not_healthy() {
         let mut kraken_backfill_keys = std::collections::HashSet::new();
         kraken_backfill_keys.insert(alpaca_fetch_key("BTCUSD", "1Day"));
         kraken_backfill_keys.insert(alpaca_fetch_key("AAPL", "1Day"));
@@ -1328,21 +1334,24 @@ mod tests {
             .iter()
             .find(|row| row.broker == "Kraken Spot" && row.tf == "1Day")
             .unwrap();
+        // BTCUSD is backfill-complete but holds no bars → empty, not healthy.
+        // ETHUSD is tombstoned → empty and unreachable, so the reachable basis
+        // (total - unreachable = 1) still sees the one real gap.
         assert_eq!(spot_d1.total, 2);
-        assert_eq!(spot_d1.healthy, 1);
-        assert_eq!(spot_d1.settled, 1);
-        assert_eq!(spot_d1.empty, 1);
+        assert_eq!(spot_d1.healthy, 0);
+        assert_eq!(spot_d1.settled, 0);
+        assert_eq!(spot_d1.empty, 2);
         assert_eq!(spot_d1.unreachable, 1);
-        assert!((spot_d1.pct_healthy - 50.0).abs() < f32::EPSILON);
+        assert!(spot_d1.pct_healthy.abs() < f32::EPSILON);
         let securities_d1 = result
             .rows
             .iter()
             .find(|row| row.broker == "Kraken Equities" && row.tf == "1Day")
             .unwrap();
         assert_eq!(securities_d1.total, 2);
-        assert_eq!(securities_d1.healthy, 1);
-        assert_eq!(securities_d1.settled, 1);
-        assert_eq!(securities_d1.empty, 1);
+        assert_eq!(securities_d1.healthy, 0);
+        assert_eq!(securities_d1.settled, 0);
+        assert_eq!(securities_d1.empty, 2);
         assert_eq!(securities_d1.unreachable, 1);
         let futures_d1 = result
             .rows
@@ -1350,8 +1359,8 @@ mod tests {
             .find(|row| row.broker == "Kraken Futures" && row.tf == "1Day")
             .unwrap();
         assert_eq!(futures_d1.total, 1);
-        assert_eq!(futures_d1.healthy, 1);
-        assert_eq!(futures_d1.settled, 1);
+        assert_eq!(futures_d1.healthy, 0);
+        assert_eq!(futures_d1.empty, 1);
     }
 
     #[test]
@@ -1416,21 +1425,27 @@ mod tests {
 
     #[test]
     fn overall_pct_uses_reachable_basis_so_no_data_never_pins_full_tilt() {
-        // Native Kraken Equities 1Day with one settled (healthy) symbol and one
-        // provider-no-data (unreachable) symbol. Raw coverage would be 50% — below
-        // the 99% full-tilt release threshold, so the scheduler would stay pinned
-        // at full tilt forever. On the reachable basis the no-data cell drops out
-        // of the denominator, overall_pct is 100%, and full-tilt can stand down.
+        // Native Kraken Equities 1Day with one genuinely healthy symbol (fresh
+        // cached bars) and one provider-no-data (unreachable) symbol. Raw coverage
+        // would be 50% — below the 99% full-tilt release threshold, so the
+        // scheduler would stay pinned at full tilt forever. On the reachable basis
+        // the no-data cell drops out of the denominator, overall_pct is 100%, and
+        // full-tilt can stand down.
         let mut kraken_no_data = std::collections::HashSet::new();
         kraken_no_data.insert(alpaca_fetch_key("WOK", "1Day"));
         let mut no_data_keys_by_source = std::collections::HashMap::new();
         no_data_keys_by_source.insert("kraken-equities".to_string(), kraken_no_data);
         let mut kraken_backfill_keys = std::collections::HashSet::new();
         kraken_backfill_keys.insert(alpaca_fetch_key("AAPL", "1Day"));
+        let now_s = chrono::Utc::now().timestamp();
+        let aapl_key = "kraken-equities:AAPL:1Day".to_string();
 
         let inputs = BarSyncInputs {
-            detailed_stats: Vec::new(),
-            bar_ts_cache: std::collections::HashMap::new(),
+            detailed_stats: vec![(aapl_key.clone(), 500, now_s)],
+            bar_ts_cache: std::collections::HashMap::from([(
+                aapl_key,
+                (0, now_s * 1000, 0),
+            )]),
             cache_stats_present: true,
             catalog_symbol_count: 0,
             catalog_symbols: Vec::new(),
