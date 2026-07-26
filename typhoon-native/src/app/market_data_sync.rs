@@ -261,18 +261,32 @@ pub(super) fn select_no_data_revalidation_slice(
     if slice == 0 {
         return Vec::new();
     }
-    let mut due: Vec<(i64, &String)> = pairs
-        .iter()
-        .filter(|(_, pair)| pair.marked_at <= cutoff_s)
-        .map(|(key, pair)| (pair.marked_at, key))
-        .collect();
-    // Partition first: this runs on the dispatch (render) thread against a
-    // ~50k-entry map, so only the retained slice is worth fully ordering.
-    if due.len() > slice {
-        due.select_nth_unstable(slice - 1);
-        due.truncate(slice);
+
+    // Bounded top-k (oldest k) using BinaryHeap so we never materialize the
+    // full list of due tombstones (can be thousands). O(n log k) time, O(k)
+    // extra memory instead of O(due). Runs on dispatch thread against the
+    // ~50k map.
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let mut heap: BinaryHeap<(Reverse<i64>, &String)> = BinaryHeap::with_capacity(slice);
+
+    for (key, pair) in pairs.iter() {
+        if pair.marked_at <= cutoff_s {
+            let item = (Reverse(pair.marked_at), key);
+            if heap.len() < slice {
+                heap.push(item);
+            } else if let Some(&(Reverse(largest), _)) = heap.peek() {
+                if pair.marked_at < largest {
+                    heap.pop();
+                    heap.push(item);
+                }
+            }
+        }
     }
-    due.sort_unstable();
+
+    let mut due: Vec<(i64, &String)> = heap.into_iter().map(|(Reverse(ts), k)| (ts, k)).collect();
+    due.sort_unstable(); // oldest first
     due.into_iter().map(|(_, key)| key.clone()).collect()
 }
 
