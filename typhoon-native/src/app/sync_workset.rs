@@ -771,8 +771,8 @@ pub(super) fn select_alpaca_sync_workset_rotating_with_stale_policy(
         // timeframe before rotating background symbols. This preserves trading
         // session usefulness without breaking high-TF-first ordering.
         if !matches!(tf, "1Min" | "5Min") {
-            let mut foreground_symbols: Vec<&str> =
-                focus_symbols.iter().map(String::as_str).collect();
+            let mut foreground_symbols: Vec<&str> = Vec::with_capacity(focus_symbols.len());
+            foreground_symbols.extend(focus_symbols.iter().map(String::as_str));
             foreground_symbols.sort_unstable();
             for symbol in foreground_symbols {
                 collect_sync_candidate_for_timeframe(
@@ -890,7 +890,7 @@ pub(super) fn select_low_timeframe_sync_reserve_rotating(
         let mut stale: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
         let mut backfill: Vec<AlpacaSyncCandidate> = Vec::with_capacity(batch_size);
 
-        let mut foreground_symbols: Vec<&str> = focus_symbols.iter().map(String::as_str).collect();
+        let mut foreground_symbols: Vec<&str> = focus_symbols.iter().map(String::as_str).collect::<Vec<_>>();
         foreground_symbols.sort_unstable();
         for symbol in foreground_symbols {
             collect_sync_candidate_for_timeframe(
