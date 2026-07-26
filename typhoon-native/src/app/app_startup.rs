@@ -9,9 +9,9 @@ pub(super) fn install_image_loaders(
     cc: &eframe::CreationContext<'_>,
     rt_handle: &tokio::runtime::Handle,
 ) {
-    // Keep the local PNG/JPEG/WEBP + file loaders from egui_extras, but use the
-    // bounded reqwest loader for remote images. egui_extras' `http` feature
-    // otherwise adds ehttp/ureq and a second rustls crypto provider (ring).
+    // Keep the PNG/JPEG/WEBP decoders from egui_extras, but use the bounded
+    // reqwest loader for remote bytes. The unused local-file and HTTP features
+    // otherwise add mime_guess2/PHF 0.11/rand 0.8 and ehttp/ureq/ring.
     egui_extras::install_image_loaders(&cc.egui_ctx);
     cc.egui_ctx.add_bytes_loader(Arc::new(
         super::remote_image_loader::RemoteImageLoader::new(rt_handle.clone()),
