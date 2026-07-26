@@ -262,22 +262,21 @@ pub(super) fn select_no_data_revalidation_slice(
         return Vec::new();
     }
 
-    // Bounded top-k (oldest k) using BinaryHeap so we never materialize the
-    // full list of due tombstones (can be thousands). O(n log k) time, O(k)
-    // extra memory instead of O(due). Runs on dispatch thread against the
-    // ~50k map.
-    use std::cmp::Reverse;
+    // Bounded top-k (k oldest / smallest marked_at) using max-heap.
+    // We keep the k smallest timestamps. BinaryHeap is max-heap, so root is
+    // the largest ts among the current k smallest. When over capacity we pop
+    // the largest. O(n log k) time, O(k) memory.
     use std::collections::BinaryHeap;
 
-    let mut heap: BinaryHeap<(Reverse<i64>, &String)> = BinaryHeap::with_capacity(slice);
+    let mut heap: BinaryHeap<(i64, &String)> = BinaryHeap::with_capacity(slice);
 
     for (key, pair) in pairs.iter() {
         if pair.marked_at <= cutoff_s {
-            let item = (Reverse(pair.marked_at), key);
+            let item = (pair.marked_at, key);
             if heap.len() < slice {
                 heap.push(item);
-            } else if let Some(&(Reverse(largest), _)) = heap.peek() {
-                if pair.marked_at < largest {
+            } else if let Some(&(top_ts, _)) = heap.peek() {
+                if pair.marked_at < top_ts {
                     heap.pop();
                     heap.push(item);
                 }
@@ -285,8 +284,8 @@ pub(super) fn select_no_data_revalidation_slice(
         }
     }
 
-    let mut due: Vec<(i64, &String)> = heap.into_iter().map(|(Reverse(ts), k)| (ts, k)).collect();
-    due.sort_unstable(); // oldest first
+    let mut due: Vec<(i64, &String)> = heap.into_iter().collect();
+    due.sort_unstable(); // oldest (smallest ts) first
     due.into_iter().map(|(_, key)| key.clone()).collect()
 }
 
