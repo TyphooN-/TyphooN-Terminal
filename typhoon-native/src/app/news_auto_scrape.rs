@@ -41,25 +41,27 @@ pub(super) const DEFAULT_INTERVAL_SECS: u64 = 600;
 
 /// Symbols dispatched per batch.
 ///
-/// Sized against the broker's 500ms inter-symbol pacing: 128 symbols is a
-/// ≤64s worst-case run, comfortably inside the default 10-minute interval, so
-/// the sweep never overlaps itself or pins `news_loading` (and therefore
-/// `heavy_sync_in_progress`) on. Already-fresh symbols skip without network or
-/// sleep, so a warm corpus finishes a batch in well under that.
-pub(super) const BATCH: usize = 128;
+/// Sized to keep GDELT's real five-second global request budget busy: 64 active
+/// slots preserve foreground priority while 128 rotating slots double broad
+/// progress from the previous 64-slot rotation. Total runtime also depends on
+/// how many active symbols are cold, so the dedicated in-flight latch—not the
+/// ten-minute timer—prevents overlap. Already-fresh symbols skip without network
+/// or sleep, so warm batches finish much faster.
+pub(super) const BATCH: usize = 192;
 
 /// How much of each batch is reserved for the active set (watchlist, positions,
 /// MTF grid, open charts). The remainder is always available to the rotation
 /// cursor, so a user with hundreds of active symbols cannot starve the sweep of
-/// the broad universe — it only ever gets the freshest half of its own list.
-pub(super) const ACTIVE_SLOTS: usize = BATCH / 2;
+/// the broad universe. The active reservation remains fixed as broad throughput
+/// scales, so foreground news priority is not traded away for catalog coverage.
+pub(super) const ACTIVE_SLOTS: usize = 64;
 
 /// Cap on the interval accepted from the `NEWSAUTO` command — an hour between
 /// batches already means days per sweep of a full universe; beyond that the
 /// feature is off in all but name, and `NEWSAUTO OFF` says so honestly.
 pub(super) const MAX_INTERVAL_SECS: u64 = 3600;
-/// Floor on the same. The broker paces at 500ms/symbol, so a batch cannot
-/// complete faster than ~64s; anything under a minute would just queue.
+/// Floor on the same. The broker and GDELT provider impose their own stricter
+/// pacing, and the dedicated in-flight latch prevents interval overlap.
 pub(super) const MIN_INTERVAL_SECS: u64 = 60;
 
 impl TyphooNApp {
@@ -71,9 +73,10 @@ impl TyphooNApp {
         }
         // `news_loading` covers both the manual buttons and our own dispatch,
         // so this is the mutual exclusion that stops two scrapes racing on the
-        // same provider quota. The existing watchdog in `app_runtime_support`
-        // un-latches it if a broker result is ever lost, so this cannot wedge.
-        if self.news_loading {
+        // same provider quota. The dedicated auto-scrape latch gets a longer
+        // watchdog because a cold GDELT-paced batch can legitimately exceed the
+        // five-minute manual-fetch timeout.
+        if self.news_loading || self.news_auto_scrape_in_flight {
             return;
         }
         // Never add network + SQLite pressure while market-data catch-up is
@@ -105,18 +108,38 @@ impl TyphooNApp {
 
         self.news_auto_scrape_last_at = Some(now_instant);
         self.news_loading = true;
+        self.news_auto_scrape_in_flight = true;
+        self.news_auto_scrape_request_id = self.news_auto_scrape_request_id.wrapping_add(1);
+        let request_id = self.news_auto_scrape_request_id;
         let count = batch.len();
-        let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
-            symbols: batch,
-            marketaux_key: self.marketaux_key.clone(),
-            alpha_vantage_key: self.alpha_vantage_key.clone(),
-            fmp_key: self.fmp_key.clone(),
-            finnhub_key: self.finnhub_key.clone(),
-            cryptopanic_key: self.cryptopanic_key.clone(),
-        });
+        let active = self.active_news_scrape_symbols();
+        let keyed_source_symbols = keyed_source_symbols_for_batch(&batch, &active);
+        let keyed_count = keyed_source_symbols.len();
+        if self
+            .broker_tx
+            .send(BrokerCmd::NewsScrapeSymbols {
+                symbols: batch,
+                request_id: Some(request_id),
+                keyed_source_symbols,
+                marketaux_key: self.marketaux_key.clone(),
+                alpha_vantage_key: self.alpha_vantage_key.clone(),
+                fmp_key: self.fmp_key.clone(),
+                finnhub_key: self.finnhub_key.clone(),
+                cryptopanic_key: self.cryptopanic_key.clone(),
+            })
+            .is_err()
+        {
+            self.news_loading = false;
+            self.news_auto_scrape_in_flight = false;
+            self.log.push_back(LogEntry::err(
+                "News auto-scrape dispatch failed: broker channel closed".to_string(),
+            ));
+            return;
+        }
         let universe = self.news_auto_scrape_universe.len();
         self.log.push_back(LogEntry::info(format!(
-            "News auto-scrape: {count} symbol(s) — cursor {}/{universe}, sweep {}",
+            "News auto-scrape: {count} symbol(s) ({keyed_count} active full-source, {} broad open-source) — cursor {}/{universe}, sweep {}",
+            count.saturating_sub(keyed_count),
             self.news_auto_scrape_cursor.min(universe),
             self.news_auto_scrape_sweeps + 1
         )));
@@ -197,6 +220,35 @@ impl TyphooNApp {
         batch.sort();
         batch
     }
+}
+
+/// Keep scarce keyed-provider quotas on symbols the user is actively tracking.
+/// Broad rotation symbols still use GDELT, Yahoo RSS, and CoinDesk; including
+/// keyed providers for a 10k+ catalog cannot converge within their daily limits
+/// and only starves foreground fetches.
+pub(super) fn keyed_source_symbols_for_batch(
+    batch: &[String],
+    active: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let active: std::collections::HashSet<String> = active
+        .iter()
+        .map(|symbol| {
+            normalize_market_data_symbol(symbol)
+                .replace('/', "")
+                .to_uppercase()
+        })
+        .collect();
+    batch
+        .iter()
+        .filter(|symbol| {
+            active.contains(
+                &normalize_market_data_symbol(symbol)
+                    .replace('/', "")
+                    .to_uppercase(),
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 /// Parse the argument of the `NEWSAUTO` console command.
@@ -295,6 +347,32 @@ mod tests {
         assert!(slots > 0);
         let (start, end, _) = rotation_slice(0, 10_000, slots, 0);
         assert_eq!(end - start, slots, "every tick must consume rotation slots");
+    }
+
+    #[test]
+    fn default_batch_doubles_rotation_without_reducing_active_priority() {
+        // Keep the same 64-symbol foreground reservation while doubling the
+        // rotating share from the previous 64 to 128. Provider pacing controls
+        // elapsed time; the in-flight latch prevents a timer-driven overlap.
+        assert_eq!(ACTIVE_SLOTS, 64);
+        assert_eq!(BATCH - ACTIVE_SLOTS, 128);
+    }
+
+    #[test]
+    fn keyed_provider_quota_is_reserved_for_active_symbols() {
+        let batch = vec![
+            "AAPL.EQ".into(),
+            "MSFT".into(),
+            "ETHUSD".into(),
+            "ZZZZ".into(),
+        ];
+        let active =
+            std::collections::HashSet::from(["AAPL".into(), "MSFT".into(), "ETH/USD".into()]);
+
+        assert_eq!(
+            keyed_source_symbols_for_batch(&batch, &active),
+            ["AAPL.EQ", "MSFT", "ETHUSD"]
+        );
     }
 
     #[test]

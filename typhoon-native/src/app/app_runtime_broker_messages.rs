@@ -769,6 +769,7 @@ impl TyphooNApp {
                 }
                 msg @ (BrokerMsg::IngestResearchResult { .. }
                 | BrokerMsg::NewsArticlesLoaded { .. }
+                | BrokerMsg::NewsScrapeFinished { .. }
                 | BrokerMsg::NewsDbTotal(_)) => {
                     self.handle_news_ingest_msg(msg);
                 }

@@ -188,8 +188,18 @@ impl TyphooNApp {
                                 // off on its own during sync.
                                 let symbol_count = symbols.len();
                                 self.news_loading = true;
+                                let active = self.active_news_scrape_symbols();
+                                // Scope ALL can contain 10k+ symbols: reserve scarce
+                                // configured API quotas for the active intersection;
+                                // every other symbol still uses open/keyless sources.
+                                let keyed_source_symbols =
+                                    super::super::news_auto_scrape::keyed_source_symbols_for_batch(
+                                        &symbols, &active,
+                                    );
                                 let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
                                     symbols,
+                                    request_id: None,
+                                    keyed_source_symbols,
                                     marketaux_key: self.marketaux_key.clone(),
                                     alpha_vantage_key: self.alpha_vantage_key.clone(),
                                     fmp_key: self.fmp_key.clone(),

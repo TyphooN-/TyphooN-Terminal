@@ -66,8 +66,11 @@ impl TyphooNApp {
                             if use_mtf {
                                 let count = mtf_symbols.len();
                                 let label = mtf_symbols.join(", ");
+                                let keyed_source_symbols = mtf_symbols.clone();
                                 let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
                                     symbols: mtf_symbols,
+                                    request_id: None,
+                                    keyed_source_symbols,
                                     marketaux_key: self.marketaux_key.clone(),
                                     alpha_vantage_key: self.alpha_vantage_key.clone(),
                                     fmp_key: self.fmp_key.clone(),

@@ -1,5 +1,13 @@
 use super::*;
 
+fn matches_auto_news_scrape_completion(
+    in_flight: bool,
+    current_request_id: u64,
+    completed_request_id: u64,
+) -> bool {
+    in_flight && current_request_id == completed_request_id
+}
+
 impl TyphooNApp {
     pub(super) fn tick_news_body_hydrator(&mut self, now_instant: std::time::Instant) {
         // News body hydrator: fetch the full article text for rows that
@@ -88,7 +96,9 @@ impl TyphooNApp {
                     .push_back(LogEntry::info("SEC filing document loaded"));
             }
             BrokerMsg::FinnhubNewsResult(articles) => {
-                self.news_loading = false;
+                if !self.news_auto_scrape_in_flight {
+                    self.news_loading = false;
+                }
                 self.log.push_back(LogEntry::info(format!(
                     "Finnhub: {} articles loaded",
                     articles.len()
@@ -108,6 +118,22 @@ impl TyphooNApp {
             BrokerMsg::NewsArticlesLoaded { symbol, articles } => {
                 self.handle_news_articles_loaded(symbol, articles);
             }
+            BrokerMsg::NewsScrapeFinished { request_id } => match request_id {
+                Some(request_id)
+                    if matches_auto_news_scrape_completion(
+                        self.news_auto_scrape_in_flight,
+                        self.news_auto_scrape_request_id,
+                        request_id,
+                    ) =>
+                {
+                    self.news_auto_scrape_in_flight = false;
+                    self.news_loading = false;
+                }
+                None if !self.news_auto_scrape_in_flight => {
+                    self.news_loading = false;
+                }
+                _ => {}
+            },
             BrokerMsg::NewsDbTotal(n) => {
                 self.news_db_total = Some(n);
             }
@@ -176,7 +202,9 @@ impl TyphooNApp {
         symbol: String,
         articles: Vec<typhoon_engine::core::news::NewsArticle>,
     ) {
-        self.news_loading = false;
+        if !self.news_auto_scrape_in_flight {
+            self.news_loading = false;
+        }
         let count = articles.len();
         self.news_full_articles = articles;
 
@@ -241,5 +269,17 @@ impl TyphooNApp {
             "News {}: {} articles loaded",
             label, count
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_auto_news_scrape_completion;
+
+    #[test]
+    fn auto_news_completion_only_releases_its_matching_generation() {
+        assert!(matches_auto_news_scrape_completion(true, 42, 42));
+        assert!(!matches_auto_news_scrape_completion(true, 42, 41));
+        assert!(!matches_auto_news_scrape_completion(false, 42, 42));
     }
 }

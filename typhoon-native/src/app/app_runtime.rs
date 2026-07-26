@@ -105,7 +105,7 @@ impl eframe::App for TyphooNApp {
         self.heavy_sync_in_progress = ui_heavy_sync_active(
             pending_market_data_fetches,
             self.deferred_chart_loads.len(),
-            self.news_loading,
+            self.news_loading && !self.news_auto_scrape_in_flight,
             self.scrape_fund_running,
             self.scrape_sec_running,
             self.auto_compact_in_progress,

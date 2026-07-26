@@ -519,6 +519,7 @@ pub(super) fn broker_msg_kind(msg: &BrokerMsg) -> &'static str {
     }
 }
 const NEWS_LOADING_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+const NEWS_AUTO_SCRAPE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const FUNDAMENTALS_SCRAPE_STALE_AFTER: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 const SEC_SCRAPE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -535,6 +536,14 @@ pub(super) fn ui_task_is_stale(
     }
     let start = *started_at.get_or_insert(now);
     now.saturating_duration_since(start) > stale_after
+}
+
+fn news_loading_stale_after(auto_scrape_in_flight: bool) -> std::time::Duration {
+    if auto_scrape_in_flight {
+        NEWS_AUTO_SCRAPE_STALE_AFTER
+    } else {
+        NEWS_LOADING_STALE_AFTER
+    }
 }
 
 pub(super) fn ui_heavy_sync_active(
@@ -598,12 +607,13 @@ impl TyphooNApp {
             self.news_loading,
             &mut self.news_loading_started_at,
             now,
-            NEWS_LOADING_STALE_AFTER,
+            news_loading_stale_after(self.news_auto_scrape_in_flight),
         ) {
             self.news_loading = false;
+            self.news_auto_scrape_in_flight = false;
             self.news_loading_started_at = None;
             self.log.push_back(LogEntry::warn(
-                "News loading watchdog cleared stale busy flag after 180s".to_string(),
+                "News loading watchdog cleared stale busy flag".to_string(),
             ));
         }
         if ui_task_is_stale(

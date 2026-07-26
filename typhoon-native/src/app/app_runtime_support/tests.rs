@@ -332,6 +332,12 @@ fn heavy_sync_gate_tracks_bulk_work_not_light_idle() {
 }
 
 #[test]
+fn auto_news_scrape_watchdog_allows_provider_paced_batches_to_finish() {
+    assert_eq!(news_loading_stale_after(false).as_secs(), 300);
+    assert_eq!(news_loading_stale_after(true).as_secs(), 30 * 60);
+}
+
+#[test]
 fn ui_task_watchdog_marks_stale_and_clears_when_idle() {
     let now = std::time::Instant::now();
     let mut started = Some(now - std::time::Duration::from_secs(10));

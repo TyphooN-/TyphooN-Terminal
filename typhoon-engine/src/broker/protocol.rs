@@ -2593,6 +2593,13 @@ pub enum BrokerCmd {
     /// so multiple timeframe cells for the same ticker fetch once.
     NewsScrapeSymbols {
         symbols: Vec<String>,
+        /// Correlates unattended auto-scrape completion without allowing an
+        /// unrelated/manual news result to clear its in-flight latch.
+        request_id: Option<u64>,
+        /// Symbols allowed to use configured, quota-limited providers. Symbols
+        /// outside this set use only open/keyless sources so a full-universe
+        /// rotation cannot exhaust daily API quotas before active symbols run.
+        keyed_source_symbols: Vec<String>,
         marketaux_key: String,
         alpha_vantage_key: String,
         fmp_key: String,
@@ -3606,6 +3613,11 @@ pub enum BrokerMsg {
     NewsArticlesLoaded {
         symbol: String,
         articles: Vec<crate::core::news::NewsArticle>,
+    },
+    /// Terminal outcome for one `NewsScrapeSymbols` request. Emitted on every
+    /// success and failure path so the UI never waits for the watchdog normally.
+    NewsScrapeFinished {
+        request_id: Option<u64>,
     },
     /// Total article rows in the news DB, computed broker-side and pushed to
     /// the UI header ("· N in DB"). Replaces the old render-thread

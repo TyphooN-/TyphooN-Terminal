@@ -425,6 +425,8 @@ impl TyphooNApp {
             sec_history_tickers: Vec::new(),
             sec_history_inflight: None,
             news_auto_scrape_enabled: true,
+            news_auto_scrape_in_flight: false,
+            news_auto_scrape_request_id: 0,
             news_auto_scrape_interval_secs: news_auto_scrape::DEFAULT_INTERVAL_SECS,
             news_auto_scrape_last_at: None,
             news_auto_scrape_cursor: 0,

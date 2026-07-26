@@ -472,6 +472,8 @@ pub fn handle_news_command(
         }
         BrokerCmd::NewsScrapeSymbols {
             symbols,
+            request_id,
+            keyed_source_symbols,
             marketaux_key,
             alpha_vantage_key,
             fmp_key,
@@ -479,8 +481,10 @@ pub fn handle_news_command(
             cryptopanic_key,
         } => {
             let msg_tx = broker_msg_tx_clone.clone();
+            let spawn_error_tx = msg_tx.clone();
+            let spawn_error_request_id = request_id;
             let shared_cache_broker = shared_cache_broker.clone();
-            let _ = std::thread::Builder::new()
+            if let Err(e) = std::thread::Builder::new()
                         .name("typhoon-news-scrape-symbols".into())
                         .spawn(move || {
                             use typhoon_engine::core::news;
@@ -492,6 +496,11 @@ pub fn handle_news_command(
                                     std::process::exit(1);
                                 });
                             rt.block_on(async {
+                                let keyed_source_symbols: std::collections::HashSet<String> =
+                                    keyed_source_symbols
+                                        .into_iter()
+                                        .map(|symbol| symbol.trim().to_uppercase())
+                                        .collect();
                                 let Some(cache) = shared_cache_broker
                                     .read()
                                     .ok()
@@ -500,6 +509,9 @@ pub fn handle_news_command(
                                     let _ = msg_tx.send(BrokerMsg::Error(
                                         "NewsScrapeSymbols: cache not ready".into(),
                                     ));
+                                    let _ = msg_tx.send(BrokerMsg::NewsScrapeFinished {
+                                        request_id,
+                                    });
                                     return;
                                 };
                                 let mut tickers: Vec<String> = symbols
@@ -509,11 +521,22 @@ pub fn handle_news_command(
                                     .collect::<std::collections::BTreeSet<_>>()
                                     .into_iter()
                                     .collect();
-                                tickers.sort();
+                                // Fetch active/keyed symbols first. Crypto aliases share a
+                                // base-asset dedup key, so lexical ordering could otherwise
+                                // let a broad open-source pair suppress its active counterpart.
+                                tickers.sort_by(|a, b| {
+                                    keyed_source_symbols
+                                        .contains(b)
+                                        .cmp(&keyed_source_symbols.contains(a))
+                                        .then_with(|| a.cmp(b))
+                                });
                                 if tickers.is_empty() {
                                     let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
                                         "News scrape: no symbols".into(),
                                     ));
+                                    let _ = msg_tx.send(BrokerMsg::NewsScrapeFinished {
+                                        request_id,
+                                    });
                                     return;
                                 }
                                 let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(
@@ -538,6 +561,9 @@ pub fn handle_news_command(
                                         let _ = msg_tx.send(BrokerMsg::Error(format!(
                                             "News client: {e}"
                                         )));
+                                        let _ = msg_tx.send(BrokerMsg::NewsScrapeFinished {
+                                            request_id,
+                                        });
                                         return;
                                     }
                                 };
@@ -548,6 +574,7 @@ pub fn handle_news_command(
                                     finnhub: finnhub_key,
                                     cryptopanic: cryptopanic_key,
                                 };
+                                let open_source_keys = news::NewsApiKeys::default();
                                 let mut ok = 0usize;
                                 let mut fail = 0usize;
                                 let total = tickers.len();
@@ -591,10 +618,15 @@ pub fn handle_news_command(
                                             s.to_string(),
                                         ));
                                     };
+                                    let symbol_keys = if keyed_source_symbols.contains(ticker) {
+                                        &news_keys
+                                    } else {
+                                        &open_source_keys
+                                    };
                                     match news::fetch_all_sources_for_symbol(
                                         &client,
                                         ticker,
-                                        &news_keys,
+                                        symbol_keys,
                                         cb,
                                     )
                                     .await
@@ -661,8 +693,17 @@ pub fn handle_news_command(
                                         }
                                     }
                                 }
+                                let _ = msg_tx.send(BrokerMsg::NewsScrapeFinished { request_id });
                             });
-                        });
+                        })
+            {
+                let _ = spawn_error_tx.send(BrokerMsg::Error(format!(
+                    "NewsScrapeSymbols: worker spawn failed: {e}"
+                )));
+                let _ = spawn_error_tx.send(BrokerMsg::NewsScrapeFinished {
+                    request_id: spawn_error_request_id,
+                });
+            }
         }
         _ => unreachable!("non-news command routed to news handler"),
     }

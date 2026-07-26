@@ -616,6 +616,13 @@ pub struct TyphooNApp {
     /// a freshness index — but nothing ever *called* it, so the corpus only grew
     /// for symbols the user manually fetched. These drive the rotating sweep.
     pub(crate) news_auto_scrape_enabled: bool,
+    /// Dedicated completion latch for the unattended rotating sweep. Unlike the
+    /// generic UI busy flag, this is not cleared by the short manual-fetch
+    /// watchdog while a provider-paced full batch is legitimately still running.
+    pub(crate) news_auto_scrape_in_flight: bool,
+    /// Monotonic identity for auto-scrape dispatches. A late completion from an
+    /// old timed-out worker cannot clear a newer request's latch.
+    pub(crate) news_auto_scrape_request_id: u64,
     /// Seconds between sweep batches. Tunable via the `NEWSAUTO` command; the
     /// broker skips symbols scraped inside its own 30-minute freshness window,
     /// so a shorter interval buys coverage, not duplicate network.
