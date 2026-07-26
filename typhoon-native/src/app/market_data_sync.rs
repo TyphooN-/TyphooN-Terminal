@@ -1265,7 +1265,7 @@ impl TyphooNApp {
             return Vec::new();
         }
         let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(64);
         let mut push_symbol = |source: &str| {
             let symbol = typhoon_engine::core::kraken_futures::normalize_futures_symbol(source);
             if !symbol.is_empty()
@@ -1335,7 +1335,7 @@ impl TyphooNApp {
         if !self.kraken_enabled || !self.kraken_scrape_xstocks {
             return Vec::new();
         }
-        let mut raw = Vec::new();
+        let mut raw = Vec::with_capacity(256);
         for (pair_name, display_name) in &self.kraken_pairs {
             if let Some(symbol) = kraken_xstock_fundamental_symbol(pair_name, display_name) {
                 raw.push(symbol);
