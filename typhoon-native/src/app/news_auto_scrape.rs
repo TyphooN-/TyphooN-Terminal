@@ -77,7 +77,8 @@ impl TyphooNApp {
             return;
         }
         // Never add network + SQLite pressure while market-data catch-up is
-        // already saturating both. Same rule the manual scope scrape follows.
+        // already saturating both. This is the *unattended* sweep, so backing
+        // off costs nothing; a manual Fetch click is explicit and runs anyway.
         if self.heavy_sync_in_progress {
             return;
         }

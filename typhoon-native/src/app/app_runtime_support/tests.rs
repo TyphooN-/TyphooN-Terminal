@@ -299,35 +299,6 @@ fn auto_background_scope_scrape_skips_large_all_universe_after_symbols_load() {
 }
 
 #[test]
-fn manual_background_scope_scrape_blocks_large_all_during_heavy_sync() {
-    assert!(should_start_manual_background_scope_scrape(
-        EventSource::All,
-        12_000,
-        false
-    ));
-    assert!(!should_start_manual_background_scope_scrape(
-        EventSource::All,
-        12_000,
-        true
-    ));
-    assert!(should_start_manual_background_scope_scrape(
-        EventSource::All,
-        12,
-        true
-    ));
-    assert!(should_start_manual_background_scope_scrape(
-        EventSource::Kraken,
-        12_000,
-        true
-    ));
-    assert!(!should_start_manual_background_scope_scrape(
-        EventSource::All,
-        0,
-        false
-    ));
-}
-
-#[test]
 fn heavy_sync_gate_tracks_bulk_work_not_light_idle() {
     assert!(!ui_heavy_sync_active(0, 0, false, false, false, false));
     assert!(!ui_heavy_sync_active(

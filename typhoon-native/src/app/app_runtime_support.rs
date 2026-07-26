@@ -205,19 +205,6 @@ pub(super) fn should_auto_start_background_scope_scrape(
     symbol_count > 0 && symbol_count <= 512
 }
 
-pub(super) fn should_start_manual_background_scope_scrape(
-    scope: EventSource,
-    symbol_count: usize,
-    heavy_sync_in_progress: bool,
-) -> bool {
-    // Manual ALL remains a real full-universe scrape when the app is idle, but
-    // a 12k-symbol News/SEC sweep during bar catch-up steals SQLite/network/UI
-    // budget from the sync path the user is watching. Focused/small scopes are
-    // still allowed so active-symbol research isn't blocked.
-    symbol_count > 0
-        && (!heavy_sync_in_progress || !matches!(scope, EventSource::All) || symbol_count <= 512)
-}
-
 pub(super) fn should_auto_start_kraken_fundamentals_scrape(symbol_count: usize) -> bool {
     // Same startup-safety rule as SEC/news broad scraping: Kraken xStocks ALL is
     // a valid manual universe scrape, but launching 12k fundamentals requests as

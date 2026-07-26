@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::app_runtime_support::should_start_manual_background_scope_scrape;
 
 impl TyphooNApp {
     pub(super) fn render_news_window(&mut self, ctx: &egui::Context) {
@@ -182,31 +181,25 @@ impl TyphooNApp {
                                     "News: full universe is not ready yet; wait for source universes to load",
                                 ));
                             } else {
+                                // Clicking Fetch is an explicit request: run it
+                                // even mid-catch-up. The old heavy-sync deferral
+                                // made Scope ALL unusable for hours at a time,
+                                // and the background auto-scrape already backs
+                                // off on its own during sync.
                                 let symbol_count = symbols.len();
-                                if !should_start_manual_background_scope_scrape(
-                                    self.broker_scope,
-                                    symbol_count,
-                                    self.heavy_sync_in_progress,
-                                ) {
-                                    self.log.push_back(LogEntry::warn(format!(
-                                        "News: Scope {} scrape deferred during market-data catch-up ({} symbols); use Active scope or retry after sync settles",
-                                        news_scope_label, symbol_count
-                                    )));
-                                } else {
-                                    self.news_loading = true;
-                                    let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
-                                        symbols,
-                                        marketaux_key: self.marketaux_key.clone(),
-                                        alpha_vantage_key: self.alpha_vantage_key.clone(),
-                                        fmp_key: self.fmp_key.clone(),
-                                        finnhub_key: self.finnhub_key.clone(),
-                                        cryptopanic_key: self.cryptopanic_key.clone(),
-                                    });
-                                    self.log.push_back(LogEntry::info(format!(
-                                        "News: scope scrape started for {} ({} symbols)",
-                                        news_scope_label, symbol_count
-                                    )));
-                                }
+                                self.news_loading = true;
+                                let _ = self.broker_tx.send(BrokerCmd::NewsScrapeSymbols {
+                                    symbols,
+                                    marketaux_key: self.marketaux_key.clone(),
+                                    alpha_vantage_key: self.alpha_vantage_key.clone(),
+                                    fmp_key: self.fmp_key.clone(),
+                                    finnhub_key: self.finnhub_key.clone(),
+                                    cryptopanic_key: self.cryptopanic_key.clone(),
+                                });
+                                self.log.push_back(LogEntry::info(format!(
+                                    "News: scope scrape started for {} ({} symbols)",
+                                    news_scope_label, symbol_count
+                                )));
                             }
                         }
                         if ui

@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::app_runtime_support::should_start_manual_background_scope_scrape;
 
 /// Group an integer-valued amount with thousands separators (`707811.0` →
 /// `"707,811"`). Used by the structured Form 4 viewer for share counts / values.
@@ -626,38 +625,21 @@ impl TyphooNApp {
                     // timeout (see `open_conn` in engine sec_filing), fully decoupled
                     // from the SqliteCache write connection the UI/bar-sync share. A
                     // broad SEC scrape therefore can't freeze the render thread even
-                    // mid-catch-up, so it is exempt from the heavy-sync guard (pass
-                    // `false`) — you can pull filings any time the scope enumerates.
-                    // News still routes writes through the shared conn, so its guard
-                    // (and the auto-start bound) stay as-is.
-                    if !should_start_manual_background_scope_scrape(
-                        self.broker_scope,
-                        symbol_count,
-                        false,
-                    ) {
-                        self.scrape_sec_last_msg = format!(
-                            "deferred: Scope {} scrape waits for market-data catch-up",
-                            sec_scope_label
-                        );
-                        self.log.push_back(LogEntry::warn(format!(
-                            "SEC EDGAR scrape deferred during market-data catch-up for Scope {} ({} symbols); use Active scope or retry after sync settles",
-                            sec_scope_label, symbol_count
-                        )));
-                    } else {
-                        let db_path = cache_db_path();
-                        let _ = self
-                            .broker_tx
-                            .send(BrokerCmd::SecScrape { db_path, symbols });
-                        self.scrape_sec_running = true;
-                        self.scrape_sec_last_msg = format!(
-                            "scraping Scope {} ({} symbols)...",
-                            sec_scope_label, symbol_count
-                        );
-                        self.log.push_back(LogEntry::info(format!(
-                            "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
-                            sec_scope_label, symbol_count
-                        )));
-                    }
+                    // mid-catch-up — you can pull filings any time the scope
+                    // enumerates.
+                    let db_path = cache_db_path();
+                    let _ = self
+                        .broker_tx
+                        .send(BrokerCmd::SecScrape { db_path, symbols });
+                    self.scrape_sec_running = true;
+                    self.scrape_sec_last_msg = format!(
+                        "scraping Scope {} ({} symbols)...",
+                        sec_scope_label, symbol_count
+                    );
+                    self.log.push_back(LogEntry::info(format!(
+                        "SEC EDGAR scrape initiated for Scope {} ({} symbols)...",
+                        sec_scope_label, symbol_count
+                    )));
                 } else {
                     self.scrape_sec_last_msg =
                         format!("skipped: Scope {} has no symbols", sec_scope_label);
