@@ -260,7 +260,7 @@ const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(30);
 /// cadence, starving the lower intervals and churning the WS connection. 20 min is
 /// shorter than the smallest fresh window (1Min = 24 min), so pairs that DO get
 /// data are unaffected; pairs that don't simply retry every 20 min instead of 10s.
-const KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS: i64 = 20 * 60 * 1000;
+const KRAKEN_WS_SNAPSHOT_SWEEP_RETRY_BACKOFF_MS: i64 = 30 * 60 * 1000;
 /// Doublings applied to the base retry backoff per consecutive empty sweep of a
 /// pair (20m → 40m → 80m → … → 21h at 6). A flat 20-minute retry meant a
 /// permanently empty `{SYM}x/USD` interval was re-probed ~72×/day forever: the
