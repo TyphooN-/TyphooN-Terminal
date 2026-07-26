@@ -243,11 +243,14 @@ const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 2] = [
 ];
 
 const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
-/// Smaller per-tick cap for the low timeframes (1Min/5Min), which carry the
-/// breadth and the bulk of the snapshot-processing cost. A 150+-pair 1Min gap is
-/// spread across sweep ticks (10s apart) instead of landing as one multi-second
-/// snapshot burst on the render thread (the overnight 3-5s stalls).
-const KRAKEN_WS_SNAPSHOT_SWEEP_LOW_TF_BATCH_SIZE: usize = 32;
+/// Per-tick cap for the low timeframes (1Min/5Min) that carry xStocks native
+/// breadth (M1/M5-only per design; higher TFs via other lanes).
+/// Raised 32→64 to clear remaining "missing" cells faster and help close the
+/// Kraken Spot reachable gap (observed 123 no-data + repeated small 1-32 pair
+/// queues late in run). Protected by 10s cadence, per-pair empty-streak backoff
+/// (20m→~21h), and in-flight gate. Snapshot processing cost on low-TF is now
+/// safer due to deferred chart loads + background pump.
+const KRAKEN_WS_SNAPSHOT_SWEEP_LOW_TF_BATCH_SIZE: usize = 64;
 const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(10);
 /// After a pair is swept, suppress re-selecting it for this long *unless* it goes
 /// WS-fresh first. Kraken serves no bars for some `{SYM}x/USD` at some intervals
