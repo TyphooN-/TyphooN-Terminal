@@ -251,7 +251,7 @@ const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
 /// (20m→~21h), and in-flight gate. Snapshot processing cost on low-TF is now
 /// safer due to deferred chart loads + background pump.
 const KRAKEN_WS_SNAPSHOT_SWEEP_LOW_TF_BATCH_SIZE: usize = 64;
-const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(10);
+const KRAKEN_WS_SNAPSHOT_SWEEP_CADENCE: Duration = Duration::from_secs(30);
 /// After a pair is swept, suppress re-selecting it for this long *unless* it goes
 /// WS-fresh first. Kraken serves no bars for some `{SYM}x/USD` at some intervals
 /// (e.g. weekly on a thinly-traded token); freshness is only marked on a NON-empty
