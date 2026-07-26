@@ -26,7 +26,7 @@ pub(super) const KRAKEN_FUTURES_BACKGROUND_SCAN_LIMIT: usize = 384;
 /// in this set on purpose — they run on the render thread, so they stay bounded to
 /// avoid the per-tick `pre_broker` stalls.
 pub(super) const FULL_TILT_SYNC_INTERVAL_SECS: u64 = 1;
-pub(super) const BALANCED_SYNC_INTERVAL_SECS: u64 = 60;
+pub(super) const BALANCED_SYNC_INTERVAL_SECS: u64 = 30;
 
 /// Broad heavy scheduler lanes serviced by `run_broad_dispatch_slice`:
 /// Kraken spot/equities universe, Kraken futures, Alpaca rotation. Visible
