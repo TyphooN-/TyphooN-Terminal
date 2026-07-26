@@ -572,3 +572,41 @@ advisories — the 2026-07-22 `quick-xml` 0.41 move closed
 RUSTSEC-2026-0194/0195 and nothing has re-opened); `cargo audit --deny warnings`
 also clean, so there are no unmaintained/unsound informational advisories in the
 tree; `cargo deny check advisories` and `cargo deny check bans` both pass.
+
+## 2026-07-26 upstream surface reduction and duplicate gate
+
+A fresh owner trace found one locally removable upstream island hidden behind
+two convenience features. `egui_commonmark/load-images` enabled the unused local
+file loader (`mime_guess2` → PHF 0.11 → rand 0.8), while
+`egui_extras/http` enabled `ehttp`/`ureq` and selected rustls' ring provider in
+the Linux build beside TyphooN's process-wide aws-lc-rs provider.
+
+TyphooN now keeps egui's image/WebP decoders but supplies remote bytes through a
+bounded reqwest loader: HTTP(S) on conventional ports only, 15-second timeout,
+five redirects, 8 MiB per response, 32 MiB/64-entry cache limits, reserved
+in-flight capacity, and repaint-on-completion. A filtering DNS resolver, matching
+redirect policy, disabled proxy inheritance, and literal-address checks reject
+loopback, link-local, private, metadata-service, reserved, and documentation
+destinations. CommonMark still emits ordinary egui image URIs, so both hero and
+inline remote images use that loader without the local-file feature.
+
+The resulting lockfile reduction is **550 → 537 packages**, **507 → 500 unique
+names**, and **40 → 34 duplicate families / 43 → 37 extra versions**. The six
+eliminated families are PHF's 0.11 generation (`phf`, `phf_shared`,
+`phf_generator`, `phf_macros`) plus rand 0.8 and rand_core 0.6. `ehttp`, `ureq`,
+`ureq-proto`, `utf8-zero`, `webpki-roots`, and `mime_guess2` also leave the
+active graph. `ring` remains as lockfile target/optional metadata, but
+`cargo tree --target x86_64-unknown-linux-gnu -e features -i ring` now resolves
+no active edge; the Linux binary has one selected rustls provider.
+
+The prior `cargo deny check bans` claim used cargo-deny's default configuration,
+where duplicates are warnings and cannot fail the gate. A checked-in
+`deny.toml` now sets `multiple-versions = "deny"` and exact-version exceptions
+with current upstream owners/unblocking events. Removing the `aes 0.8.4`
+exception was verified to fail with exit 2, while the real configuration passes.
+The full compatible dry run still reports only the established `base64 0.23`,
+`generic-array 0.14.9`, and wgpu 30 holds; there is no safe additional local
+unification at this ceiling. During final re-resolution, newly published
+`cc` 1.4.0 and `either` 1.17.0 were individually compatible and applied;
+the dev-only `serial_test` requirement moved 3.5 → 4.0.1 with default features
+still disabled.

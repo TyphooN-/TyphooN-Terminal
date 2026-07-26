@@ -1,0 +1,55 @@
+# Dependency-policy gate for ADR-031/088.
+#
+# Duplicate versions are denied by default. Every exception is an exact
+# upstream-owned version with its current blocker recorded; an upstream patch or
+# a new split therefore fails the gate and forces a fresh owner review.
+
+[bans]
+multiple-versions = "deny"
+wildcards = "allow"
+highlight = "simplest-path"
+skip = [
+    # dbus-secret-service 4.1.0 remains on the RustCrypto 0.10 generation.
+    { crate = "aes@0.8.4", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "block-buffer@0.10.4", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "cipher@0.4.4", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "cpufeatures@0.2.17", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "crypto-common@0.1.7", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "digest@0.10.7", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "hmac@0.12.1", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "inout@0.1.4", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+    { crate = "sha2@0.10.9", reason = "dbus-secret-service 4.1.0 has not migrated to RustCrypto 0.11" },
+
+    # winit 0.30 and egui-winit's clipboard stack span platform generations.
+    { crate = "bitflags@1.3.2", reason = "winit 0.30 target support still owns the bitflags 1 line" },
+    { crate = "block2@0.5.1", reason = "winit 0.30 still owns the objc2 0.5 platform stack" },
+    { crate = "calloop@0.13.0", reason = "winit 0.30 still uses Smithay client toolkit 0.19" },
+    { crate = "calloop-wayland-source@0.3.0", reason = "winit 0.30 still uses Smithay client toolkit 0.19" },
+    { crate = "core-foundation@0.9.4", reason = "winit 0.30 macOS support has not moved to core-foundation 0.10" },
+    { crate = "jni-sys@0.3.1", reason = "winit 0.30 Android support still spans JNI generations" },
+    { crate = "linux-raw-sys@0.4.15", reason = "winit 0.30 Smithay 0.19 path still uses rustix 0.38" },
+    { crate = "objc2@0.5.2", reason = "winit 0.30 still owns the objc2 0.5 platform stack" },
+    { crate = "objc2-app-kit@0.2.2", reason = "winit 0.30 still owns the objc2 0.5 platform stack" },
+    { crate = "objc2-foundation@0.2.2", reason = "winit 0.30 still owns the objc2 0.5 platform stack" },
+
+    { crate = "objc2-ui-kit@0.2.2", reason = "winit 0.30 still owns the objc2 0.5 platform stack" },
+    { crate = "redox_syscall@0.4.1", reason = "winit 0.30 Redox support spans syscall generations" },
+    { crate = "redox_syscall@0.5.18", reason = "parking_lot and winit Redox support span syscall generations" },
+    { crate = "rustix@0.38.44", reason = "winit 0.30 Smithay 0.19 path has not moved to rustix 1" },
+    { crate = "smithay-client-toolkit@0.19.2", reason = "winit 0.30 has not adopted Smithay client toolkit 0.20" },
+    { crate = "thiserror@1.0.69", reason = "winit 0.30 Smithay and Android support still use thiserror 1" },
+    { crate = "thiserror-impl@1.0.69", reason = "winit 0.30 Smithay and Android support still use thiserror 1" },
+    { crate = "windows-sys@0.52.0", reason = "winit, glutin, arboard, and ring target support still require windows-sys 0.52" },
+
+    # Current GPU consumers span internal utility-crate generations.
+    { crate = "foldhash@0.1.5", reason = "wgpu 29 gpu-descriptor path still uses hashbrown 0.15" },
+    { crate = "hashbrown@0.15.5", reason = "wgpu 29 gpu-descriptor still requires hashbrown 0.15" },
+    { crate = "hashbrown@0.16.1", reason = "wgpu 29 still requires hashbrown 0.16 beside current indexmap/rusqlite" },
+    { crate = "rustc-hash@1.1.0", reason = "wgpu 29 naga and wgpu-core still require rustc-hash 1" },
+
+    # Independent current upstream stacks have not converged yet.
+
+    { crate = "getrandom@0.3.4", reason = "ahash and tempfile still require getrandom 0.3" },
+    { crate = "r-efi@5.3.0", reason = "getrandom 0.3 target support still requires r-efi 5" },
+    { crate = "syn@2.0.119", reason = "current proc macros are split across the syn 2 to syn 3 migration" },
+]

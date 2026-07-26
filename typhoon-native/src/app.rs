@@ -102,6 +102,9 @@ mod market_map_model;
 mod news_auto_scrape;
 mod platform;
 mod research_sort_indices;
+mod remote_image_loader;
+#[cfg(test)]
+mod remote_image_loader_tests;
 mod session_persistence;
 mod settings;
 mod ssr_scan;
@@ -144,7 +147,7 @@ impl TyphooNApp {
     pub fn new(cc: &eframe::CreationContext<'_>, rt_handle: tokio::runtime::Handle) -> Self {
         let log: VecDeque<LogEntry> = VecDeque::new();
 
-        app_startup::install_image_loaders(cc);
+        app_startup::install_image_loaders(cc, &rt_handle);
         app_startup::init_kraken_iapi_limiter();
         let ui_repaint_wake_alive = app_startup::spawn_ui_repaint_wake_pump(&cc.egui_ctx);
 

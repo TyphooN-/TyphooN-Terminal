@@ -30,10 +30,15 @@ egui_plot = { workspace = true }
 # Deliberately NOT a full HTML/JS renderer (no webview, no wry/tao) — see ADR for the
 # threat model on remote-content engines inside a financial terminal.
 # Loaders kept minimal: image (png/jpeg via the image crate below) + webp +
-# http (ehttp URL fetch). svg (resvg/usvg/tiny-skia) and gif are off — finance
-# news imagery is raster; re-enable a loader only with a concrete need.
-egui_extras = { workspace = true, features = ["image", "webp", "http"] }
-egui_commonmark = { workspace = true, features = ["load-images"] }
+# Remote images use the bounded reqwest loader in app/remote_image_loader.rs so
+# ehttp/ureq cannot pull ring beside the process-wide aws-lc-rs provider. svg
+# (resvg/usvg/tiny-skia) and gif are off — finance news imagery is raster;
+# re-enable a loader only with a concrete need.
+egui_extras = { workspace = true, features = ["image", "webp"] }
+# CommonMark emits normal egui image URIs without this convenience feature.
+# Our explicit decoder + remote bytes loader cover article images, while leaving
+# its unused local-file loader (mime_guess2/PHF 0.11/rand 0.8) out of the graph.
+egui_commonmark = { workspace = true }
 # eframe's `wgpu_no_default_features` deliberately avoids selecting a backend;
 # TyphooN is a desktop app, so enable only the native Linux renderer surface we
 # need here. Code still imports wgpu types through `eframe::wgpu` to keep the
@@ -52,9 +57,9 @@ regex = { workspace = true }
 
 # HTTP client (for Kraken API in broker task — matches engine)
 reqwest = { workspace = true, features = ["json", "rustls"] }
-# Select one process-wide rustls crypto provider explicitly. reqwest pulls
-# aws-lc-rs while egui_extras/ehttp/ureq pulls ring, so rustls cannot infer a
-# unique provider at runtime unless the binary installs one before TLS use.
+# Select the process-wide rustls crypto provider explicitly. The custom image
+# loader now shares reqwest's aws-lc-rs stack instead of activating ring through
+# egui_extras/ehttp/ureq.
 rustls = { workspace = true, features = ["std", "aws_lc_rs"] }
 
 # Date/time formatting (for chart time axis labels)

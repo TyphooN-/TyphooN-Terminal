@@ -400,3 +400,27 @@ HTTP stack still requires 0.22). Both are detailed in ADR-031. The vendored
 `eframe` fork stays at upstream 0.35.0 — the local patch is confined to the
 four `src/native/*` files listed in `vendor/eframe/README.md` and carries no
 dependency delta, so it inherits upstream's advisory posture.
+
+## 2026-07-26 duplicate-family and crypto-provider reduction
+
+The upstream graph is now 537 packages / 500 unique names / 34 duplicate
+families (37 extra versions), down from 550 / 507 / 40 (43). Removing unused
+`egui_commonmark/load-images` local-file plumbing eliminates the PHF 0.11 and
+rand 0.8 duplicate families. Replacing `egui_extras/http` with TyphooN's bounded
+reqwest remote-image loader removes the ehttp/ureq island and stops ring from
+being activated in the Linux build beside aws-lc-rs. Remote article images keep
+their existing egui URI behavior with explicit 8 MiB response, 32 MiB combined
+ready/in-flight capacity, 64-entry, timeout, redirect, and admission bounds.
+SSRF controls reject non-public literal and DNS destinations on initial and
+redirect requests, restrict ports to conventional HTTP(S), and disable proxy
+inheritance so it cannot bypass destination filtering.
+
+`deny.toml` now makes duplicate policy executable: new cargo-deny-visible
+version splits are denied, and every current exception is exact-versioned with
+its upstream owner and unblock condition. A negative control (removing the
+`aes 0.8.4` exception) fails `cargo deny check bans` with exit 2. The normal
+gate, manifest drift scan, compatible update dry run, and RustSec audit pass;
+the only reported update holds remain the non-advisory base64, generic-array,
+and wgpu ecosystem constraints documented in ADR-031. Final resolver probes
+also applied compatible `cc` 1.4.0 and `either` 1.17.0 updates and moved the
+dev-only, default-feature-free `serial_test` line from 3.5 to 4.0.1.

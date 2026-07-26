@@ -5,12 +5,17 @@ use crate::app::app_runtime_support::{
     should_auto_start_background_scope_scrape, should_auto_start_kraken_fundamentals_scrape,
 };
 
-pub(super) fn install_image_loaders(cc: &eframe::CreationContext<'_>) {
-    // Install the egui image loaders (PNG/JPEG/WEBP + HTTP/file URI
-    // dispatch) so news article hero images and inline markdown
-    // images decode from URLs without manual texture management.
-    // Idempotent in practice — egui_extras dedups on tag.
+pub(super) fn install_image_loaders(
+    cc: &eframe::CreationContext<'_>,
+    rt_handle: &tokio::runtime::Handle,
+) {
+    // Keep the local PNG/JPEG/WEBP + file loaders from egui_extras, but use the
+    // bounded reqwest loader for remote images. egui_extras' `http` feature
+    // otherwise adds ehttp/ureq and a second rustls crypto provider (ring).
     egui_extras::install_image_loaders(&cc.egui_ctx);
+    cc.egui_ctx.add_bytes_loader(Arc::new(
+        super::remote_image_loader::RemoteImageLoader::new(rt_handle.clone()),
+    ));
 }
 
 pub(super) fn spawn_ui_repaint_wake_pump(
