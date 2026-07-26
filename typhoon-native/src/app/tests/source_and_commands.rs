@@ -13,9 +13,9 @@ fn alpaca_batch_fetch_supports_every_standard_timeframe_for_broad_equity_assist(
             "{timeframe} should use Alpaca's multi-symbol bars endpoint"
         );
     }
-    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Min"), 8);
-    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Hour"), 16);
-    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Month"), 50);
+    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Min"), 12);
+    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Hour"), 24);
+    assert_eq!(TyphooNApp::alpaca_batch_fetch_chunk_symbols("1Month"), 64);
 }
 
 #[test]

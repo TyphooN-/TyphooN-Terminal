@@ -1005,7 +1005,12 @@ impl BarSyncInputs {
         }
         if saw_stale {
             MergedSyncStatus::Stale
-        } else if supported_sources > 0 && tombstoned_sources == supported_sources {
+        // `supported_sources == 0` means no enabled lane serves this (symbol, tf)
+        // at all (e.g. 15Min-4Hour with Alpaca assist off: Kraken WS is not a
+        // reachability source there and Yahoo is 1Day+). That is unreachable, not
+        // an actionable empty — charging it to the reachable % is the same lie the
+        // tombstone overlay exists to prevent.
+        } else if tombstoned_sources == supported_sources {
             MergedSyncStatus::Unreachable
         } else {
             MergedSyncStatus::Empty

@@ -425,7 +425,7 @@ fn snapshot_sweep_caps_m1_batch_smaller_than_m5() {
     // catalog: the 1Min batch is capped at the small low-TF size, not the full
     // 250, so the breadth lands spread across ticks rather than one burst.
     let now_ms = 10_000_000_000i64;
-    let catalog: Vec<String> = (0..40).map(|i| format!("SYM{i}")).collect();
+    let catalog: Vec<String> = (0..100).map(|i| format!("SYM{i}")).collect();
     let mut fresh = std::collections::HashMap::new();
     for &interval_min in &KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST {
         let tf = kraken_ws_interval_to_tf_label(interval_min).unwrap();
