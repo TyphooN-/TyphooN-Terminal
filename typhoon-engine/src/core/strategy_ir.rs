@@ -17,8 +17,8 @@
 //! | [`StrategyRunManifest`] | [`RunBinding`] | `run_id` |
 //!
 //! Each is built from its input, carries its own schema version, and can be
-//! re-derived and verified. A stored artifact that verifies is byte-equivalent
-//! to the one that was written.
+//! re-derived and verified. A stored artifact that verifies is semantically
+//! equivalent under this schema to the artifact that was sealed.
 //!
 //! ## Identity
 //!
@@ -48,35 +48,32 @@
 //! **rejected, not hashed**: non-finite floats, and empty, whitespace-padded,
 //! over-long, or control-character text.
 //!
-//! ## What "canonical" does *not* yet mean
+//! ## Canonical normalization
 //!
-//! ADR-135 §5.2 also calls for a normalisation pass — constant folding,
-//! commutative reordering, dead-branch removal — so that two structurally
-//! identical strategies found by different searches share an id. **That pass
-//! is not implemented here.** Identity is over the definition *as written*:
-//! reordering the children of an [`Condition::All`], the [`RoleAssignment`]
-//! list, or the parameter list yields a *different* id today. Dedup (§8.3)
-//! needs that pass and must not be built on this module until it exists.
+//! Construction sorts declaration-order-only collections, tags, session
+//! windows, and commutative [`Condition::All`]/[`Condition::Any`] children.
+//! Semantically meaningful order, including indicator inputs and trade legs,
+//! remains identity-bearing. Constant folding and dead-branch removal are not
+//! implemented yet; execution-equivalent databank dedup must account for that.
 //!
 //! ## Temporal safety
 //!
 //! `bars_ago` is unsigned and bounded ([`MAX_BARS_AGO`]): `0` is the latest
 //! observation visible at the decision event, and a future observation is not
 //! representable. That is §6.12's no-look-ahead guarantee enforced by the
-//! grammar. The complementary runtime guard belongs to the simulator, which
-//! does not exist yet.
+//! grammar. The reference simulator separately enforces visibility at runtime.
 //!
 //! ## Bounds
 //!
 //! [`Condition`] is recursive, so validation bounds both its depth
 //! ([`MAX_CONDITION_DEPTH`]) and its node count ([`MAX_CONDITION_NODES`]) per
-//! tree, and collections are individually capped. Note the honest limit:
-//! *deserialization itself* is not bounded — `serde` will recurse while
-//! parsing a hostile document before any of this code runs. Untrusted input
-//! must be size-limited by the caller, and every loaded artifact must be run
-//! through [`StrategyIr::verify`] before it is trusted.
+//! tree, and collections are individually capped. Sealed artifacts deliberately
+//! do not implement `Deserialize`; their `from_json_slice` APIs cap encoded
+//! bytes before decoding, reject unrecognized fields, and verify identity.
+//! Raw input DTOs remain directly deserializable and must not be treated as
+//! validated artifacts.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -91,6 +88,10 @@ pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 /// Wire-format version of [`StrategyRunManifest`].
 pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+
+/// Maximum encoded JSON size accepted by the sealed-artifact loading APIs.
+/// Structural limits are then enforced while sealing the decoded DTO.
+pub const MAX_SEALED_ARTIFACT_JSON_BYTES: usize = 1_048_576;
 
 /// Domain-separation prefix for the strategy-id hash. Any change to the
 /// framing rules must change this string *and* the schema version.
@@ -108,6 +109,12 @@ pub const MAX_CONDITION_DEPTH: usize = 16;
 
 /// Total nodes allowed in one [`Condition`] tree.
 pub const MAX_CONDITION_NODES: usize = 512;
+
+/// Upper bound for simultaneously open positions requested by one strategy.
+pub const MAX_OPEN_POSITIONS: u32 = 1_024;
+
+/// Upper bound for a time-based exit horizon.
+pub const MAX_BARS_IN_TRADE: u32 = 1_000_000;
 
 /// Largest `bars_ago` an operand may look back. Bounds indicator warm-up.
 pub const MAX_BARS_AGO: u32 = 4_096;
@@ -464,12 +471,71 @@ impl std::fmt::Display for StrategyIrError {
 
 impl std::error::Error for StrategyIrError {}
 
+/// Failure while loading a sealed artifact through its bounded JSON API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArtifactLoadError {
+    TooLarge { limit: usize, found: usize },
+    InvalidJson { message: String },
+    InvalidArtifact(StrategyIrError),
+}
+
+impl std::fmt::Display for ArtifactLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge { limit, found } => {
+                write!(f, "artifact JSON is {found} bytes, limit {limit}")
+            }
+            Self::InvalidJson { message } => write!(f, "invalid artifact JSON: {message}"),
+            Self::InvalidArtifact(error) => write!(f, "invalid sealed artifact: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ArtifactLoadError {}
+
+fn check_artifact_json_size(bytes: &[u8]) -> Result<(), ArtifactLoadError> {
+    if bytes.len() > MAX_SEALED_ARTIFACT_JSON_BYTES {
+        return Err(ArtifactLoadError::TooLarge {
+            limit: MAX_SEALED_ARTIFACT_JSON_BYTES,
+            found: bytes.len(),
+        });
+    }
+    Ok(())
+}
+
+fn decode_strict_json<T>(bytes: &[u8]) -> Result<T, ArtifactLoadError>
+where
+    T: DeserializeOwned + Serialize,
+{
+    check_artifact_json_size(bytes)?;
+    let original: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|error| ArtifactLoadError::InvalidJson {
+            message: error.to_string(),
+        })?;
+    let decoded: T = serde_json::from_value(original.clone()).map_err(|error| {
+        ArtifactLoadError::InvalidJson {
+            message: error.to_string(),
+        }
+    })?;
+    let recognized =
+        serde_json::to_value(&decoded).map_err(|error| ArtifactLoadError::InvalidJson {
+            message: error.to_string(),
+        })?;
+    if original != recognized {
+        return Err(ArtifactLoadError::InvalidJson {
+            message: "artifact contains unknown, omitted, or non-canonical fields".to_string(),
+        });
+    }
+    Ok(decoded)
+}
+
 // ── Metadata ───────────────────────────────────────────────────────
 
 /// Human-facing description of a strategy. Identity-bearing: renaming a
 /// strategy produces a different id, because a stored result must be
 /// attributable to exactly the artifact that produced it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StrategyMetadata {
     pub name: String,
     pub author: String,
@@ -981,6 +1047,7 @@ pub struct ExecutionTiming {
 /// A complete strategy, as data. This is the input half of [`StrategyIr`]:
 /// everything that is hashed, and nothing that is derived.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StrategyDefinition {
     pub metadata: StrategyMetadata,
     pub parameters: Vec<StrategyParameter>,
@@ -1000,12 +1067,20 @@ pub struct StrategyDefinition {
 /// Construct with [`StrategyIr::build`]. Editing `definition` afterwards
 /// invalidates `strategy_id`; [`StrategyIr::verify`] is what proves a loaded
 /// artifact was not edited.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StrategyIr {
-    pub schema_version: u32,
-    pub definition: StrategyDefinition,
+    schema_version: u32,
+    definition: StrategyDefinition,
     /// Lowercase hex SHA-256 over the canonical encoding of `definition`.
-    pub strategy_id: String,
+    strategy_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrategyIrWire {
+    schema_version: u32,
+    definition: StrategyDefinition,
+    strategy_id: String,
 }
 
 impl StrategyIr {
@@ -1018,6 +1093,39 @@ impl StrategyIr {
             definition,
             strategy_id,
         })
+    }
+
+    /// Decode, validate, and identity-check a size-bounded JSON artifact.
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, ArtifactLoadError> {
+        let wire: StrategyIrWire = decode_strict_json(bytes)?;
+        let artifact = Self {
+            schema_version: wire.schema_version,
+            definition: wire.definition,
+            strategy_id: wire.strategy_id,
+        };
+        let normalized = normalize_definition(&artifact.definition)
+            .map_err(ArtifactLoadError::InvalidArtifact)?;
+        if normalized != artifact.definition {
+            return Err(ArtifactLoadError::InvalidJson {
+                message: "sealed strategy definition is not in canonical order".to_string(),
+            });
+        }
+        artifact
+            .verify()
+            .map_err(ArtifactLoadError::InvalidArtifact)?;
+        Ok(artifact)
+    }
+
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn definition(&self) -> &StrategyDefinition {
+        &self.definition
+    }
+
+    pub fn strategy_id(&self) -> &str {
+        &self.strategy_id
     }
 
     /// The definition this IR seals, for rebuilding it.
@@ -1180,12 +1288,20 @@ pub struct ExecutionSettings {
 }
 
 /// Validated execution settings and their content-addressed id.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StrategyExecutionConfig {
-    pub schema_version: u32,
-    pub settings: ExecutionSettings,
+    schema_version: u32,
+    settings: ExecutionSettings,
     /// Lowercase hex SHA-256 over the canonical encoding of `settings`.
-    pub config_id: String,
+    config_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrategyExecutionConfigWire {
+    schema_version: u32,
+    settings: ExecutionSettings,
+    config_id: String,
 }
 
 impl StrategyExecutionConfig {
@@ -1197,6 +1313,32 @@ impl StrategyExecutionConfig {
             settings: settings.clone(),
             config_id,
         })
+    }
+
+    /// Decode, validate, and identity-check a size-bounded JSON artifact.
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, ArtifactLoadError> {
+        let wire: StrategyExecutionConfigWire = decode_strict_json(bytes)?;
+        let artifact = Self {
+            schema_version: wire.schema_version,
+            settings: wire.settings,
+            config_id: wire.config_id,
+        };
+        artifact
+            .verify()
+            .map_err(ArtifactLoadError::InvalidArtifact)?;
+        Ok(artifact)
+    }
+
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn settings(&self) -> &ExecutionSettings {
+        &self.settings
+    }
+
+    pub fn config_id(&self) -> &str {
+        &self.config_id
     }
 
     /// The settings this config seals, for rebuilding it.
@@ -1244,12 +1386,20 @@ pub struct RunBinding {
 }
 
 /// A validated run binding and its content-addressed id.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StrategyRunManifest {
-    pub schema_version: u32,
-    pub binding: RunBinding,
+    schema_version: u32,
+    binding: RunBinding,
     /// Lowercase hex SHA-256 over the canonical encoding of `binding`.
-    pub run_id: String,
+    run_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrategyRunManifestWire {
+    schema_version: u32,
+    binding: RunBinding,
+    run_id: String,
 }
 
 impl StrategyRunManifest {
@@ -1261,6 +1411,32 @@ impl StrategyRunManifest {
             binding: binding.clone(),
             run_id,
         })
+    }
+
+    /// Decode, validate, and identity-check a size-bounded JSON artifact.
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, ArtifactLoadError> {
+        let wire: StrategyRunManifestWire = decode_strict_json(bytes)?;
+        let artifact = Self {
+            schema_version: wire.schema_version,
+            binding: wire.binding,
+            run_id: wire.run_id,
+        };
+        artifact
+            .verify()
+            .map_err(ArtifactLoadError::InvalidArtifact)?;
+        Ok(artifact)
+    }
+
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn binding(&self) -> &RunBinding {
+        &self.binding
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     /// The binding this manifest seals, for rebuilding it.
@@ -2105,11 +2281,11 @@ fn validate_sizing(
     sizing: &PositionSizing,
     declared: &DeclaredIds<'_>,
 ) -> Result<(), StrategyIrError> {
-    if sizing.max_open_positions == 0 {
+    if sizing.max_open_positions == 0 || sizing.max_open_positions > MAX_OPEN_POSITIONS {
         return Err(out_of_range(
             "sizing.max_open_positions",
-            0,
-            "at least one open position",
+            sizing.max_open_positions,
+            "between 1 and MAX_OPEN_POSITIONS",
         ));
     }
     match &sizing.rule {
@@ -2200,12 +2376,14 @@ fn validate_trade_management(
     if let Some(break_even) = &management.break_even_after {
         validate_stop_rule(break_even, "trade_management.break_even_after", declared)?;
     }
-    if management.max_bars_in_trade == Some(0) {
-        return Err(out_of_range(
-            "trade_management.max_bars_in_trade",
-            0,
-            "at least one bar, or no limit at all",
-        ));
+    if let Some(max_bars) = management.max_bars_in_trade {
+        if max_bars == 0 || max_bars > MAX_BARS_IN_TRADE {
+            return Err(out_of_range(
+                "trade_management.max_bars_in_trade",
+                max_bars,
+                "between 1 and MAX_BARS_IN_TRADE, or no limit at all",
+            ));
+        }
     }
     Ok(())
 }

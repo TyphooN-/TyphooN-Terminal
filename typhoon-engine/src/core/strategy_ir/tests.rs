@@ -333,24 +333,40 @@ fn run_id_is_repeatable_and_lowercase_sha256() {
 
 #[test]
 fn the_three_identities_are_domain_separated() {
-    // Distinct artifacts must never share a digest even though they are all
-    // SHA-256 over framed bytes.
-    let ids = BTreeSet::from([
-        ir().strategy_id,
-        config_id_of(&settings()),
-        run_id_of(&binding()),
-    ]);
+    let mut strategy = CanonicalDigest::new(STRATEGY_ID_DOMAIN);
+    strategy.tagged_text("payload", "identical");
+    let mut config = CanonicalDigest::new(CONFIG_ID_DOMAIN);
+    config.tagged_text("payload", "identical");
+    let mut run = CanonicalDigest::new(RUN_ID_DOMAIN);
+    run.tagged_text("payload", "identical");
+    let ids = BTreeSet::from([strategy.finish_hex(), config.finish_hex(), run.finish_hex()]);
     assert_eq!(ids.len(), 3);
+}
+
+#[test]
+fn schema_v1_identity_vectors_are_stable() {
+    assert_eq!(
+        strategy_id_of(&definition()),
+        "026a44d4dbc84a67b49e65019ff18c7ce38a8fb9e26b258cd2230d6858ef33ed"
+    );
+    assert_eq!(
+        config_id_of(&settings()),
+        "21ce437c53d19aecf05ef856142a029edda4dcba2180634fa0f3e203733706ce"
+    );
+    assert_eq!(
+        run_id_of(&binding()),
+        "8af9fd2846b1c7706186105971f0b7ec11ec068d997087ec62e25f75e9f7fc8f"
+    );
 }
 
 #[test]
 fn strategy_ir_round_trips_through_serde() {
     let built = ir();
     let json = serde_json::to_string(&built).expect("serializes");
-    let restored: StrategyIr = serde_json::from_str(&json).expect("deserializes");
+    let restored = StrategyIr::from_json_slice(json.as_bytes()).expect("deserializes");
 
     assert_eq!(built, restored);
-    assert_eq!(built.strategy_id, restored.strategy_id);
+    assert_eq!(built.strategy_id(), restored.strategy_id());
     restored.verify().expect("round-tripped IR still verifies");
 }
 
@@ -358,7 +374,7 @@ fn strategy_ir_round_trips_through_serde() {
 fn execution_config_round_trips_through_serde() {
     let built = StrategyExecutionConfig::build(&settings()).expect("builds");
     let json = serde_json::to_string(&built).expect("serializes");
-    let restored: StrategyExecutionConfig = serde_json::from_str(&json).expect("deserializes");
+    let restored = StrategyExecutionConfig::from_json_slice(json.as_bytes()).expect("deserializes");
 
     assert_eq!(built, restored);
     restored
@@ -370,7 +386,7 @@ fn execution_config_round_trips_through_serde() {
 fn run_manifest_round_trips_through_serde() {
     let built = StrategyRunManifest::build(&binding()).expect("builds");
     let json = serde_json::to_string(&built).expect("serializes");
-    let restored: StrategyRunManifest = serde_json::from_str(&json).expect("deserializes");
+    let restored = StrategyRunManifest::from_json_slice(json.as_bytes()).expect("deserializes");
 
     assert_eq!(built, restored);
     restored
@@ -1757,6 +1773,9 @@ fn invalid_sizing_is_rejected() {
     let mut zero_positions = definition();
     zero_positions.sizing.max_open_positions = 0;
 
+    let mut excessive_positions = definition();
+    excessive_positions.sizing.max_open_positions = MAX_OPEN_POSITIONS + 1;
+
     let mut negative_multiple = definition();
     negative_multiple.sizing.rule = SizingRule::RiskPercentAtr {
         risk_percent: 1.0,
@@ -1769,6 +1788,7 @@ fn invalid_sizing_is_rejected() {
         ("percent above 100", over_percent),
         ("negative units", negative_units),
         ("zero max open positions", zero_positions),
+        ("excessive max open positions", excessive_positions),
         ("negative atr multiple", negative_multiple),
     ] {
         assert!(
@@ -1799,12 +1819,16 @@ fn invalid_trade_legs_are_rejected() {
     let mut zero_bars = definition();
     zero_bars.trade_management.max_bars_in_trade = Some(0);
 
+    let mut excessive_bars = definition();
+    excessive_bars.trade_management.max_bars_in_trade = Some(MAX_BARS_IN_TRADE + 1);
+
     for (label, candidate) in [
         ("no legs", no_legs),
         ("fractions below 100%", short_total),
         ("fractions above 100%", long_total),
         ("empty leg", zero_leg),
         ("zero max bars in trade", zero_bars),
+        ("excessive max bars in trade", excessive_bars),
     ] {
         assert!(
             matches!(
@@ -2176,10 +2200,43 @@ fn a_stored_artifact_from_a_future_schema_is_not_silently_reinterpreted() {
         &format!("\"schema_version\":{STRATEGY_IR_SCHEMA_VERSION}"),
         &format!("\"schema_version\":{}", STRATEGY_IR_SCHEMA_VERSION + 1),
     );
-    let restored: StrategyIr = serde_json::from_str(&bumped).expect("deserializes");
     assert!(matches!(
-        restored.verify(),
-        Err(StrategyIrError::UnsupportedSchemaVersion { .. })
+        StrategyIr::from_json_slice(bumped.as_bytes()),
+        Err(ArtifactLoadError::InvalidArtifact(
+            StrategyIrError::UnsupportedSchemaVersion { .. }
+        ))
+    ));
+}
+
+#[test]
+fn sealed_artifact_loading_rejects_tampering_and_unknown_fields() {
+    let mut tampered = serde_json::to_value(ir()).expect("serializes");
+    tampered["strategy_id"] = serde_json::Value::String(hex_id('9'));
+    let tampered = serde_json::to_vec(&tampered).expect("serializes tampered artifact");
+    assert!(matches!(
+        StrategyIr::from_json_slice(&tampered),
+        Err(ArtifactLoadError::InvalidArtifact(
+            StrategyIrError::IdentityMismatch { .. }
+        ))
+    ));
+
+    let mut unknown = serde_json::to_value(ir()).expect("serializes");
+    unknown["definition"]["metadata"]["misspelled_name"] =
+        serde_json::Value::String("ignored before strict loading".to_string());
+    let unknown = serde_json::to_vec(&unknown).expect("serializes unknown field");
+    assert!(matches!(
+        StrategyIr::from_json_slice(&unknown),
+        Err(ArtifactLoadError::InvalidJson { .. })
+    ));
+}
+
+#[test]
+fn sealed_artifact_loading_rejects_oversized_json_before_decoding() {
+    let oversized = vec![b' '; MAX_SEALED_ARTIFACT_JSON_BYTES + 1];
+    assert!(matches!(
+        StrategyIr::from_json_slice(&oversized),
+        Err(ArtifactLoadError::TooLarge { limit, found })
+            if limit == MAX_SEALED_ARTIFACT_JSON_BYTES && found == oversized.len()
     ));
 }
 

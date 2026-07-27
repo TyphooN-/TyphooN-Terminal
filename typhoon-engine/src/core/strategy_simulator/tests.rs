@@ -3,6 +3,7 @@ use crate::core::strategy_ir::{
     CommissionModel, ExecutionSettings, OhlcAmbiguityPolicy, SlippageModel, SpreadModel,
     StrategyExecutionConfig, TieBreakPolicy,
 };
+use sha2::{Digest, Sha256};
 
 const MINUTE_NS: i64 = 60_000_000_000;
 const START_CAPITAL: f64 = 100_000.0;
@@ -309,6 +310,23 @@ fn identical_input_produces_byte_identical_json() {
     assert_eq!(
         serde_json::to_string(&round_tripped).expect("report re-serializes"),
         left
+    );
+}
+
+#[test]
+fn reference_ledger_v1_golden_digest_is_stable() {
+    let streams = [ramp("aaa", 4)];
+    let mut strategy =
+        ScriptedStrategy::new(vec![(0, OrderSide::Buy, 2.0), (1, OrderSide::Sell, 2.0)]);
+    let report = run(free_settings(), &streams, &mut strategy).expect("simulation succeeds");
+    let json = serde_json::to_vec(&report).expect("report serializes");
+    let digest = Sha256::digest(json)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        digest,
+        "c3c41250f2160d7743a3fa3b844e5fd6893257b302ab2879c002d1cfb3d9ab32"
     );
 }
 
@@ -1028,14 +1046,11 @@ fn non_finite_accounting_results_are_rejected() {
 }
 
 #[test]
-fn a_sealed_config_is_verified_before_the_run() {
-    let mut broken = config(free_settings());
-    broken.config_id = "0".repeat(64);
-    let streams = [ramp("aaa", 3)];
-    assert!(matches!(
-        run_simulation(&broken, &streams, &mut NoopStrategy),
-        Err(SimulationError::Config(_))
-    ));
+fn a_tampered_config_cannot_be_loaded_for_a_run() {
+    let mut broken = serde_json::to_value(config(free_settings())).expect("serializes");
+    broken["config_id"] = serde_json::Value::String("0".repeat(64));
+    let broken = serde_json::to_vec(&broken).expect("serializes tampered config");
+    assert!(StrategyExecutionConfig::from_json_slice(&broken).is_err());
 }
 
 #[test]

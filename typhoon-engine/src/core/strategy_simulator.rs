@@ -604,7 +604,7 @@ fn validate_inputs(streams: &[SymbolStream]) -> Result<Vec<SymbolStream>, Simula
 
 fn validate_models(config: &StrategyExecutionConfig) -> Result<(), SimulationError> {
     if matches!(
-        config.settings.slippage,
+        config.settings().slippage,
         SlippageModel::VolatilityScaled { .. }
     ) {
         return Err(SimulationError::UnsupportedModel {
@@ -612,14 +612,14 @@ fn validate_models(config: &StrategyExecutionConfig) -> Result<(), SimulationErr
             model: "volatility_scaled",
         });
     }
-    if matches!(config.settings.spread, SpreadModel::RecordedQuotes) {
+    if matches!(config.settings().spread, SpreadModel::RecordedQuotes) {
         return Err(SimulationError::UnsupportedModel {
             field: "settings.spread",
             model: "recorded_quotes",
         });
     }
     if matches!(
-        config.settings.tie_break,
+        config.settings().tie_break,
         TieBreakPolicy::TimestampPrioritySymbolSequence
     ) {
         return Err(SimulationError::UnsupportedModel {
@@ -757,7 +757,7 @@ pub fn run_simulation(
     let mut pending: Vec<PendingOrder> = Vec::new();
     let mut fills = Vec::new();
     let mut equity_curve = Vec::new();
-    let mut cash = config.settings.initial_capital;
+    let mut cash = config.settings().initial_capital;
     let mut total_commission = 0.0;
     let mut next_order_id = 0u64;
 
@@ -805,7 +805,7 @@ pub fn run_simulation(
             let order = &pending[*index];
             let width = finite_accounting(
                 "spread_width",
-                stable_decimal(spread_width(&config.settings.spread, *reference_price)),
+                stable_decimal(spread_width(&config.settings().spread, *reference_price)),
             )?;
             let quoted_price = finite_accounting(
                 "quoted_price",
@@ -813,7 +813,7 @@ pub fn run_simulation(
             )?;
             let slip = finite_accounting(
                 "slippage",
-                stable_decimal(slippage_distance(&config.settings.slippage, width)),
+                stable_decimal(slippage_distance(&config.settings().slippage, width)),
             )?;
             let fill_price = finite_accounting(
                 "fill_price",
@@ -822,7 +822,7 @@ pub fn run_simulation(
             let fee = finite_accounting(
                 "commission",
                 stable_decimal(commission(
-                    &config.settings.commission,
+                    &config.settings().commission,
                     order.quantity,
                     fill_price,
                 )),
