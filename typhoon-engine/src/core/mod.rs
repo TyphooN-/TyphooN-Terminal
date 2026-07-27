@@ -23,6 +23,7 @@ pub mod screener;
 pub mod sec_filing;
 pub mod strategy_dataset;
 pub mod strategy_ir;
+pub mod strategy_run;
 pub mod strategy_simulator;
 pub mod symbol_search;
 pub mod var;

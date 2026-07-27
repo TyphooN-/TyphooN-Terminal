@@ -251,7 +251,16 @@ fn hex_id(fill: char) -> String {
 
 fn binding() -> RunBinding {
     RunBinding {
-        dataset_ids: vec![hex_id('a'), hex_id('b')],
+        datasets: vec![
+            DatasetBinding {
+                input_id: "primary".to_string(),
+                dataset_id: hex_id('a'),
+            },
+            DatasetBinding {
+                input_id: "confirmation".to_string(),
+                dataset_id: hex_id('b'),
+            },
+        ],
         strategy_id: hex_id('c'),
         config_id: hex_id('d'),
         seed: 42,
@@ -344,7 +353,7 @@ fn the_three_identities_are_domain_separated() {
 }
 
 #[test]
-fn schema_v1_identity_vectors_are_stable() {
+fn current_schema_identity_vectors_are_stable() {
     assert_eq!(
         strategy_id_of(&definition()),
         "026a44d4dbc84a67b49e65019ff18c7ce38a8fb9e26b258cd2230d6858ef33ed"
@@ -355,7 +364,7 @@ fn schema_v1_identity_vectors_are_stable() {
     );
     assert_eq!(
         run_id_of(&binding()),
-        "8af9fd2846b1c7706186105971f0b7ec11ec068d997087ec62e25f75e9f7fc8f"
+        "16083203295aa30f05d0d87dbac47e0d22298c97b323516f090a7c61e58367b6"
     );
 }
 
@@ -712,10 +721,20 @@ fn every_identity_bearing_settings_field_changes_the_config_id() {
 
 fn binding_mutations() -> Vec<(&'static str, fn(&mut RunBinding))> {
     vec![
-        ("dataset_ids.replace", |b| b.dataset_ids[0] = hex_id('f')),
-        ("dataset_ids.push", |b| b.dataset_ids.push(hex_id('0'))),
-        ("dataset_ids.pop", |b| {
-            b.dataset_ids.pop();
+        ("datasets.input_id", |b| {
+            b.datasets[0].input_id = "secondary".to_string();
+        }),
+        ("datasets.dataset_id", |b| {
+            b.datasets[0].dataset_id = hex_id('f');
+        }),
+        ("datasets.push", |b| {
+            b.datasets.push(DatasetBinding {
+                input_id: "external".to_string(),
+                dataset_id: hex_id('0'),
+            });
+        }),
+        ("datasets.pop", |b| {
+            b.datasets.pop();
         }),
         ("strategy_id", |b| b.strategy_id = hex_id('1')),
         ("config_id", |b| b.config_id = hex_id('2')),
@@ -822,10 +841,10 @@ fn trade_leg_order_changes_the_strategy_id() {
 }
 
 #[test]
-fn dataset_order_changes_the_run_id() {
+fn dataset_binding_declaration_order_does_not_change_the_run_id() {
     let mut swapped = binding();
-    swapped.dataset_ids.swap(0, 1);
-    assert_ne!(run_id_of(&swapped), run_id_of(&binding()));
+    swapped.datasets.swap(0, 1);
+    assert_eq!(run_id_of(&swapped), run_id_of(&binding()));
 }
 
 // ── Identity: framing collision resistance ─────────────────────────
@@ -1995,7 +2014,7 @@ fn malformed_content_addressed_ids_are_rejected() {
 
     for (label, value) in malformed {
         let mut dataset = binding();
-        dataset.dataset_ids[1] = value.clone();
+        dataset.datasets[1].dataset_id = value.clone();
 
         let mut strategy = binding();
         strategy.strategy_id = value.clone();
@@ -2007,7 +2026,7 @@ fn malformed_content_addressed_ids_are_rejected() {
         intervention.intervention_log_id = Some(value);
 
         for (field, candidate) in [
-            ("dataset_ids", dataset),
+            ("datasets", dataset),
             ("strategy_id", strategy),
             ("config_id", config),
             ("intervention_log_id", intervention),
@@ -2026,7 +2045,7 @@ fn malformed_content_addressed_ids_are_rejected() {
 #[test]
 fn a_run_must_bind_at_least_one_dataset() {
     let mut invalid = binding();
-    invalid.dataset_ids = Vec::new();
+    invalid.datasets = Vec::new();
     assert!(matches!(
         StrategyRunManifest::build(&invalid),
         Err(StrategyIrError::OutOfRange { .. })
@@ -2034,20 +2053,27 @@ fn a_run_must_bind_at_least_one_dataset() {
 }
 
 #[test]
-fn duplicate_dataset_ids_are_rejected() {
+fn duplicate_dataset_input_ids_are_rejected_but_reused_content_is_allowed() {
     let mut invalid = binding();
-    invalid.dataset_ids = vec![hex_id('a'), hex_id('a')];
+    invalid.datasets[1].input_id = invalid.datasets[0].input_id.clone();
     assert!(matches!(
         StrategyRunManifest::build(&invalid),
         Err(StrategyIrError::DuplicateId { .. })
     ));
+
+    let mut reused = binding();
+    reused.datasets[1].dataset_id = reused.datasets[0].dataset_id.clone();
+    StrategyRunManifest::build(&reused).expect("one dataset may serve distinct named inputs");
 }
 
 #[test]
 fn too_many_datasets_are_rejected() {
     let mut invalid = binding();
-    invalid.dataset_ids = (0..=MAX_DATASETS_PER_RUN)
-        .map(|i| format!("{i:064x}"))
+    invalid.datasets = (0..=MAX_DATASETS_PER_RUN)
+        .map(|i| DatasetBinding {
+            input_id: format!("input_{i}"),
+            dataset_id: format!("{i:064x}"),
+        })
         .collect();
     assert!(matches!(
         StrategyRunManifest::build(&invalid),
@@ -2070,7 +2096,10 @@ fn a_manifest_binds_a_real_strategy_and_config() {
     let built_ir = ir();
     let config = StrategyExecutionConfig::build(&settings()).expect("builds");
     let manifest = StrategyRunManifest::build(&RunBinding {
-        dataset_ids: vec![hex_id('a')],
+        datasets: vec![DatasetBinding {
+            input_id: "primary".to_string(),
+            dataset_id: hex_id('a'),
+        }],
         strategy_id: built_ir.strategy_id.clone(),
         config_id: config.config_id.clone(),
         seed: 7,
@@ -2082,6 +2111,185 @@ fn a_manifest_binds_a_real_strategy_and_config() {
     manifest.verify().expect("verifies");
     assert_eq!(manifest.binding.strategy_id, built_ir.strategy_id);
     assert_eq!(manifest.binding.config_id, config.config_id);
+}
+
+fn run_dataset_fixture(
+    input_id: &str,
+    symbol: &str,
+    adjustment: crate::core::strategy_dataset::AdjustmentPolicy,
+) -> (
+    Vec<crate::broker::alpaca::Bar>,
+    crate::core::strategy_dataset::DatasetManifest,
+) {
+    use crate::broker::alpaca::Bar;
+    use crate::core::strategy_dataset::{
+        CalendarPolicy, DatasetManifest, DatasetManifestInput, DatasetProvenance,
+    };
+    let bars = vec![Bar {
+        timestamp: "2024-01-02T00:00:00Z".to_string(),
+        open: 10.0,
+        high: 11.0,
+        low: 9.0,
+        close: 10.5,
+        volume: 100.0,
+    }];
+    let manifest = DatasetManifest::build(
+        &DatasetManifestInput {
+            symbol: symbol.to_string(),
+            timeframe: "1Day".to_string(),
+            provenance: DatasetProvenance {
+                source: "fixture".to_string(),
+                venue: input_id.to_string(),
+                pipeline: "strategy-run-test/v1".to_string(),
+            },
+            adjustment,
+            calendar: CalendarPolicy::WeekdaysOnly,
+        },
+        &bars,
+    )
+    .expect("dataset manifest builds");
+    (bars, manifest)
+}
+
+#[test]
+fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
+    use crate::core::strategy_dataset::AdjustmentPolicy;
+    use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
+
+    let strategy = ir();
+    let config = StrategyExecutionConfig::build(&settings()).expect("config builds");
+    let (bars, dataset) = run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::Raw);
+    let manifest = StrategyRunManifest::build(&RunBinding {
+        datasets: vec![DatasetBinding {
+            input_id: "primary".to_string(),
+            dataset_id: dataset.dataset_id.clone(),
+        }],
+        strategy_id: strategy.strategy_id().to_string(),
+        config_id: config.config_id().to_string(),
+        seed: 7,
+        engine_version: "0.1.0-test".to_string(),
+        intervention_log_id: None,
+    })
+    .expect("run manifest builds");
+
+    let verified = assemble_verified_run(
+        &strategy,
+        &config,
+        &manifest,
+        &[RunDatasetInput {
+            input_id: "primary",
+            manifest: &dataset,
+            bars: &bars,
+        }],
+    )
+    .expect("artifacts resolve");
+
+    assert_eq!(verified.run_id(), manifest.run_id());
+    assert_eq!(verified.datasets().len(), 1);
+    assert_eq!(verified.datasets()[0].input_id(), "primary");
+}
+
+#[test]
+fn verified_run_assembly_rejects_identity_mismatch_and_dataset_tampering() {
+    use crate::core::strategy_dataset::AdjustmentPolicy;
+    use crate::core::strategy_run::{RunAssemblyError, RunDatasetInput, assemble_verified_run};
+
+    let strategy = ir();
+    let config = StrategyExecutionConfig::build(&settings()).expect("config builds");
+    let (mut bars, dataset) = run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::Raw);
+    let mut bound = binding();
+    bound.datasets = vec![DatasetBinding {
+        input_id: "primary".to_string(),
+        dataset_id: dataset.dataset_id.clone(),
+    }];
+    bound.config_id = config.config_id().to_string();
+    bound.intervention_log_id = None;
+    let wrong_strategy = StrategyRunManifest::build(&bound).expect("shape-valid manifest");
+    assert!(matches!(
+        assemble_verified_run(
+            &strategy,
+            &config,
+            &wrong_strategy,
+            &[RunDatasetInput {
+                input_id: "primary",
+                manifest: &dataset,
+                bars: &bars,
+            }],
+        ),
+        Err(RunAssemblyError::StrategyIdMismatch { .. })
+    ));
+
+    bound.strategy_id = strategy.strategy_id().to_string();
+    let manifest = StrategyRunManifest::build(&bound).expect("manifest builds");
+    bars[0].close = 999.0;
+    let tampered = assemble_verified_run(
+        &strategy,
+        &config,
+        &manifest,
+        &[RunDatasetInput {
+            input_id: "primary",
+            manifest: &dataset,
+            bars: &bars,
+        }],
+    );
+    assert!(
+        matches!(tampered, Err(RunAssemblyError::InvalidDataset { .. })),
+        "unexpected result: {tampered:?}"
+    );
+}
+
+#[test]
+fn verified_run_assembly_rejects_missing_duplicate_and_mixed_policy_inputs() {
+    use crate::core::strategy_dataset::AdjustmentPolicy;
+    use crate::core::strategy_run::{RunAssemblyError, RunDatasetInput, assemble_verified_run};
+
+    let strategy = ir();
+    let config = StrategyExecutionConfig::build(&settings()).expect("config builds");
+    let (bars_a, dataset_a) = run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::Raw);
+    let (bars_b, dataset_b) =
+        run_dataset_fixture("confirmation", "MSFT", AdjustmentPolicy::SplitAdjusted);
+    let manifest = StrategyRunManifest::build(&RunBinding {
+        datasets: vec![
+            DatasetBinding {
+                input_id: "primary".to_string(),
+                dataset_id: dataset_a.dataset_id.clone(),
+            },
+            DatasetBinding {
+                input_id: "confirmation".to_string(),
+                dataset_id: dataset_b.dataset_id.clone(),
+            },
+        ],
+        strategy_id: strategy.strategy_id().to_string(),
+        config_id: config.config_id().to_string(),
+        seed: 9,
+        engine_version: "0.1.0-test".to_string(),
+        intervention_log_id: None,
+    })
+    .expect("manifest builds");
+
+    let primary = RunDatasetInput {
+        input_id: "primary",
+        manifest: &dataset_a,
+        bars: &bars_a,
+    };
+    assert!(matches!(
+        assemble_verified_run(&strategy, &config, &manifest, &[primary]),
+        Err(RunAssemblyError::MissingDatasetInput { .. })
+    ));
+    assert!(matches!(
+        assemble_verified_run(&strategy, &config, &manifest, &[primary, primary]),
+        Err(RunAssemblyError::DuplicateDatasetInput { .. })
+    ));
+
+    let confirmation = RunDatasetInput {
+        input_id: "confirmation",
+        manifest: &dataset_b,
+        bars: &bars_b,
+    };
+    assert!(matches!(
+        assemble_verified_run(&strategy, &config, &manifest, &[primary, confirmation],),
+        Err(RunAssemblyError::MixedAdjustmentPolicy { .. })
+    ));
 }
 
 #[test]

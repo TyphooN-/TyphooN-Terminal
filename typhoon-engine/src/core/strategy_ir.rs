@@ -87,7 +87,7 @@ pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 1;
 
 /// Wire-format version of [`StrategyRunManifest`].
-pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 /// Maximum encoded JSON size accepted by the sealed-artifact loading APIs.
 /// Structural limits are then enforced while sealing the decoded DTO.
@@ -101,7 +101,7 @@ const STRATEGY_ID_DOMAIN: &str = "typhoon.strategy_ir.strategy_id.v1";
 const CONFIG_ID_DOMAIN: &str = "typhoon.strategy_ir.config_id.v1";
 
 /// Domain-separation prefix for the run-id hash.
-const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v1";
+const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v2";
 
 /// Longest root-to-leaf path allowed in one [`Condition`] tree, counting the
 /// leaf. Bounds both validation recursion and the future interpreter's.
@@ -1365,17 +1365,25 @@ impl StrategyExecutionConfig {
 /// binding and getting the same `run_id`.
 ///
 /// The id fields are content-addressed digests produced elsewhere:
-/// `dataset_ids` come from the dataset layer (§5.1), `strategy_id` from
+/// dataset binding ids come from the dataset layer (§5.1), `strategy_id` from
 /// [`StrategyIr`], `config_id` from [`StrategyExecutionConfig`], and
 /// `intervention_log_id` from the recorded `UserDecision` stream of a hybrid
 /// run (§5.3). This module validates their *shape* — 64 lowercase hex
-/// characters — and binds them in order; it does not resolve them, so a
+/// characters — and binds them by semantic input id; it does not resolve them, so a
 /// manifest can be verified without loading the artifacts it names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatasetBinding {
+    /// Stable semantic input slot, such as `primary` or `confirmation_h4`.
+    pub input_id: String,
+    /// Content-addressed dataset manifest id.
+    pub dataset_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunBinding {
-    /// Datasets in the order the run consumed them. Order is significant and
-    /// duplicates are rejected.
-    pub dataset_ids: Vec<String>,
+    /// Named dataset inputs. Declaration order is canonicalized by `input_id`.
+    /// The same immutable dataset may intentionally serve more than one role.
+    pub datasets: Vec<DatasetBinding>,
     pub strategy_id: String,
     pub config_id: String,
     /// Root seed for every derived RNG stream (§6.10).
@@ -1405,10 +1413,11 @@ struct StrategyRunManifestWire {
 impl StrategyRunManifest {
     /// Validate `binding` and seal it with its run id.
     pub fn build(binding: &RunBinding) -> Result<Self, StrategyIrError> {
-        let run_id = compute_run_id(binding)?;
+        let binding = normalize_binding(binding)?;
+        let run_id = compute_validated_run_id(&binding);
         Ok(Self {
             schema_version: STRATEGY_RUN_MANIFEST_SCHEMA_VERSION,
-            binding: binding.clone(),
+            binding,
             run_id,
         })
     }
@@ -1421,6 +1430,13 @@ impl StrategyRunManifest {
             binding: wire.binding,
             run_id: wire.run_id,
         };
+        let normalized =
+            normalize_binding(&artifact.binding).map_err(ArtifactLoadError::InvalidArtifact)?;
+        if normalized != artifact.binding {
+            return Err(ArtifactLoadError::InvalidJson {
+                message: "sealed run binding is not in canonical order".to_string(),
+            });
+        }
         artifact
             .verify()
             .map_err(ArtifactLoadError::InvalidArtifact)?;
@@ -2821,13 +2837,26 @@ fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError
 /// The content-addressed run id: lowercase hex SHA-256 over the canonical
 /// encoding of a fully validated binding.
 pub fn compute_run_id(binding: &RunBinding) -> Result<String, StrategyIrError> {
-    validate_binding(binding)?;
+    let binding = normalize_binding(binding)?;
+    Ok(compute_validated_run_id(&binding))
+}
 
+fn normalize_binding(binding: &RunBinding) -> Result<RunBinding, StrategyIrError> {
+    validate_binding(binding)?;
+    let mut normalized = binding.clone();
+    normalized
+        .datasets
+        .sort_by(|left, right| left.input_id.cmp(&right.input_id));
+    Ok(normalized)
+}
+
+fn compute_validated_run_id(binding: &RunBinding) -> String {
     let mut digest = CanonicalDigest::new(RUN_ID_DOMAIN);
     digest.tagged_u32("schema_version", STRATEGY_RUN_MANIFEST_SCHEMA_VERSION);
-    digest.begin_seq("dataset_ids", binding.dataset_ids.len());
-    for dataset_id in &binding.dataset_ids {
-        digest.tagged_text("dataset_id", dataset_id);
+    digest.begin_seq("datasets", binding.datasets.len());
+    for dataset in &binding.datasets {
+        digest.tagged_text("input_id", &dataset.input_id);
+        digest.tagged_text("dataset_id", &dataset.dataset_id);
     }
     digest.tagged_text("strategy_id", &binding.strategy_id);
     digest.tagged_text("config_id", &binding.config_id);
@@ -2837,30 +2866,37 @@ pub fn compute_run_id(binding: &RunBinding) -> Result<String, StrategyIrError> {
     if let Some(intervention_log_id) = &binding.intervention_log_id {
         digest.tagged_text("intervention_log_id", intervention_log_id);
     }
-    Ok(digest.finish_hex())
+    digest.finish_hex()
 }
 
 fn validate_binding(binding: &RunBinding) -> Result<(), StrategyIrError> {
     check_size(
-        "binding.dataset_ids",
-        binding.dataset_ids.len(),
+        "binding.datasets",
+        binding.datasets.len(),
         MAX_DATASETS_PER_RUN,
     )?;
-    if binding.dataset_ids.is_empty() {
+    if binding.datasets.is_empty() {
         return Err(out_of_range(
-            "binding.dataset_ids",
+            "binding.datasets",
             0,
             "at least one bound dataset",
         ));
     }
 
-    let mut seen = BTreeSet::new();
-    for (index, dataset_id) in binding.dataset_ids.iter().enumerate() {
-        check_digest_id(&format!("binding.dataset_ids[{index}]"), dataset_id)?;
-        if !seen.insert(dataset_id.as_str()) {
+    let mut seen_inputs = BTreeSet::new();
+    for (index, dataset) in binding.datasets.iter().enumerate() {
+        check_stable_id(
+            &format!("binding.datasets[{index}].input_id"),
+            &dataset.input_id,
+        )?;
+        check_digest_id(
+            &format!("binding.datasets[{index}].dataset_id"),
+            &dataset.dataset_id,
+        )?;
+        if !seen_inputs.insert(dataset.input_id.as_str()) {
             return Err(StrategyIrError::DuplicateId {
                 kind: RefKind::Dataset,
-                id: dataset_id.clone(),
+                id: dataset.input_id.clone(),
             });
         }
     }
