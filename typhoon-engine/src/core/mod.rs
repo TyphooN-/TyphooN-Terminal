@@ -21,6 +21,7 @@ pub mod research;
 pub mod risk;
 pub mod screener;
 pub mod sec_filing;
+pub mod strategy_dataset;
 pub mod symbol_search;
 pub mod var;
 pub mod watchlist;
