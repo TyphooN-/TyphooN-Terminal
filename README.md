@@ -29,7 +29,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Order Placement** | Draggable SL/TP lines, 6 order types (market/bracket/limit/stop/stop-limit/trailing), auto lot calculation |
 | **Order Management** | Open positions panel with live P/L, trade history, cancel pending orders, smart partial close |
 | **Price Alerts** | Persistent price/indicator alerts with in-app state and configured Discord/Pushover/ntfy delivery |
-| **Backtester (first draft)** | 5 fixed bar-close strategies (SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev), equity curve, trade ledger, and summary metrics; ADR-135 defines the StrategyQuant-parity program |
+| **Backtester (first draft)** | 5 fixed bar-close strategies (SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev), equity curve, trade ledger, and summary metrics; ADR-135 defines the StrategyQuant X + NNFX Algo Tester parity program |
 | **WebSocket Streaming** | Real-time trades/quotes via Alpaca WebSocket, Time & Sales |
 | **Options Chain** | Full Greeks, strike/expiry/bid/ask via Alpaca options API |
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
@@ -318,7 +318,7 @@ Chart path: SQLite TTBR cache → zstd decode → owned Rust bars → chart stat
 | [132](docs/adr/132-sl-tp-lines-active-chart-scope.md) | SL/TP Trade Lines Are Active-Chart-Scoped (Exact-Geometry Dragging) |
 | [133](docs/adr/133-command-palette-research-only.md) | Command Palette Is Research-Only |
 | [134](docs/adr/134-render-independent-background-pump.md) | Render-Independent Background Pump (Hidden-Window Sync) |
-| [135](docs/adr/135-strategyquant-feature-parity-program.md) | StrategyQuant Feature-Parity Program |
+| [135](docs/adr/135-strategyquant-feature-parity-program.md) | StrategyQuant X + NNFX Algo Tester Feature-Parity Program |
 
 ---
 
@@ -326,11 +326,13 @@ Chart path: SQLite TTBR cache → zstd decode → owned Rust bars → chart stat
 
 TyphooN's current backtester and optimizer are a useful **first-draft
 foundation**, not a mature strategy-generation lab. The target is practical
-user-workflow parity with StrategyQuant X where that improves this native
-Kraken + Alpaca terminal: visual strategy authoring, deterministic and
-execution-aware simulation, reproducible datasets/runs, generation and
-improvement, robust optimization/cross-checks, experiment databanks, deep
-analysis, portfolio construction, and automated research workflows.
+user-workflow parity with StrategyQuant X and NNFX Algo Tester where that
+improves this native Kraken + Alpaca terminal. StrategyQuant X is the breadth
+benchmark for generation, robustness, databanks, portfolio research, and
+workflow automation. NNFX Algo Tester is the guided benchmark for indicator-role
+assembly, visual/manual/hybrid replay, NNFX trade and exposure rules, and one
+validated configuration across backtest, paper, assistant, and explicitly
+enabled live operation.
 
 Correctness comes before search throughput. A CPU reference simulator, golden
 trade ledgers, no-look-ahead guarantees, explicit fill assumptions, and

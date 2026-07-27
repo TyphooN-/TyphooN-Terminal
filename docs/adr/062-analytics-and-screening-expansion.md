@@ -65,6 +65,6 @@ Comprehensive audit identified feature gaps vs TradingView/Bloomberg in options 
 - Relative Strength enables momentum-based symbol selection
 - GPU path verified at 31/31 indicators active — no dead code
 - Fixed GPU parameter evaluation and Monte Carlo VaR are available foundations;
-  they do not close the broader StrategyQuant-parity roadmap.
+  they do not close the broader StrategyQuant X / NNFX Algo Tester parity roadmap.
 
 See also: ADR-056 (Screener Framework)

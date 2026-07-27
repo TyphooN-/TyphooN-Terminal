@@ -1,8 +1,8 @@
-# ADR-135: StrategyQuant X Feature-Parity Program — Simulation Correctness First, Then Generation at Scale
+# ADR-135: StrategyQuant X + NNFX Algo Tester Feature-Parity Program — Correctness First
 
 **Status:** Accepted (roadmap — direction is binding, milestones are gated, not dated)
 **Date:** 2026-07-27
-**Competitor evidence date:** 2026-07-27 (official vendor pages; see [Primary sources](#primary-sources))
+**Reference-product evidence date:** 2026-07-27 (official vendor pages; see [Primary sources](#primary-sources))
 **Scope owner:** `typhoon-engine` simulation/search core + `typhoon-native` strategy GUI
 
 ---
@@ -83,21 +83,22 @@ simulation core, not decorating it.
 
 ### 1.3 Why an ADR now
 
-The strategy tooling is the one area of TyphooN where the gap to the best commercial
-product in the category is both large and *legible*. StrategyQuant X publishes a detailed
-feature list, and that list is a useful external checklist — it enumerates capabilities that
-retail quant users demonstrably want. Without a durable decision record, this area will keep
+The strategy tooling is the one area of TyphooN where the gap to mature commercial products
+is both large and *legible*. StrategyQuant X publishes a broad research-platform feature
+list, while NNFX Algo Tester documents a narrower guided construction, replay, and risk
+workflow. Together they form a useful external checklist of capabilities that retail quant
+users demonstrably want. Without a durable decision record, this area will keep
 accreting one-off windows (a heatmap here, a shader there) that cannot compose into a
 research workflow, and [ADR-038](038-gpu-strategy-optimizer-and-mql5-export-pipeline.md)
 will keep being read as an accurate status report when parts of it are stale.
 
-### 1.4 What the competitor publicly claims
+### 1.4 What the reference products publicly claim
 
-Everything below is **advertised capability from the vendor's own public marketing pages**,
-captured **2026-07-27**. It is recorded as *their public claim*, not as verified behaviour.
-This ADR makes **no assertion whatsoever about StrategyQuant's internal algorithms, data
-structures, or implementation** — those are not public, are not needed, and are not to be
-guessed at in this repository.
+Everything below is **advertised capability from the vendors' own public marketing and help
+pages**, captured **2026-07-27**. It is recorded as *their public claim*, not as independently
+verified behaviour. This ADR makes **no assertion whatsoever about proprietary algorithms,
+data structures, or implementation** — those are not public, are not needed, and are not to
+be guessed at in this repository.
 
 **StrategyQuant X — features page:** machine-learning strategy generation; no-code
 AlgoWizard strategy building; any market and timeframe including multi-market and
@@ -119,19 +120,52 @@ Carlo; equity-control simulation; portfolio construction and comparison; extensi
 bad-candle QA; chart and table inspection; timeframe and timezone transforms; verified
 downloads.
 
+**NNFX Algo Tester — official feature list and help:** no-code indicator-based strategy
+configuration; automatic and manual/hybrid backtesting; visual replay; automatic forward
+testing/live trading and a trade assistant; Full Algo, C1-signal, baseline-signal, and
+baseline/C1-signal profiles; dedicated repainting-indicator and weekend-candle diagnostics;
+Open Prices Only and Every Tick operation models; configurable decision time before candle
+close; NNFX entry/rule toggles; 75+ bundled indicators plus custom indicators; nine typed
+indicator roles; multi-timeframe and external-market/news inputs; parameter optimization with
+up to 25 inputs; Candidate Search across indicator choices/combinations; long-only/short-only
+modes; detailed customizable reports and CSV/Excel export.
+
+Its documented trade-management surface includes two-leg entries; ATR-derived or fixed
+SL/TP; break-even and stepped trailing-stop rules; fixed-size or fixed-risk sizing; virtual
+targets/FIFO-compatible operation; and account-wide currency overexposure policies that can
+block or reduce risk for same-currency or same-direction entries.
+
+### 1.5 Why both references matter
+
+The products cover different halves of the desired system:
+
+- **StrategyQuant X is the breadth benchmark** for generation, retesting, robustness,
+  experiment databanks, portfolio construction, data management, and automated research
+  workflows.
+- **NNFX Algo Tester is the guided-workflow benchmark** for assembling indicator-role
+  strategies, isolating individual signal components, mixing automatic and manual replay,
+  carrying one configuration from backtest into paper/live operation, and applying practical
+  NNFX trade/risk rules.
+
+TyphooN should combine those user capabilities around one deterministic Rust engine. It
+should not reproduce either vendor's UI, MT4 packaging, binary indicator format, or internal
+implementation.
+
 ---
 
 ## 2. Decision
 
-**Adopt a staged StrategyQuant-X-class feature-parity program for TyphooN's strategy
-research stack, with simulation correctness as the non-negotiable first milestone.**
+**Adopt a staged StrategyQuant-X-class research program plus NNFX-Algo-Tester-class guided
+strategy workflow for TyphooN, with simulation correctness as the non-negotiable first
+milestone.**
 
 Concretely:
 
 1. **Label the current backtester/optimizer as a first-draft foundation** in docs and in
    the GUI, and stop citing its metrics as decision-grade. (§1.1–§1.2 is that label.)
 2. **Define parity as user-capability/workflow parity** — the things a user can *do* and
-   *conclude* — never as UI cloning, algorithm cloning, or service cloning (§3).
+   *conclude* across both reference products — never as UI cloning, algorithm cloning, or
+   service cloning (§3).
 3. **Rebuild around a layered architecture** (§5) whose spine is a versioned strategy IR,
    a deterministic event-driven simulator, immutable datasets with provenance, and an
    experiment databank.
@@ -145,16 +179,18 @@ Concretely:
 
 ## 3. What "parity" means here
 
-**Parity means:** a TyphooN user can carry out the same *research workflows* and reach the
-same *classes of conclusion* as a StrategyQuant X user — build or generate strategies,
-simulate them with realistic execution, stress them for robustness, keep the survivors in a
-searchable databank, assemble them into a portfolio, and re-validate them over time.
+**Parity means:** a TyphooN user can carry out the same useful *research and guided strategy
+workflows* and reach the same *classes of conclusion* as users of the two reference products
+— assemble an NNFX-style indicator system without coding, inspect or intervene in its replay,
+carry it into paper/live validation, build or generate broader strategies, simulate them with
+realistic execution, stress them for robustness, keep the survivors in a searchable databank,
+assemble them into a portfolio, and re-validate them over time.
 
 **Parity explicitly does NOT mean:**
 
 | Non-target | Reason |
 | --- | --- |
-| Cloning their UI, layout, window set, or visual identity | TyphooN is a native egui terminal ([ADR-115](115-deprecate-cli-tui.md), [ADR-125](125-native-crate-boundary-plan.md)); our GUI conventions win |
+| Cloning either product's UI, layout, window set, or visual identity | TyphooN is a native egui terminal ([ADR-115](115-deprecate-cli-tui.md), [ADR-125](125-native-crate-boundary-plan.md)); our GUI conventions win |
 | Reproducing proprietary algorithms | Not public, not inferable, not to be reverse-engineered or guessed |
 | A cloud/SaaS tier, licensing server, or marketplace | TyphooN is a local-first single-user desktop app |
 | Their broker/platform matrix or code-export targets (MT4/MT5/cTrader/etc.) | MT5 scope was removed by [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md); active scope is **Kraken + Alpaca** |
@@ -179,7 +215,7 @@ Status vocabulary (used consistently in this document):
 - **Missing** — not present in any form.
 - **Out-of-scope** — deliberately not pursued; reason given.
 
-Left column = capability publicly advertised by the vendor (evidence date 2026-07-27).
+Left column = capability publicly advertised by either reference product (evidence date 2026-07-27).
 Right columns = TyphooN's honest present state and where it is addressed in this ADR.
 
 ### 4.1 Strategy construction & generation
@@ -208,8 +244,8 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Partial fills / liquidity caps | **Missing** | §6.6, M2 |
 | Sessions & timezones | **Partial** — session status exists app-side ([ADR-110](110-market-session-status-xstocks-24-5-and-us-equities.md)) but the simulator ignores it | §6.7, M2 |
 | Corporate actions in simulation | **Partial** — merge-layer split handling ([ADR-122](122-curated-stock-split-fallback-for-equity-merge.md), [ADR-124](124-depth-era-promotion-must-not-redefine-price-scale.md)) is *not* wired into backtests | §6.8, M2 |
-| Multi-market / multi-symbol simultaneous simulation | **Missing** — single symbol only | §6.11, M4 |
-| Multi-timeframe within one strategy | **Missing** in the simulator (MTF chart overlay exists — [ADR-123](123-mtf-overlay-price-scale-consistency.md)) | §6.11, M4 |
+| Multi-market / multi-symbol simultaneous simulation | **Missing** — single symbol only | §6.11, M1/M4 |
+| Multi-timeframe within one strategy | **Missing** in the simulator (MTF chart overlay exists — [ADR-123](123-mtf-overlay-price-scale-consistency.md)) | §6.11, M1/M4 |
 | Deterministic, reproducible runs | **Missing** — no seed discipline, no run manifest | §6.10, M1 |
 | No-look-ahead guarantee | **Missing** — structurally possible today (§1.2 item 1) | §6.12, M1 |
 
@@ -280,6 +316,33 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Code export to external trading platforms | **Out-of-scope** — MT5/export removed by [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md); TyphooN executes on **Kraken + Alpaca** natively ([ADR-126](126-primary-assist-broker-selection.md)) | §14 |
 | Cloud/distributed compute | **Out-of-scope** — local-first | §14 |
 
+### 4.8 NNFX-guided construction, testing, and operation
+
+This matrix captures the guided indicator-system workflow advertised by NNFX Algo Tester.
+TyphooN targets these capabilities natively; MT4-specific packaging is not the target.
+
+| Capability (NNFX Algo Tester public claim) | TyphooN status | Addressed in |
+| --- | --- | --- |
+| Guided indicator-role builder (ATR, baseline, C1, C2, volume, exit, continuation, news/market filters) | **Missing as a builder** — a fixed NNFX Rust strategy and broad indicator library exist, but no role-based builder or saved configuration | §5.2, §5.11, M3 |
+| Full-algorithm, C1-only, baseline-only, and baseline+C1 test profiles | **Missing** | §5.2, M3 |
+| NNFX baseline/standard/continuation/pullback entries and One Candle/A Bridge Too Far rule toggles | **Missing as configurable IR** — only fixed NNFX logic exists | §5.2, M3 |
+| Automatic plus manual/hybrid backtesting | **Missing** — simulation cannot pause for a recorded user decision | §6.13, M2 |
+| Visual mode with entries, exits, stop updates, and indicator state | **Missing as a visual workflow** — bar-state replay data is a useful engine foundation, but no annotated replay UI is wired | §5.11, M2/M3 |
+| Repainting-indicator diagnostic | **Missing** | §11.5, M2 |
+| Weekend-candle diagnostic | **Missing as dataset QA** — weekend crypto is supported operationally, but no strategy-data diagnostic exists | §11.5, M0 |
+| Open-price and tick operation models | **Missing** — the draft uses same-bar close fills; the target fidelity ladder is broader and explicit | §6.9, M1/M2/M7 |
+| Configurable decision time before candle close | **Missing** | §6.13, M2 |
+| 75+ bundled indicators and custom indicator loading | **Partial** — TyphooN has 46+ chart indicators and a transpiler direction; loading MT4 `.ex4` binaries is out-of-scope | §5.10, §14, M6 |
+| Multi-timeframe indicator evaluation and external market/news filters | **Partial outside simulation** — chart MTF/news/market data exist; strategy-time synchronization does not | §6.11, M1/M4 |
+| Up to 25 optimization inputs | **Foundation** — fixed SMA/NNFX parameter sweeps only; TyphooN will not impose an arbitrary 25-input ceiling | §5.5, M4 |
+| Candidate Search across indicators and slot combinations | **Missing** — maps to typed holes/templates and constrained generation | §8.1–§8.3, M5 |
+| Long-only / short-only testing | **Missing as a run constraint** | §5.5, M3 |
+| Two-leg ATR/fixed SL/TP, break-even, stepped trailing stop, fixed-risk/fixed-size sizing, and virtual targets | **Partial outside backtesting** — TyphooN's risk/order code has useful foundations, but the simulator does not model this lifecycle | §6.5–§6.7, §10.3, M2/M6 |
+| Currency/asset-group overexposure blocking or risk reduction | **Missing** | §10.3, M6 |
+| Same saved configuration for backtest → paper/forward → live assistant/automation | **Missing end-to-end** — broker execution exists, but no validated strategy promotion pipeline | §10.5, M8 |
+| Strategy signal notifications and manual/automatic execution choice | **Partial infrastructure** — alerts and broker controls exist, but are not driven by a persisted validated strategy | §10.5, M8 |
+| Detailed customizable reports with balance/equity charts and CSV/Excel export | **Foundation** — summary metrics and equity display exist; versioned report/export contracts do not | §9, M2 |
+
 ---
 
 ## 5. Target architecture
@@ -349,6 +412,11 @@ becomes data.**
   ([ADR-040](040-typhoon-transpiler-pipeline-source-to-gpu-cpu-execution.md),
   [ADR-067](067-multi-frontend-expansion-cross-language-transpiler.md)) is a *front-end*
   that lowers source into the IR — it is not a second strategy representation.
+- **Guided NNFX profile editor** is a constrained view over that same IR, not a parallel
+  engine: named slots for ATR, baseline, C1/C2, volume, exit, continuation, news, and external
+  market filters; Full Algo/C1/BL/BL+C1 profiles; explicit entry/rule toggles; long/short
+  constraints; and two-leg trade-management templates. Switching to the general node editor
+  reveals the exact IR generated by the guided form.
 
 ### 5.3 L3 — Deterministic event-driven simulator
 
@@ -361,6 +429,10 @@ Replaces `run_backtest` wholesale.
   never by hash-map iteration order.
 - **Strict separation of decision time and execution time.** Strategy code observes state
   as of event time `t` and may only emit orders that execute at `t + latency`.
+- **User interventions are events.** Manual/hybrid replay never mutates hidden simulator
+  state. Pause, submit/cancel/modify, skip-signal, and resume actions are timestamped
+  `UserDecision` events stored in the run manifest, so the resulting run is replayable and
+  auditable rather than an irreproducible click session.
 - **Accounting kernel:** positions, average cost, realized/unrealized PnL, cash, margin,
   financing, fees, per-instrument contract specs. Mark-to-market on every bar, so equity is
   a real time series (fixing §1.2 item 6).
@@ -439,7 +511,11 @@ through cheap gates before expensive ones. Every rejection records *which* gate 
 Native egui, consistent with existing conventions:
 
 - **Strategy Builder** — visual IR editor with typed sockets + canonical text view.
+- **NNFX Builder** — guided role-based form and operation-profile selector backed by the
+  same IR, with per-rule explanations and a one-click transition into the general builder.
 - **Run** — dataset picker, cost model picker, progress, cancel.
+- **Visual / Hybrid Replay** — play, pause, step, inspect indicator/signal state, and inject
+  recorded manual order decisions without leaving the chart.
 - **Results** — report with metric definitions on hover, equity + underwater curves, trade
   list, **annotated chart overlay** of entries/exits, MAE/MFE scatter.
 - **Optimizer** — parameter-field views: 2D heatmap (exists), 3D surface, parallel
@@ -537,8 +613,9 @@ never compared without the label.
 ### 6.10 Determinism & seeds
 - Every run carries a **root seed**; per-component streams are derived deterministically
   (slippage, latency, Monte Carlo, generator, tie-breaks).
-- **Bit-identical repeatability**: same (IR, dataset, config, seed, engine version) ⇒
-  identical trade list and identical metrics. This is a CI test, not an aspiration.
+- **Bit-identical repeatability**: same (IR, dataset, config, seed, engine version, and any
+  recorded intervention log) ⇒ identical trade list and identical metrics. This is a CI test,
+  not an aspiration.
 - Parallelism must not affect results: no reliance on completion order, no unordered
   floating-point reductions in the accounting path.
 - Wall-clock time and system RNG are **forbidden** in the simulation path.
@@ -562,6 +639,18 @@ never compared without the label.
 - A standing **look-ahead canary suite** in CI: strategies engineered to cheat (peek at the
   next bar, use the full-series max, use a future-dated indicator) must fail to compile or
   trip the guard.
+
+### 6.13 Decision timing and hybrid replay
+- Bar strategies declare a decision point: closed-bar event, next-bar open, or a configured
+  pre-close offset. A pre-close rule consumes only the forming-bar state actually available at
+  that timestamp and is labelled as such; it may not read the final OHLC values.
+- Open-price, sub-bar, and tick modes use the same strategy IR and execution model. Changing
+  fidelity must not silently change indicator warm-up, session, or order semantics.
+- Manual/hybrid actions are explicit `UserDecision` events (§5.3) and produce a forked child
+  run linked to its automated parent. The UI shows which actions came from the strategy and
+  which came from the operator.
+- A hybrid run may be compared and reported, but it is not eligible for automated promotion
+  unless a deterministic rule reproduces the interventions.
 
 ---
 
@@ -811,6 +900,15 @@ a diversity constraint, with the option of a full multi-objective search), not a
   loud warning). **Martingale-style escalation is prohibited** for anything that can reach
   live trading ([ADR-114](114-deprecate-martingale-live-trading.md)); if simulated at all it
   is labelled research-only and blocked from promotion.
+- **NNFX two-leg template:** independently configurable first/second leg risk share,
+  ATR-derived or fixed SL/TP, break-even trigger, trailing-stop activation/distance/step, and
+  optional single-order virtual targets. These are ordinary typed order-management nodes, so
+  reports and optimizers can inspect them rather than opaque special cases.
+- **Overexposure policy:** configurable asset/currency exposure groups can block an order or
+  reduce its risk when it repeats the same underlying currency/asset or directional
+  exposure. The policy declares which account(s), manual/strategy orders, break-even/zero-risk
+  positions, and excluded symbols it considers. It uses canonical instrument metadata, with
+  explicit user-defined groups only when the venue model cannot express the relationship.
 
 ### 10.4 Portfolio stress, Monte Carlo, and what-if
 - All §7.3 Monte Carlo families applied at the **portfolio** level, plus allocation-order
@@ -833,6 +931,11 @@ a diversity constraint, with the option of a full multi-objective search), not a
   crucial difference that it validates against **the venue we actually trade**.
 - **Scheduled re-validation:** periodic retest on newly arrived data; a degradation gate
   breach demotes the strategy and raises an alert.
+- The same immutable strategy id/config drives backtest, hybrid replay, paper shadow, signal
+  notification, assistant/manual execution, and (only after explicit user enablement) live
+  automation. No copy-and-paste configuration fork is allowed between stages.
+- Promotion never means automatic deployment: live eligibility, account selection, sizing,
+  and automatic-vs-assistant mode remain explicit graphical controls with audit records.
 
 ---
 
@@ -869,6 +972,21 @@ level 3).
 Third-party file import (CSV/HDF) is straightforward but not on the critical path; it lands
 after the dataset abstraction is stable, so imports arrive as first-class provenance-carrying
 datasets rather than as a side door around QA.
+
+### 11.5 Indicator and calendar diagnostics
+- **Repainting test:** evaluate each indicator incrementally, snapshot outputs that were
+  visible at each event, and fail/report when a later event mutates a previously closed-bar
+  value outside an explicitly declared revision window. Report the exact node, output, bar,
+  old value, and new value; do not reduce this to a single warning flag.
+- **Weekend-candle test:** compare timestamps against the instrument's declared calendar and
+  identify unexpected weekend/session bars. Crypto weekend bars are normally valid; an FX,
+  equity, or xStock bar is judged against its own venue/session policy rather than a global
+  weekend rule. M0 stores the dataset-side calendar id/policy used by this QA check (initially
+  reusing the existing ADR-110 session/calendar rules); M2 makes the simulator's execution
+  calendar consume that same versioned policy.
+- Both diagnostics are dataset/indicator QA artifacts stored with the run and visible in the
+  chart/table inspector. A user may acknowledge a warning, but the acknowledgement is part of
+  the manifest.
 
 ---
 
@@ -916,16 +1034,19 @@ that an earlier gate will pass.
 ### M0 — Dataset foundation & QA
 **Prereqs:** none (builds on the existing cache/merge stack).
 **Delivers:** immutable content-addressed datasets + manifest + provenance (§5.1); dataset
-QA pass and report (§11.1); tabular inspector (§11.2).
+QA pass and report (§11.1); tabular inspector (§11.2); versioned dataset-side calendar
+identity/policy and session-aware weekend-candle diagnostic (§11.5).
 **Gate:** a dataset id reproducibly materializes byte-identical bars across restarts; QA
 detects seeded synthetic defects (gap, spike, duplicate timestamp, carry bar, OHLC
-violation, split-like level shift) at 100 % on the test corpus; building a dataset never
-blocks the render thread.
+violation, split-like level shift, unexpected weekend/session bar) at 100 % on the test
+corpus; building a dataset never blocks the render thread.
 
 ### M1 — Simulation correctness (**the hard gate**)
 **Prereqs:** M0.
 **Delivers:** strategy IR v1 + reference interpreter (§5.2); event-driven simulator (§5.3);
-execution realism §6.1–§6.5, §6.10, §6.12; cost models for Kraken + Alpaca; run manifests.
+execution realism §6.1–§6.5 and deterministic synchronization/no-look-ahead semantics
+§6.10–§6.12; core closed-bar/next-open/pre-close decision timing and forming-bar visibility
+from §6.13; cost models for Kraken + Alpaca; run manifests.
 **Gate — all of the following, or M1 is not done:**
 1. **Golden tests**: a corpus of hand-computed scenarios (single long trade with commission
    and spread; stop-and-target-in-the-same-bar under each OHLC policy; gap through a stop;
@@ -933,7 +1054,9 @@ execution realism §6.1–§6.5, §6.10, §6.12; cost models for Kraken + Alpaca
    trade, fill price, fee and equity value is derived by hand and asserted exactly.
 2. **Determinism**: identical inputs ⇒ bit-identical outputs, verified in CI, including
    under multi-threaded execution.
-3. **Look-ahead canary suite**: every cheating strategy fails to compile or trips the guard.
+3. **Look-ahead canary suite**: every cheating strategy fails to compile or trips the guard,
+   including a pre-close strategy that tries to read the forming bar's final OHLC and a
+   multi-timeframe strategy that tries to read a higher-timeframe bar before it closes.
 4. **Zero-cost equivalence**: with all costs, latency and slippage set to zero and
    bar-close fidelity selected, the new engine reproduces the legacy `run_backtest` results
    for the five existing strategies — proving the difference is the *model*, not a
@@ -951,18 +1074,26 @@ up multiplies the error rather than the insight.
 **Delivers:** versioned metric registry (§9) incl. MAE/MFE, calendar equity, exposure,
 stagnation, tails and stability; report + manifest export; execution realism §6.6–§6.9
 (partial fills, sessions/timezones, corporate actions, sub-bar fidelity); chart trade
-overlay.
+overlay; deterministic visual/manual/hybrid replay using the M1 timing semantics (§6.13);
+repainting diagnostic (§11.5); NNFX two-leg order lifecycle (§10.3).
 **Gate:** every metric has a written definition and a hand-verified golden test; no metric
 returns a magic sentinel; calendar equity reconciles exactly with the trade list; MAE/MFE
 verified against hand-computed excursions; reports round-trip through JSON without loss.
+Replaying a recorded hybrid run reproduces its ledger bit-for-bit, and a synthetic repainting
+indicator is identified at the exact mutated bar/output. A hand-computed two-leg scenario
+asserts each entry, independent target/stop, break-even transition, trailing step, fee, and
+ledger/equity effect exactly before portfolio-level money-management work begins.
 
 ### M3 — Builder & databank
 **Prereqs:** M1, M2.
 **Delivers:** visual IR builder (§5.2); databank schema + indexed queries (§5.7); results
-browser with filtering/sorting/comparison; strategy identity + canonical hashing.
+browser with filtering/sorting/comparison; strategy identity + canonical hashing; guided NNFX
+role/profile builder with entry/rule toggles and long/short run constraints (§4.8, §5.11).
 **Gate:** a strategy built in the GUI, saved, reloaded and re-run reproduces its stored
 metrics exactly; two structurally identical strategies collapse to one id; databank queries
-over a synthetic 10⁵-run corpus stay bounded and off the render thread.
+over a synthetic 10⁵-run corpus stay bounded and off the render thread. Every guided NNFX
+profile/slot/rule configuration round-trips through the canonical IR and produces the same IR
+as the equivalent general-builder graph.
 
 ### M4 — Optimizer, retester & robustness pipeline
 **Prereqs:** M1–M3.
@@ -981,7 +1112,8 @@ enforcement (§7.8); 3D and parallel-coordinates views.
 noise).
 **Delivers:** typed grammar sampling, templates/placeholders, constraints (§8.1);
 evolutionary + random/Bayesian search (§8.2); novelty/dedup (§8.3); complexity penalties
-(§8.5); deterministic resumability (§8.6).
+(§8.5); deterministic resumability (§8.6); Candidate Search as constrained slot/template
+enumeration over the same machinery.
 **Gate:** a generation run is bit-reproducible from its seed; a killed-and-resumed run
 matches an uninterrupted one; dedup demonstrably collapses known-equivalent candidates;
 generated candidates are all type-correct and pass the look-ahead canary by construction;
@@ -992,10 +1124,15 @@ random-search baseline is reported alongside evolutionary results (no unfalsifia
 **Prereqs:** M4 (M5 recommended).
 **Delivers:** multi-strategy portfolio simulation with shared capital/margin and concurrent
 fills (§10.1, §10.3); fit-to-portfolio selection (§10.2); portfolio Monte Carlo, what-if,
-equity control (§10.4); strategy improver (§8.4); extension traits (§5.10).
+equity control (§10.4); two-leg/ATR/break-even/trailing-stop money management and
+asset/currency overexposure policies (§10.3); strategy improver (§8.4); extension traits
+(§5.10).
 **Gate:** portfolio equity from a combined run differs from naive PnL summation in a
 capital-constrained scenario **by the hand-computed amount**; correlated-strategy selection
-provably prefers a diversified set over a top-N-by-metric set on a constructed case.
+provably prefers a diversified set over a top-N-by-metric set on a constructed case. Golden
+tests cover two-leg break-even/trailing transitions and each overexposure action (allow,
+block, reduce risk) across multiple instruments/accounts, proving the M2 single-strategy
+lifecycle remains correct under shared capital and account-level exposure policy.
 
 ### M7 — Workflows & automation
 **Prereqs:** M4–M6.
@@ -1008,21 +1145,26 @@ one changed stage recomputes only the affected subtree.
 ### M8 — Lifecycle & live feedback
 **Prereqs:** M6, M7.
 **Delivers:** strategy lifecycle states, paper/shadow validation, live-vs-simulated
-divergence measurement feeding back into cost models, scheduled re-validation (§10.5).
+divergence measurement feeding back into cost models, scheduled re-validation, strategy
+signals/notifications, assistant mode, and one immutable configuration across backtest →
+paper → explicitly enabled live operation (§10.5).
 **Gate:** a paper-shadowed strategy reports measured fill/slippage divergence vs its
 simulation, and that measurement demonstrably updates the cost model used by subsequent
-backtests.
+backtests. The same strategy/config hash appears from backtest through paper/live eligibility,
+and no strategy can enter automatic live mode without an explicit GUI action and audit record.
 
 ---
 
 ## 14. Non-goals, deferred, and blocked
 
 **Non-goals (will not be built):**
-- UI/visual cloning of StrategyQuant X.
+- UI/visual cloning of StrategyQuant X or NNFX Algo Tester.
 - Reimplementation or reverse-engineering of proprietary vendor algorithms.
 - Code export to MT4/MT5/cTrader/NinjaTrader or any external platform — removed by
   [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md); TyphooN trades natively on
   Kraken + Alpaca.
+- Loading MT4 `.ex4` binaries. Custom-indicator capability is provided through native Rust
+  implementations and the deterministic `typhoon-transpiler` boundary.
 - Cloud/SaaS execution, licensing servers, marketplaces, or multi-user collaboration.
 - A general embedded scripting runtime (sandboxing/determinism cost not yet justified;
   extensions go through Rust traits or `typhoon-transpiler`).
@@ -1110,6 +1252,9 @@ current-status banner while its original proposal remains available as historica
   the property that actually distinguishes a research platform from a demo.
 - Robustness, portfolio and workflow capability become *compositions* of one correct core
   rather than a growing set of disconnected windows.
+- NNFX users get a focused guided path without trapping the project in a second strategy
+  representation: the form, visual graph, optimizer, replay, and live lifecycle all share
+  one canonical IR/configuration.
 - TyphooN's multi-source data stack becomes a genuine differentiator: cross-source
   robustness checks (§7.5) are something a single-vendor data pipeline cannot do.
 - Non-goals are written down, so scope creep toward export/cloud/broker-matrix parity has a
@@ -1129,6 +1274,7 @@ current-status banner while its original proposal remains available as historica
 | --- | --- |
 | Scope collapse — the program stalls after M1 and leaves two half-engines | M1's gate includes zero-cost equivalence with the legacy engine, so the old path can be retired immediately on completion |
 | Over-engineering the IR before real strategies exercise it | IR v1 is scoped to express the five existing strategies plus stops/targets/sizing; extend only under demand |
+| NNFX parity turns into hard-coded special-case logic | Guided profiles lower into and round-trip through the canonical IR; M3 rejects any profile that cannot be expressed equivalently in the general builder |
 | Robustness theatre — many statistics, no discipline | Gates produce *verdicts* with pass/fail thresholds and stored evidence, and the holdout is API-enforced (§7.8) |
 | Curve-fitting at industrial scale once generation lands | M5 is gated behind M4; multiple-testing controls (§7.7) and SPP (§7.4) are mandatory, not optional views |
 | Determinism erosion as parallelism is added | Bit-identical CI test on every change to the simulation path |
@@ -1146,6 +1292,13 @@ only; no claim is made about internal implementation.
 - StrategyQuant X — features (incl. robustness section): <https://strategyquant.com/features/>
 - QuantAnalyzer: <https://strategyquant.com/quantanalyzer/>
 - QuantDataManager: <https://strategyquant.com/quantdatamanager/>
+- NNFX Algo Tester — product features: <https://nnfxalgotester.com/#Features>
+- NNFX Algo Tester Help — complete feature list: <https://help.nnfxalgotester.com/knowledgebase.php?article=115>
+- NNFX operation modes and repaint/weekend diagnostics: <https://help.nnfxalgotester.com/knowledgebase.php?article=86>
+- NNFX Candidate Search: <https://help.nnfxalgotester.com/knowledgebase.php?article=113>
+- NNFX money management: <https://help.nnfxalgotester.com/knowledgebase.php?article=56>
+- NNFX overexposure management: <https://help.nnfxalgotester.com/knowledgebase.php?article=110>
+- NNFX algorithm configuration: <https://help.nnfxalgotester.com/knowledgebase.php?article=52>
 
 Internal evidence, read **2026-07-27** at commit `f9d383e9`:
 

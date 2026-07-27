@@ -112,7 +112,7 @@ The `SYM` / `SYMBOLS` command opens Symbol Explorer. It is the catalog-facing wa
 | Cache | SQLite + zstd | TTBR binary format, ~3-5x compression |
 | Analytics | research.rs + screener.rs | research + indicator parity surfaces, EV/signal scanning |
 | Risk | risk.rs + margin.rs + var.rs | Full port of TyphooN EA v1.420 |
-| Strategy research | backtest.rs + native strategy windows + GPU backtester | First-draft fixed-strategy simulation/optimization; ADR-135 defines the correctness-first StrategyQuant-parity architecture |
+| Strategy research | backtest.rs + native strategy windows + GPU backtester | First-draft fixed-strategy simulation/optimization; ADR-135 defines the correctness-first StrategyQuant X breadth + NNFX guided-workflow architecture around one canonical strategy IR |
 
 ## Project Structure
 

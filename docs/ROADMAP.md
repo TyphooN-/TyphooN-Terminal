@@ -212,10 +212,13 @@ is scheduled on `master`.
 
 ### Phase 22: Strategy Research, Backtesting & Generation Program
 
-Target: practical user-workflow parity with StrategyQuant X where it fits the
-native Kraken + Alpaca terminal. The current backtester is the first draft, not
-completion evidence. See [ADR-135](adr/135-strategyquant-feature-parity-program.md)
-for the capability matrix, architecture, non-goals, and acceptance gates.
+Target: practical user-workflow parity with **StrategyQuant X and NNFX Algo Tester** where it
+fits the native Kraken + Alpaca terminal. StrategyQuant X is the breadth benchmark for
+generation, robustness, databanks, portfolio research, and workflow automation; NNFX Algo
+Tester is the guided benchmark for indicator-role assembly, hybrid replay, NNFX trade/risk
+rules, and backtest → paper/live continuity. The current backtester is the first draft, not
+completion evidence. See [ADR-135](adr/135-strategyquant-feature-parity-program.md) for the
+capability matrices, architecture, non-goals, and acceptance gates.
 
 **Simulation correctness and reproducibility (first prerequisite)**
 - [ ] Versioned strategy IR/AST and run manifest shared by GUI, CPU reference engine, persistence, and later accelerators
@@ -231,6 +234,17 @@ for the capability matrix, architecture, non-goals, and acceptance gates.
 - [ ] Structural hashing/deduplication, novelty controls, complexity penalties, invalid-strategy rejection, resumable seeded runs, and bounded candidate queues
 - [ ] Strategy databank/experiment store with immutable dataset fingerprints, lineage, tags, filters, comparisons, reruns, and result-schema migration
 - [ ] Existing-strategy improver that can lock or mutate selected subtrees without changing unrelated behavior
+
+**NNFX-guided strategy workflow**
+- [ ] Guided ATR/baseline/C1/C2/volume/exit/continuation/news/market-filter builder that lowers to the same canonical IR as the general visual builder
+- [ ] Full Algo, C1-only, baseline-only, and baseline+C1 profiles with baseline/standard/continuation/pullback entries, One Candle/A Bridge Too Far toggles, and long/short constraints
+- [ ] Visual play/pause/step replay plus reproducible manual/hybrid interventions recorded as run events; explicit closed-bar/next-open/pre-close decision timing
+- [ ] Repainting-indicator and session-aware weekend-candle diagnostics with exact bar/output evidence
+- [ ] Candidate Search across indicator roles/combinations implemented as constrained typed-template enumeration, with the same anti-overfitting gates as general generation
+- [ ] Two-leg ATR/fixed SL/TP, break-even and stepped trailing-stop templates, risk splits, virtual targets, and fixed-risk/fixed-size sizing
+- [ ] Account-aware asset/currency overexposure policies: allow, block, or reduce risk for repeated same-asset/same-direction exposure
+- [ ] One immutable strategy/config identity across backtest, replay, paper/shadow, notifications, assistant/manual execution, and explicitly enabled live automation
+- [ ] Native custom-indicator extension path; MT4 `.ex4` loading and MT4 UI/platform cloning remain out of scope
 
 **Optimization and anti-overfitting**
 - [ ] General parameter optimizer with constraints, multi-objective ranking/Pareto views, resumable jobs, and parameter-surface visualization

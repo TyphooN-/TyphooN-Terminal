@@ -2,9 +2,10 @@
 
 > **Historical foundation; partially superseded.** ADR-111 removed the MT5/MQL5
 > export target in 2026-06. ADR-135 now governs the broader strategy research,
-> backtesting, generation, robustness, and portfolio program. The fixed CPU/GPU
-> backtester and optimizer described here are a first-draft foundation, not a
-> completed StrategyQuant-class system.
+> backtesting, generation, robustness, portfolio, and guided NNFX workflow
+> program. The fixed CPU/GPU backtester and optimizer described here are a
+> first-draft foundation, not a complete system in either reference product's
+> class.
 
 **Status:** Partially implemented / superseded by [ADR-135](135-strategyquant-feature-parity-program.md)
 **Date:** 2026-03-26
