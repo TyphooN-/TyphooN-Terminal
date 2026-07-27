@@ -1,6 +1,6 @@
 # ADR-062: Analytics & Screening Expansion
 
-**Status:** Complete | **Date:** 2026-04-08
+**Status:** Implemented for the scoped analytics; strategy research remains a first-draft foundation (ADR-135) | **Date:** 2026-04-08
 
 ## Context
 
@@ -24,7 +24,8 @@ Comprehensive audit identified feature gaps vs TradingView/Bloomberg in options 
 ## GPU Path Status (Verified Complete)
 - **31 GPU-accelerated indicators**: SMA, EMA, RSI, KAMA, ATR, MACD, Fisher, Stochastic, ADX, Ichimoku, WMA, HMA, CCI, Williams %R, OBV, Momentum, Parabolic SAR, Fractals, ATR Projection, Better Volume, Supply/Demand Zones, Anchored VWAP, Bollinger Bands + 8 Ehlers (Super Smoother, Decycler, Instantaneous Trendline, MAMA/FAMA, Even Better Sinewave, Cyber Cycle, CG Oscillator, Roofing Filter)
 - **All have CPU fallback** (except Anchored VWAP — GPU only)
-- **GpuBacktester struct exists** but has zero implementation (future: parallel parameter grid evaluation)
+- The GPU backtester now evaluates fixed SMA/NNFX parameter combinations; it is
+  not a general strategy simulator/generator (ADR-038/135).
 
 ### Portfolio Metrics (typhoon-engine/src/core/darwin.rs)
 - Treynor Ratio: `(annualized_return - risk_free_rate) / beta`
@@ -48,8 +49,10 @@ Comprehensive audit identified feature gaps vs TradingView/Bloomberg in options 
 - Returns sorted Vec of final equity values (VaR = percentile lookup)
 
 ### GPU Backtester (typhoon-native/src/gpu_compute.rs)
-- `evaluate()` + `evaluate_nnfx()`: already fully implemented
-- 5 WGSL pipelines: eval, nnfx, walk_forward, robustness, monte_carlo
+- `evaluate()` + `evaluate_nnfx()` implement the fixed SMA/NNFX sweep foundation.
+- 5 WGSL pipelines are constructed: eval, nnfx, walk_forward, robustness, and
+  Monte Carlo. Pipeline presence does not establish a complete wired robustness
+  workflow; see ADR-038's corrected implementation status and ADR-135.
 - BacktestResult: net_pnl, max_drawdown, sharpe, sortino, win_rate, profit_factor, trade_count, avg_hold_bars, robustness_score
 
 ## Data-Blocked Items
@@ -58,13 +61,10 @@ Comprehensive audit identified feature gaps vs TradingView/Bloomberg in options 
 
 ## Consequences
 
-All implementable analytics features complete. 470 tests passing. GPU path fully utilized: 31 indicators + Monte Carlo VaR + parameter grid backtester. Only Market Breadth and Put/Call Ratio remain — both blocked on external data feeds not currently available.
-
-## Consequences
-
 - Options Chain now shows theoretical Greeks per strike — enables options strategy analysis
 - Relative Strength enables momentum-based symbol selection
 - GPU path verified at 31/31 indicators active — no dead code
-- 467 total tests passing
+- Fixed GPU parameter evaluation and Monte Carlo VaR are available foundations;
+  they do not close the broader StrategyQuant-parity roadmap.
 
 See also: ADR-056 (Screener Framework)

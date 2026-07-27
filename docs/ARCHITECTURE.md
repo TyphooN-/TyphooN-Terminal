@@ -27,7 +27,7 @@ JSON before data enters the typed TTBR/cache pipeline.
 │  │ - Fundamentals (21 data sources)             ││
 │  │ - Research packet (research + indicator parity)   ││
 │  │ - AI sessions (Claude / Gemini / Codex)     ││
-│  │ - Backtest engine + optimizer (GPU)         ││
+│  │ - First-draft backtest + optimizer (CPU/GPU)││
 │  │ - MTF Grid (up to 16 chart viewports)       ││
 │  │ - 54+ floating windows                      ││
 │  └─────────────────────────────────────────────┘│
@@ -37,7 +37,7 @@ JSON before data enters the typed TTBR/cache pipeline.
 │  - KrakenBroker (Spot REST orders + private WS) │
 │  - SqliteCache (TTBR binary, zstd compression)  │
 │  - RiskEngine (VaR, TRIM, order sizing)         │
-│  - BacktestEngine (bar-by-bar, optimization)    │
+│  - Backtest foundation (fixed strategies)       │
 │  - Research (research + indicator parity surfaces)    │
 │  - Notifications (Discord, Pushover, ntfy,      │
 │    Matrix)                                      │
@@ -112,6 +112,7 @@ The `SYM` / `SYMBOLS` command opens Symbol Explorer. It is the catalog-facing wa
 | Cache | SQLite + zstd | TTBR binary format, ~3-5x compression |
 | Analytics | research.rs + screener.rs | research + indicator parity surfaces, EV/signal scanning |
 | Risk | risk.rs + margin.rs + var.rs | Full port of TyphooN EA v1.420 |
+| Strategy research | backtest.rs + native strategy windows + GPU backtester | First-draft fixed-strategy simulation/optimization; ADR-135 defines the correctness-first StrategyQuant-parity architecture |
 
 ## Project Structure
 
@@ -131,7 +132,7 @@ TyphooN-Terminal/
 │   │   │   ├── storage.rs          # Storage Manager
 │   │   │   ├── sync_status.rs      # Sync Status (per-broker %)
 │   │   │   ├── tool_windows.rs     # Indicator + analytical windows
-│   │   │   └── strategy_windows.rs # Strategy / backtest / optimizer
+│   │   │   └── strategy_windows.rs # First-draft strategy / backtest / optimizer UI
 │   │   └── gpu_compute.rs  # WGSL indicator shaders
 │   └── Cargo.toml
 ├── typhoon-engine/                 # Shared engine library
@@ -162,7 +163,7 @@ TyphooN-Terminal/
 ├── typhoon-research-ui/            # Research snapshot renderers (render/ segment modules, ADR-108) + packet formatter + window shell + packet section tree (ADR-125 Target 1)
 ├── typhoon-transpiler/             # Multi-language indicator transpiler + WASM/WGSL codegen
 └── docs/
-    ├── adr/                # Architecture Decision Records (111 + index; numbering has gaps)
+    ├── adr/                # Architecture Decision Records (112 + index; numbering has gaps)
     ├── API_KEYS.md
     ├── INDICATORS.md
     ├── PERFORMANCE.md

@@ -29,7 +29,7 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Order Placement** | Draggable SL/TP lines, 6 order types (market/bracket/limit/stop/stop-limit/trailing), auto lot calculation |
 | **Order Management** | Open positions panel with live P/L, trade history, cancel pending orders, smart partial close |
 | **Price Alerts** | Persistent price/indicator alerts with in-app state and configured Discord/Pushover/ntfy delivery |
-| **Backtester** | 5 strategies (SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev), equity curve, trade reports (Sharpe, drawdown, profit factor) |
+| **Backtester (first draft)** | 5 fixed bar-close strategies (SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev), equity curve, trade ledger, and summary metrics; ADR-135 defines the StrategyQuant-parity program |
 | **WebSocket Streaming** | Real-time trades/quotes via Alpaca WebSocket, Time & Sales |
 | **Options Chain** | Full Greeks, strike/expiry/bid/ask via Alpaca options API |
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
@@ -68,8 +68,8 @@ A native desktop trading terminal with full risk management and multi-timeframe 
 | **Pending Orders on Chart** | Open orders visualized as colored price lines |
 | **Data Window** | Fixed OHLCV + all indicator values at cursor position |
 | **Multi-Condition Alerts** | RSI > 70, KAMA crosses SMA200, Fisher > 0, dividend alerts |
-| **Walk-Forward Testing** | 70/30 in-sample/out-of-sample with auto-optimization |
-| **Monte Carlo** | 100K simulations for risk-of-ruin at 25/50/75% drawdown |
+| **Walk-Forward Testing (first draft)** | Fixed SMA 70/30 in-sample/out-of-sample windows; general multi-OOS, walk-forward matrix, and cross-check workflows are roadmap work |
+| **Monte Carlo Risk** | GPU portfolio-return simulations for risk-of-ruin/drawdown; strategy trade/data/execution perturbation tests are roadmap work in ADR-135 |
 | **Correlation Matrix** | Pairwise Pearson correlation heatmap from cached bars |
 | **Portfolio Breakdown** | Positions grouped by asset class with $ value/P&L |
 | **Drawing Properties** | Right-click drawings: color picker, line width, delete |
@@ -318,6 +318,26 @@ Chart path: SQLite TTBR cache → zstd decode → owned Rust bars → chart stat
 | [132](docs/adr/132-sl-tp-lines-active-chart-scope.md) | SL/TP Trade Lines Are Active-Chart-Scoped (Exact-Geometry Dragging) |
 | [133](docs/adr/133-command-palette-research-only.md) | Command Palette Is Research-Only |
 | [134](docs/adr/134-render-independent-background-pump.md) | Render-Independent Background Pump (Hidden-Window Sync) |
+| [135](docs/adr/135-strategyquant-feature-parity-program.md) | StrategyQuant Feature-Parity Program |
+
+---
+
+## Strategy Research Direction
+
+TyphooN's current backtester and optimizer are a useful **first-draft
+foundation**, not a mature strategy-generation lab. The target is practical
+user-workflow parity with StrategyQuant X where that improves this native
+Kraken + Alpaca terminal: visual strategy authoring, deterministic and
+execution-aware simulation, reproducible datasets/runs, generation and
+improvement, robust optimization/cross-checks, experiment databanks, deep
+analysis, portfolio construction, and automated research workflows.
+
+Correctness comes before search throughput. A CPU reference simulator, golden
+trade ledgers, no-look-ahead guarantees, explicit fill assumptions, and
+versioned run manifests must land before broad strategy generation or GPU-scale
+optimization is trusted. See
+[ADR-135](docs/adr/135-strategyquant-feature-parity-program.md) and the detailed
+[roadmap](docs/ROADMAP.md#phase-22-strategy-research-backtesting--generation-program).
 
 ---
 
@@ -332,7 +352,7 @@ Chart path: SQLite TTBR cache → zstd decode → owned Rust bars → chart stat
 | **SEC Filings** | Yes | Yes | Yes | No | No |
 | **Congressional Trades** | Yes | Yes | No | Yes | No |
 | **Harmonic Patterns** | 10 Carney | No | No | No | Community |
-| **Walk-Forward Optimizer** | Yes (5 strategies) | No | No | No | No |
+| **Walk-Forward Optimizer** | First-draft SMA 70/30; broad parity roadmap | No | No | No | No |
 | **Weekend Crypto Live** | Yes (60s polling) | No | No | No | Yes |
 | **Anomaly Scanner** | 4-dim (VaR+EV+ATR+SEC) | No | No | Options only | No |
 | **Storage Cost** | Free (local SQLite) | Free | $80-118/mo | $30-60/mo | $0-60/mo |

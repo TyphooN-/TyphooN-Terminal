@@ -63,9 +63,9 @@ is scheduled on `master`.
 ### Phase 6: Engine Integration
 - [x] Risk calculator (risk.rs: lot sizing, R:R)
 - [x] Margin monitor (margin.rs: margin level, max safe lots, protect urgency)
-- [x] Backtest engine (5 strategies: SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev)
-- [x] Optimizer (Strategy parameter optimizer — general grid search)
-- [x] Walk-forward optimizer (70/30 in-sample/out-of-sample, 5 strategies)
+- [x] First-draft backtest foundation: 5 fixed bar-close strategies (SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev), trade ledger, equity curve, and summary report
+- [x] First-draft optimizer: CPU SMA grid search plus fixed GPU SMA/NNFX parameter sweeps and Fast × Slow heatmap
+- [x] First-draft walk-forward: fixed 70/30 SMA optimization/validation windows; not yet a general multi-strategy or walk-forward-matrix implementation
 - [x] Seasonals (monthly return patterns from bar data)
 - [x] Volume Profile (POC, Value Area High/Low)
 - [x] SMA Outfit stack/trigger/distance/cross analysis (`SMA_INTELLIGENCE`; ADR-131/133)
@@ -209,3 +209,41 @@ is scheduled on `master`.
 - [x] General stock-split feed: bulk research scrape populates `research_stock_splits` via FMP + keyless Yahoo for every scraped symbol (ADR-122/123)
 - [x] SL/TP trade lines active-chart-scoped with exact painted-geometry dragging (ADR-132)
 - [x] SMA Outfit deterministic research window (`SMA_INTELLIGENCE`, ADR-131/133); historical correlation/ranking remains deferred
+
+### Phase 22: Strategy Research, Backtesting & Generation Program
+
+Target: practical user-workflow parity with StrategyQuant X where it fits the
+native Kraken + Alpaca terminal. The current backtester is the first draft, not
+completion evidence. See [ADR-135](adr/135-strategyquant-feature-parity-program.md)
+for the capability matrix, architecture, non-goals, and acceptance gates.
+
+**Simulation correctness and reproducibility (first prerequisite)**
+- [ ] Versioned strategy IR/AST and run manifest shared by GUI, CPU reference engine, persistence, and later accelerators
+- [ ] Deterministic event-driven simulator with golden trade-ledger fixtures, no-look-ahead checks, explicit OHLC ambiguity policy, and reproducible seeds
+- [ ] Pluggable execution models for bar-close, intrabar/tick replay, bid/ask spread, fees/commissions/funding/borrow, slippage/latency, sessions, order types, partial fills, and liquidity constraints
+- [ ] Multi-symbol/multi-timeframe clock synchronization, warm-up semantics, missing-data policy, corporate-action handling, and source-provenance controls
+- [ ] CPU/GPU equivalence gates before any strategy class uses GPU optimization results
+
+**Strategy authoring, generation, and experiments**
+- [ ] Native visual strategy builder over typed indicators, price/candle blocks, entries, exits, filters, sizing, and trade-management nodes
+- [ ] Templates with constrained/random placeholders; reusable custom blocks and strategy fragments
+- [ ] Deterministic random/grid/evolutionary search foundation, then measured Bayesian/local-search alternatives where useful
+- [ ] Structural hashing/deduplication, novelty controls, complexity penalties, invalid-strategy rejection, resumable seeded runs, and bounded candidate queues
+- [ ] Strategy databank/experiment store with immutable dataset fingerprints, lineage, tags, filters, comparisons, reruns, and result-schema migration
+- [ ] Existing-strategy improver that can lock or mutate selected subtrees without changing unrelated behavior
+
+**Optimization and anti-overfitting**
+- [ ] General parameter optimizer with constraints, multi-objective ranking/Pareto views, resumable jobs, and parameter-surface visualization
+- [ ] Multiple independent OOS segments, anchored/rolling walk-forward analysis, walk-forward optimization, matrix/cluster views, and degradation gates
+- [ ] Monte Carlo families for trade-order/skip, parameter, price/data, spread/slippage/latency, and bootstrap perturbations with confidence bands
+- [ ] Parameter plateaus, System Parameter Permutation, optimization profiles, cross-market/timeframe/source validation, and automatic problem detection
+- [ ] Multiple-testing controls, untouched final holdout/quarantine datasets, minimum-sample gates, and explicit research-to-paper promotion rules
+
+**Analysis, portfolios, and automation**
+- [ ] Versioned metric catalog: MAE/MFE, exposure, stagnation, daily/monthly distributions, tail risk, recovery/return-to-drawdown ratios, stability, uncertainty, and diagnostic warnings
+- [ ] What-if, money-management, and equity-control simulations from a shared trade-ledger model
+- [ ] Portfolio backtesting with correlated strategies, shared capital/margin, concurrent fills, portfolio stress/Monte Carlo, and fit-to-portfolio search
+- [ ] Visual trade replay with indicators/orders/fills plus report, comparison, heatmap, distribution, and parameter-surface views
+- [ ] Persisted workflow DAGs chaining build, retest, optimize, robustness, filter, rank, portfolio, and export/report steps with cancellation, checkpoints, bounded resources, and audit logs
+- [ ] Safe extension boundary for custom indicators, blocks, metrics, simulations, and optional external analysis without allowing plugins to bypass deterministic run manifests
+- [ ] Paper/shadow validation and drift monitoring before any generated strategy can become eligible for live execution; no automatic live deployment

@@ -1,8 +1,12 @@
 # ADR-038: GPU Strategy Optimizer & MQL5 Export Pipeline
 
-> **⚠️ Partially superseded (2026-06).** The MQL5 *export* pipeline was removed (the `typhoon-transpiler` transpiler and GPU strategy optimizer remain). See [ADR-111](111-broker-scope-reduction-kraken-alpaca-only.md).
+> **Historical foundation; partially superseded.** ADR-111 removed the MT5/MQL5
+> export target in 2026-06. ADR-135 now governs the broader strategy research,
+> backtesting, generation, robustness, and portfolio program. The fixed CPU/GPU
+> backtester and optimizer described here are a first-draft foundation, not a
+> completed StrategyQuant-class system.
 
-**Status:** Implemented
+**Status:** Partially implemented / superseded by [ADR-135](135-strategyquant-feature-parity-program.md)
 **Date:** 2026-03-26
 
 ## Context
@@ -16,7 +20,31 @@ TyphooN-Terminal already has:
 - MQL5 parser/frontend inside the `typhoon-transpiler` crate
 - DARWIN analytics proving GPU batch computation works at scale (50K series)
 
-## Decision
+## Current implementation reality (2026-07-27)
+
+The active implementation is deliberately narrower than the original proposal:
+
+- `typhoon-engine/src/core/backtest.rs` provides five fixed bar-close strategies,
+  a minimal `Strategy` callback, trade/equity/report output, bar-by-bar replay,
+  SMA-cross grid search, and a fixed 70/30 SMA walk-forward routine.
+- `typhoon-native/src/app/strategy_windows.rs` runs those strategies against the
+  active chart, displays reports/trades/equity, exposes CPU/GPU parameter search,
+  a two-parameter heatmap, and a walk-forward summary.
+- `typhoon-native/src/gpu_compute/backtester.rs` and the inlined WGSL shaders
+  accelerate fixed SMA/NNFX parameter combinations. They do not compile an
+  arbitrary strategy graph, model realistic order execution, generate strategy
+  populations, persist experiments, or run the full robustness catalog.
+- The presence of separate robustness, walk-forward, and Monte Carlo pipelines
+  is not proof that the complete original workflow is wired into the product.
+- The transpiler parses indicator languages and can emit WASM/WGSL, but it is not
+  the canonical strategy DSL/IR or no-code strategy builder proposed below.
+
+The remainder of this ADR records the original direction. Unchecked work and
+performance examples are historical design intent, not shipped capability or
+measured evidence. ADR-135 replaces the broad completion plan with staged,
+testable acceptance gates.
+
+## Original decision
 
 Build a GPU-accelerated strategy optimizer that tests millions of parameter combinations in seconds, with OMS-style robustness analysis, and exports optimized strategies to MQL5 for final validation.
 
@@ -125,15 +153,14 @@ Build a GPU-accelerated strategy optimizer that tests millions of parameter comb
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Performance Comparison
+### Performance evidence
 
-| Scenario | MT5 Tester | TyphooN GPU | Speedup |
-|----------|-----------|-------------|---------|
-| 100 param combos × 5K bars | ~5 min | ~0.5s | 600× |
-| 10K param combos × 5K bars | ~8 hours | ~5s | 5,760× |
-| 1M param combos × 5K bars | ~33 days | ~8 min | 5,760× |
-| Walk-forward (10 windows × 10K combos) | ~80 hours | ~50s | 5,760× |
-| Monte Carlo (1000 shuffles × best combo) | ~50 min | ~1s | 3,000× |
+The original revision contained projected MT5-versus-GPU speedup figures. They
+were not backed by a checked-in reproducible benchmark and are therefore not
+retained as product claims. Future performance acceptance requires a versioned
+dataset, strategy definition, precision/execution mode, hardware description,
+warm-up policy, result checksum, and CPU-reference comparison. Throughput never
+substitutes for simulation parity.
 
 ### Strategy DSL
 
@@ -242,54 +269,58 @@ fn eval_strategy(@builtin(global_invocation_id) id: vec3<u32>) {
 // Spike (neighbors much worse) → low score
 ```
 
-### Implementation Phases
+### Implementation status of the original phases
 
-**Phase 1: Core Optimizer**
-- Strategy definition struct (Rust, not DSL yet)
-- GPU indicator pre-computation for parameter ranges
-- GPU strategy evaluation shader
-- Results readback and ranking
+**Core optimizer — first-draft foundation**
+- [x] Fixed CPU SMA grid search and fixed GPU SMA/NNFX parameter evaluation.
+- [x] Result readback, ranking, and a Fast × Slow heatmap.
+- [ ] Canonical strategy definition/IR shared by CPU, GPU, GUI, and persistence.
+- [ ] General indicator precomputation and arbitrary strategy-graph evaluation.
 
-**Phase 2: Robustness Analysis** *(Implemented)*
-- [x] Neighbor stability scoring — ROBUSTNESS_SHADER (GPU parallel)
-- [x] Walk-forward validation — WALK_FORWARD_SHADER (GPU rolling windows)
-- [x] Monte Carlo trade shuffling — MONTE_CARLO_SHADER (GPU parallel)
-- 3D parameter surface visualization — deferred (egui_plot is 2D only)
+**Robustness analysis — partial foundation**
+- [x] Fixed SMA 70/30 walk-forward analysis exposed in the native optimizer.
+- [x] GPU result shape and shader foundations for robustness/Monte Carlo work.
+- [ ] Proven end-to-end neighbor stability, trade-order Monte Carlo, parameter/data
+  perturbation, multi-OOS, walk-forward matrix, and automatic rejection workflow.
+- [ ] Reproducible robustness reports with deterministic seeds and versioned metrics.
 
-**Phase 3: Strategy DSL** *(Implemented via MQL5 compiler)*
-- [x] Parser for strategy definition language — MQL5 parser (pest grammar)
-- [x] Compile DSL → GPU compute shader dispatch — WGSL codegen backend
-- Visual strategy builder in egui — deferred (text-based MQL5/PineScript input works)
+**Strategy language and builder — missing**
+- [ ] Versioned strategy IR/AST with typed blocks and validation.
+- [ ] Visual no-code strategy builder and template/random-placeholder workflow.
+- [ ] CPU reference interpreter and optional GPU lowering from the same semantics.
 
-**Phase 4: MQL5 Export** *(Implemented, then removed 2026-06 — see banner)*
-- [x] Generate .mqh/.mq5/.mq4 indicator source — mql5_export module + full 10-language transpiler matrix
-- ~~Generate EA source with optimal parameters~~ — moot; the MQL5 export pipeline was removed with the MT5 scope reduction (ADR-111)
-- ~~Export .set files for MT5 tester~~ — moot (same removal)
-- ~~Validation report generation~~ — moot (same removal)
+The MQL/Pine/etc. transpiler is useful adjacent language tooling, but does not
+satisfy these strategy-model requirements.
 
-**Phase 5: OMS Feature Parity**
-- Parameter sensitivity heatmaps
-- Cluster analysis of profitable regions
-- Multi-objective optimization (Sharpe + stability + low DD)
-- Strategy portfolio optimization (multiple strategies, correlation-aware)
+**MQL5 export — removed from active scope**
+- Historical export work was removed with MT5 in ADR-111. It is not a parity gate
+  for the active Kraken + Alpaca native product.
+
+**Broad strategy-research parity**
+- Superseded by ADR-135, including generation/search, execution realism, robustness,
+  databanks, analysis, portfolios, workflow automation, and extension boundaries.
 
 ## Consequences
 
 ### Positive
-- 1000-5000× faster than MT5 Strategy Tester
-- Built-in robustness analysis (what OMS charges for separately)
-- Seamless MQL5 export for production deployment
-- Same indicator code runs on GPU (optimization) and MT5 (production)
-- GPU cost: zero (user's existing graphics card)
+- Establishes a native CPU/GPU experimentation foundation inside the terminal.
+- Reuses locally cached bars and the existing indicator/GPU infrastructure.
+- Keeps accelerated parameter sweeps available while the reference simulator and
+  general strategy model are built correctly.
 
 ### Negative
-- Strategy evaluation on GPU requires deterministic floating-point (f32 vs MT5's f64)
-- Complex strategies with many branches are harder to express in WGSL
-- MT5 tick-by-tick execution effects (slippage, requotes) can't be simulated on GPU
-- Strategy DSL is another language to maintain
+- Current fixed shaders and bar-close engine can create false confidence if
+  presented as execution-realistic or general-purpose.
+- GPU `f32` and CPU `f64` paths can diverge without golden parity vectors.
+- Complex strategies and realistic event/order semantics are harder to lower to WGSL.
+- A strategy IR, simulator, experiment store, and visual builder add substantial
+  long-lived schema and compatibility obligations.
 
 ### Mitigations
-- f32 vs f64: final MT5 validation catches any precision-related divergence
-- Complex branching: use CPU fallback for strategies that exceed GPU shader complexity
-- Execution effects: GPU optimizer finds the parameter region, MT5 validates execution realism
-- DSL maintenance: DSL compiles to both WGSL and MQL5, so it's the single source of truth
+- Treat a deterministic CPU event-driven simulator as the semantic reference.
+- Require golden trade ledgers and CPU/GPU tolerance checks before acceleration is
+  accepted for a strategy class.
+- Make execution assumptions explicit and reject unsupported modes rather than
+  silently approximating them.
+- Version strategy, dataset, metric, and run manifests so results are reproducible.
+- Follow ADR-135's staged correctness-first acceptance gates.
