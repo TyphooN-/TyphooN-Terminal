@@ -722,6 +722,11 @@ pub async fn run_kraken_fetch_task(
         format!("Kraken {} {}: fetching recent window...", symbol, timeframe)
     };
     let _ = broker_msg_tx.send(BrokerMsg::OrderResult(log_msg));
+    // False only for transient failures — the provider request or the cache write
+    // blew up, so this attempt learned nothing and must not keep the queue-time
+    // cooldown armed (3.5 days on 1Week). "Up to date", a stored window and a
+    // definitive empty window are all successful answers.
+    let mut success = true;
     match crate::core::kraken::fetch_binance_klines(&client, &symbol, &timeframe, start_ms, now_ms)
         .await
     {
@@ -773,6 +778,7 @@ pub async fn run_kraken_fetch_task(
                         }
                     }
                     Err(e) => {
+                        success = false;
                         let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
                             "Kraken cache write failed for {} {}: {}",
                             symbol, timeframe, e
@@ -782,6 +788,7 @@ pub async fn run_kraken_fetch_task(
             }
         }
         Err(e) => {
+            success = false;
             let reason = format!("Kraken fetch failed for {} {}: {}", symbol, timeframe, e);
             if reason.contains("Unsupported symbol") || reason.contains("Unknown asset pair") {
                 let _ = broker_msg_tx.send(BrokerMsg::Unresolvable {
@@ -795,7 +802,11 @@ pub async fn run_kraken_fetch_task(
         }
     }
 
-    let _ = broker_msg_tx.send(BrokerMsg::KrakenFetchSettled { symbol, timeframe });
+    let _ = broker_msg_tx.send(BrokerMsg::KrakenFetchSettled {
+        symbol,
+        timeframe,
+        success,
+    });
 }
 
 pub async fn run_kraken_futures_fetch_task(

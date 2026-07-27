@@ -200,7 +200,14 @@ pub async fn handle_bar_fetch_command(
                 let symbol = symbol.clone();
                 tokio::spawn(async move {
                     let Ok(_permit) = permits.acquire_owned().await else {
-                        let _ = msg_tx.send(BrokerMsg::KrakenFetchSettled { symbol, timeframe });
+                        // Semaphore closed: nothing was fetched, so settle as a
+                        // failure and let the cell retry instead of sitting out a
+                        // full queue cooldown for an attempt that never ran.
+                        let _ = msg_tx.send(BrokerMsg::KrakenFetchSettled {
+                            symbol,
+                            timeframe,
+                            success: false,
+                        });
                         return;
                     };
                     typhoon_engine::broker::bar_fetch::run_kraken_fetch_task(

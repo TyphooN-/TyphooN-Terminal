@@ -14,10 +14,11 @@ impl TyphooNApp {
                 timeframe,
                 success,
             } => self.handle_alpaca_fetch_settled(symbol, timeframe, success),
-            BrokerMsg::KrakenFetchSettled { symbol, timeframe } => {
-                self.settle_market_data_fetch("kraken", &symbol, &timeframe);
-                true
-            }
+            BrokerMsg::KrakenFetchSettled {
+                symbol,
+                timeframe,
+                success,
+            } => self.handle_kraken_fetch_settled(symbol, timeframe, success),
             BrokerMsg::KrakenBackfillComplete {
                 symbol,
                 timeframe,
@@ -204,6 +205,22 @@ impl TyphooNApp {
             return true;
         }
         false
+    }
+
+    fn handle_kraken_fetch_settled(
+        &mut self,
+        symbol: String,
+        timeframe: String,
+        success: bool,
+    ) -> bool {
+        self.settle_market_data_fetch("kraken", &symbol, &timeframe);
+        // The queue-time cooldown is stamped at dispatch, before the provider has
+        // answered. On a transient failure nothing was learned, so release it: a
+        // W1 cell would otherwise stay unreachable for 3.5 days after one HTTP
+        // blip. Tombstones (Unresolvable) and backfill markers are unaffected —
+        // they settle on their own messages and still gate the re-queue.
+        self.note_fetch_settlement_cooldown("kraken", &symbol, &timeframe, success);
+        true
     }
 
     fn handle_kraken_backfill_complete(

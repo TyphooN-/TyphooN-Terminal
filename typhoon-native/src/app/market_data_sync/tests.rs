@@ -487,3 +487,133 @@ fn no_data_reconcile_drops_only_tombstones_contradicted_by_cached_bars() {
     left.sort_unstable();
     assert_eq!(left, vec!["YYYY:1Hour", "ZZZZ:30Min"]);
 }
+
+#[test]
+fn kraken_spot_sync_timeframes_drops_non_native_monthly() {
+    let enabled = vec![
+        "1Month".to_string(),
+        "1Week".to_string(),
+        "1Day".to_string(),
+        "15Min".to_string(),
+    ];
+    assert_eq!(
+        kraken_spot_sync_timeframes(&enabled),
+        vec!["1Week".to_string(), "1Day".to_string(), "15Min".to_string()],
+        "Kraken Spot has no monthly interval"
+    );
+    // A monthly-only enable set leaves the lane with nothing to do, which the
+    // scheduler treats as "return 0" rather than dispatching rejects.
+    assert!(kraken_spot_sync_timeframes(&["1Month".to_string()]).is_empty());
+    assert!(kraken_spot_sync_timeframes(&[]).is_empty());
+}
+
+#[test]
+fn kraken_spot_enabled_monthly_cannot_wedge_native_timeframe_selection() {
+    let now_s = 1_700_000_000i64;
+    let symbols = vec!["XBTUSD".to_string(), "ETHUSD".to_string()];
+    let enabled = vec![
+        "1Month".to_string(),
+        "1Week".to_string(),
+        "1Day".to_string(),
+    ];
+    // Cold Kraken cache: every cell classifies Missing, monthly included.
+    let state_map: std::collections::HashMap<(String, String), SyncCacheState> =
+        std::collections::HashMap::new();
+    let focus_symbols = std::collections::HashSet::new();
+    let no_data_keys = std::collections::HashSet::new();
+    let backfill_complete = std::collections::HashMap::new();
+    let pending = std::collections::HashSet::new();
+    let never_blocked = |_: &str, _: &str| false;
+
+    let select = |timeframes: &[String], cursor: &mut usize| {
+        select_alpaca_sync_workset_rotating(
+            &symbols,
+            timeframes,
+            &state_map,
+            &focus_symbols,
+            &no_data_keys,
+            &backfill_complete,
+            &pending,
+            8,
+            0,
+            64,
+            cursor,
+            now_s,
+            false,
+            kraken_sync_target_bars,
+            &never_blocked,
+        )
+    };
+
+    // The defect: strict high-TF-first spends the whole batch on 1Month, and
+    // `queue_kraken_fetch` rejects every one of those candidates on exactly this
+    // gate — so the lane dispatches nothing and never descends to 1Week/1Day.
+    let mut cursor = 0usize;
+    let wedged = select(&enabled, &mut cursor);
+    assert!(!wedged.is_empty());
+    assert!(
+        wedged.iter().all(|c| c.timeframe == "1Month"),
+        "unfiltered selection is monopolised by monthly: {:?}",
+        wedged.iter().map(|c| &c.timeframe).collect::<Vec<_>>()
+    );
+    assert!(!kraken_spot_native_timeframe("1Month"));
+
+    // The fix: filter to native intervals before selecting, and the same cold
+    // catalog yields reachable 1Week work on the very first pass.
+    let mut cursor = 0usize;
+    let selected = select(&kraken_spot_sync_timeframes(&enabled), &mut cursor);
+    assert!(!selected.is_empty(), "native gaps must still be selected");
+    assert!(
+        selected
+            .iter()
+            .all(|c| kraken_spot_native_timeframe(&c.timeframe)),
+        "every candidate must be dispatchable by queue_kraken_fetch"
+    );
+    assert!(
+        selected.iter().any(|c| c.timeframe == "1Week"),
+        "highest reachable timeframe leads the descent"
+    );
+}
+
+#[test]
+fn failed_kraken_settlement_releases_queue_cooldown_but_success_keeps_it() {
+    let now_s = 1_700_000_000i64;
+    let mut stamps = std::collections::HashMap::new();
+    let armed = |stamps: &std::collections::HashMap<String, i64>, at: i64| {
+        fetch_queue_cooldown_active(stamps, "kraken", "XBTUSD", "1Week", at)
+    };
+    let queue = |stamps: &mut std::collections::HashMap<String, i64>| {
+        stamps.insert(fetch_queue_cooldown_key("kraken", "XBTUSD", "1Week"), now_s);
+    };
+
+    // Dispatch arms a half-period cooldown: 3.5 days on 1Week.
+    queue(&mut stamps);
+    assert!(armed(&stamps, now_s + 60));
+    assert!(armed(&stamps, now_s + 302_399));
+    assert!(!armed(&stamps, now_s + 302_400));
+
+    // Transient failure (HTTP/cache/permit): the attempt learned nothing, so the
+    // cell must not sit out 3.5 days before the selector can retry it.
+    apply_fetch_settlement_to_queue_cooldown(&mut stamps, "kraken", "XBTUSD", "1Week", false);
+    assert!(
+        !armed(&stamps, now_s + 60),
+        "failed attempt must not suppress retry"
+    );
+
+    // A successful attempt keeps the normal cooldown — no refetch storm.
+    queue(&mut stamps);
+    apply_fetch_settlement_to_queue_cooldown(&mut stamps, "kraken", "XBTUSD", "1Week", true);
+    assert!(armed(&stamps, now_s + 60));
+
+    // Clearing is scoped to the settled key: other cells keep their cooldowns.
+    stamps.insert(fetch_queue_cooldown_key("kraken", "ETHUSD", "1Week"), now_s);
+    apply_fetch_settlement_to_queue_cooldown(&mut stamps, "kraken", "XBTUSD", "1Week", false);
+    assert!(!armed(&stamps, now_s + 60));
+    assert!(fetch_queue_cooldown_active(
+        &stamps,
+        "kraken",
+        "ETHUSD",
+        "1Week",
+        now_s + 60
+    ));
+}

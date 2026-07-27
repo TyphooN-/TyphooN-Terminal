@@ -2843,10 +2843,14 @@ pub enum BrokerMsg {
         success: bool,
     },
     /// Kraken fetch finished (successfully or not) so UI-side in-flight dedupe
-    /// can be released even when no new bars were written.
+    /// can be released even when no new bars were written. `success` is false only
+    /// for transient failures (HTTP error, cache-write error, closed permit
+    /// semaphore) — i.e. attempts that never got a provider answer, so the
+    /// queue-time cooldown they armed at dispatch must be released for retry.
     KrakenFetchSettled {
         symbol: String,
         timeframe: String,
+        success: bool,
     },
     Unresolvable {
         broker: String,

@@ -249,6 +249,74 @@ pub(super) fn is_intraday_equity_sync_tf(tf: &str) -> bool {
     matches!(tf, "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour")
 }
 
+/// Key for a lane's queue-time cooldown stamp in `fetch_last_queued_ts`.
+pub(super) fn fetch_queue_cooldown_key(source: &str, symbol: &str, timeframe: &str) -> String {
+    format!("{}:{}:{}", source, symbol, timeframe)
+}
+
+/// True if this source/symbol/tf was queued recently enough that re-queueing now
+/// would just hit the same cache slot before a new bar could exist. Uses ~half the
+/// TF period so we still refresh well within one bar's worth of time during market
+/// hours. Pure half of [`TyphooNApp::is_fetch_on_cooldown`].
+pub(super) fn fetch_queue_cooldown_active(
+    stamps: &std::collections::HashMap<String, i64>,
+    source: &str,
+    symbol: &str,
+    timeframe: &str,
+    now_s: i64,
+) -> bool {
+    let Some(period_s) = sync_timeframe_period_secs(timeframe) else {
+        return false;
+    };
+    let Some(last) = stamps
+        .get(&fetch_queue_cooldown_key(source, symbol, timeframe))
+        .copied()
+    else {
+        return false;
+    };
+    let cooldown = (period_s / 2).max(30);
+    now_s.saturating_sub(last) < cooldown
+}
+
+/// Apply a settled fetch's outcome to the queue-time cooldown map.
+///
+/// The stamp is written at *dispatch* time, before the provider has answered, so a
+/// transient failure (HTTP error, cache-write error, closed permit semaphore) would
+/// otherwise keep the cell suppressed for half a TF period — 3.5 days on 1Week —
+/// even though nothing was fetched. A failed attempt therefore releases its stamp
+/// so the cell is eligible again as soon as the selector reaches it; a successful
+/// one keeps the normal cooldown. Nothing else is touched: pending cleanup,
+/// no-data tombstones and backfill markers settle on their own paths and still
+/// gate the re-queue.
+pub(super) fn apply_fetch_settlement_to_queue_cooldown(
+    stamps: &mut std::collections::HashMap<String, i64>,
+    source: &str,
+    symbol: &str,
+    timeframe: &str,
+    success: bool,
+) {
+    if success {
+        return;
+    }
+    stamps.remove(&fetch_queue_cooldown_key(source, symbol, timeframe));
+}
+
+/// The enabled timeframes Kraken Spot can actually fetch, in the caller's order.
+///
+/// Kraken's public OHLC endpoint has no monthly interval, so `queue_kraken_fetch`
+/// rejects `1Month` outright. Feeding it to the strict high-TF-first selector is
+/// therefore a wedge: monthly cells read Missing forever, the selector spends the
+/// whole batch on them, every candidate is dropped at dispatch, and the descent to
+/// the reachable 1Week..15Min gaps never happens. Filter before selecting so the
+/// lane only ever competes over cells it can dispatch.
+pub(super) fn kraken_spot_sync_timeframes(enabled: &[String]) -> Vec<String> {
+    enabled
+        .iter()
+        .filter(|tf| normalize_sync_timeframe_key(tf).is_some_and(kraken_spot_native_timeframe))
+        .cloned()
+        .collect()
+}
+
 /// The `slice` oldest no-data tombstones marked at or before `cutoff_s`, oldest
 /// first. Pure half of [`TyphooNApp::rotate_alpaca_no_data_revalidation_slice`]:
 /// picks which permanently-skipped cells get one more chance this rotation.
@@ -2444,22 +2512,38 @@ impl TyphooNApp {
     /// Uses ~half the TF period as the cooldown so we still refresh well within
     /// one bar's worth of time during market hours.
     pub(super) fn is_fetch_on_cooldown(&self, source: &str, symbol: &str, timeframe: &str) -> bool {
-        let Some(period_s) = sync_timeframe_period_secs(timeframe) else {
-            return false;
-        };
-        let key = format!("{}:{}:{}", source, symbol, timeframe);
-        let Some(last) = self.fetch_last_queued_ts.get(&key).copied() else {
-            return false;
-        };
-        let now_s = chrono::Utc::now().timestamp();
-        let cooldown = (period_s / 2).max(30);
-        now_s.saturating_sub(last) < cooldown
+        fetch_queue_cooldown_active(
+            &self.fetch_last_queued_ts,
+            source,
+            symbol,
+            timeframe,
+            chrono::Utc::now().timestamp(),
+        )
     }
 
     pub(super) fn mark_fetch_queued(&mut self, source: &str, symbol: &str, timeframe: &str) {
-        let key = format!("{}:{}:{}", source, symbol, timeframe);
-        self.fetch_last_queued_ts
-            .insert(key, chrono::Utc::now().timestamp());
+        self.fetch_last_queued_ts.insert(
+            fetch_queue_cooldown_key(source, symbol, timeframe),
+            chrono::Utc::now().timestamp(),
+        );
+    }
+
+    /// Fold a settled fetch's outcome into the queue-time cooldown map. See
+    /// [`apply_fetch_settlement_to_queue_cooldown`].
+    pub(super) fn note_fetch_settlement_cooldown(
+        &mut self,
+        source: &str,
+        symbol: &str,
+        timeframe: &str,
+        success: bool,
+    ) {
+        apply_fetch_settlement_to_queue_cooldown(
+            &mut self.fetch_last_queued_ts,
+            source,
+            symbol,
+            timeframe,
+            success,
+        );
     }
 
     /// Refresh `cached_alpaca_no_data_workset` in place: the merged set both
@@ -2818,7 +2902,9 @@ impl TyphooNApp {
         if !self.kraken_enabled || symbols.is_empty() {
             return 0;
         }
-        let timeframes = self.enabled_standard_sync_timeframes();
+        // Native intervals only: an enabled 1Month would otherwise monopolise the
+        // strict high-TF-first batch with candidates `queue_kraken_fetch` rejects.
+        let timeframes = kraken_spot_sync_timeframes(&self.enabled_standard_sync_timeframes());
         if timeframes.is_empty() {
             return 0;
         }
