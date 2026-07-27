@@ -47,6 +47,126 @@ fn price_view_geometry_round_trips_linear_and_log() {
     }
 }
 
+/// Zooming out past one pixel per bar must not paint outside the price pane.
+///
+/// `ChartCamera` lets `bars_visible` reach `data_len`, so a full-history
+/// zoom-out puts far more slots in the viewport than the pane has pixels. The
+/// painted viewport has to stay exactly `chart_rect.width()` wide and keep
+/// agreeing with `ChartCamera::bar_from_x` (which anchors mouse-centred zoom);
+/// forcing a 1px slot width instead painted a viewport ~10x wider than the
+/// pane, spilling candles over the price axis and leaving the newest bar —
+/// and the zoom anchor — thousands of bars off target.
+#[test]
+fn dense_zoom_out_keeps_painted_viewport_inside_the_price_pane() {
+    use crate::state::ChartState;
+    use crate::types::{Bar, Timeframe};
+
+    let chart_rect = egui::Rect::from_min_size(egui::pos2(12.0, 30.0), egui::vec2(1200.0, 500.0));
+    let data_len = 12_000usize;
+    let mut chart = ChartState::new("TEST", Timeframe::D1);
+    chart.bars = (0..data_len)
+        .map(|i| Bar {
+            ts_ms: 1_600_000_000_000 + i as i64 * 86_400_000,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.5,
+            volume: 1.0,
+        })
+        .collect();
+    chart.camera.on_data_len_changed(0, data_len);
+    chart.sync_camera_to_legacy();
+
+    // Scroll-wheel zoom-out at the pane's mid-point until the camera clamps to
+    // the full history — the "zoomed out too far" gesture.
+    let mid_local_x = chart_rect.width() * 0.5;
+    for _ in 0..200 {
+        let target_bar = chart.bar_from_x(mid_local_x, chart_rect.width());
+        chart.zoom_chart_bars_around(1.08, target_bar.max(0.0));
+    }
+
+    let (start_idx, end_idx, first_bar_slot, visible_slot_count) = chart.visible_slot_window();
+    assert!(
+        visible_slot_count >= data_len,
+        "camera should have zoomed out to the whole history; slots={visible_slot_count}"
+    );
+    assert!(
+        (visible_slot_count as f32) > chart_rect.width(),
+        "regression needs more slots than pane pixels"
+    );
+
+    let (bar_w, data_left) =
+        super::chart_slot_geometry(chart_rect, first_bar_slot, visible_slot_count);
+
+    assert!(
+        bar_w.is_finite() && bar_w > 0.0,
+        "slot width must stay finite and positive; bar_w={bar_w}"
+    );
+    // The whole virtual viewport — not just the data slice — has to fit the pane.
+    let painted_right = data_left + visible_slot_count as f32 * bar_w;
+    assert!(
+        painted_right <= chart_rect.right() + 0.5,
+        "painted viewport right {painted_right} overflows pane right {}",
+        chart_rect.right()
+    );
+
+    let geometry = super::PriceViewGeometry {
+        chart_rect,
+        price_min: 99.0,
+        price_max: 101.0,
+        log_scale: false,
+        data_left,
+        bar_w,
+        start_idx,
+    };
+    // Both edges of the real data slice paint inside the pane.
+    let newest_x = geometry.bar_to_x(end_idx.saturating_sub(1));
+    let oldest_x = geometry.bar_to_x(start_idx);
+    assert!(
+        oldest_x >= chart_rect.left() - 0.5 && newest_x <= chart_rect.right() + 0.5,
+        "data slice paints outside the pane: oldest={oldest_x} newest={newest_x} pane=[{}, {}]",
+        chart_rect.left(),
+        chart_rect.right()
+    );
+
+    // Painted geometry and the interaction camera must resolve the same bar, or
+    // mouse-centred zoom anchors somewhere the user is not pointing at.
+    for frac in [0.0_f32, 0.25, 0.5, 0.75, 0.99] {
+        let x = chart_rect.left() + chart_rect.width() * frac;
+        let camera_bar = chart.bar_from_x(x - chart_rect.left(), chart_rect.width());
+        let painted_bar = geometry.x_to_bar_f(x) + 0.5; // x_to_bar_f is candle-centre based
+        assert!(
+            (camera_bar - painted_bar).abs() <= 1.0,
+            "camera/painted bar disagree at frac={frac}: camera={camera_bar} painted={painted_bar}"
+        );
+    }
+
+    // Decimation is pixel-aware: never more than ~2 drawn samples per painted
+    // pixel of the span the bars actually occupy.
+    let painted_span = (end_idx - start_idx) as f32 * bar_w;
+    let step = super::chart_render_sample_step(end_idx - start_idx, painted_span);
+    let drawn = (end_idx - start_idx).div_ceil(step);
+    assert!(
+        drawn as f32 <= painted_span.max(1.0) * 2.0 + 1.0,
+        "overdraw: {drawn} samples across {painted_span}px"
+    );
+}
+
+/// Degenerate panes (window smaller than the price axis) must not produce
+/// non-finite or negative slot geometry.
+#[test]
+fn slot_geometry_stays_finite_for_degenerate_panes() {
+    for width in [0.0_f32, -40.0] {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+        let (bar_w, data_left) = super::chart_slot_geometry(rect, 0.0, 500);
+        assert!(
+            bar_w.is_finite() && bar_w > 0.0,
+            "width={width} bar_w={bar_w}"
+        );
+        assert!(data_left.is_finite(), "width={width} data_left={data_left}");
+    }
+}
+
 #[test]
 fn format_size_is_compact_not_price_padded() {
     use super::time_axis::format_size;

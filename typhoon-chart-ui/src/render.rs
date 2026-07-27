@@ -98,6 +98,42 @@ impl PriceViewGeometry {
     }
 }
 
+/// Painted slot width used when the pane itself is degenerate (a window briefly
+/// narrower than the price axis, or a non-finite rect). It only keeps the
+/// geometry finite and invertible — every real pane divides its own width.
+const DEGENERATE_SLOT_W: f32 = 1.0 / 1024.0;
+
+/// Painted horizontal geometry for one frame: the width of a single camera slot
+/// and the x of the first *real* bar's slot left edge.
+///
+/// `visible_slot_count` is the camera's full virtual viewport (real bars plus
+/// the empty slots on either side), so the painted viewport is exactly
+/// `chart_rect.width()` wide however many slots it holds — sub-pixel slots
+/// included. `ChartCamera` lets `bars_visible` reach `data_len`, so clamping the
+/// slot width to a 1px minimum made the painted viewport `visible_slot_count`
+/// pixels wide as soon as slots outnumbered pane pixels: candles ran off the
+/// right of `chart_rect` across the price axis, `data_left` pushed the real bars
+/// out of view, and `bar_to_x`/`x_to_bar` stopped agreeing with
+/// `ChartCamera::bar_from_x`, which anchors mouse-centred zoom and the crosshair
+/// readout. Candles keep their own 1px floor (`candle_w`) so a sub-pixel slot
+/// still paints a visible bar; `chart_render_sample_step` keeps the sample count
+/// proportional to painted pixels.
+pub(crate) fn chart_slot_geometry(
+    chart_rect: egui::Rect,
+    first_bar_slot: f32,
+    visible_slot_count: usize,
+) -> (f32, f32) {
+    let n_slots = visible_slot_count.max(1) as f32;
+    let slot_w = chart_rect.width() / n_slots;
+    let bar_w = if slot_w.is_finite() && slot_w > 0.0 {
+        slot_w
+    } else {
+        DEGENERATE_SLOT_W
+    };
+    let data_left = chart_rect.left() + first_bar_slot * bar_w;
+    (bar_w, data_left)
+}
+
 /// Draw a single chart viewport into `rect` using `painter`.
 pub fn draw_chart(
     painter: &egui::Painter,
@@ -414,9 +450,7 @@ pub fn draw_chart(
     // `bars` is only the intersecting real-data slice. first_bar_slot offsets
     // the real bars inside the viewport so panning beyond either edge produces
     // real empty chart space instead of stretching/clamping candles.
-    let n_bars = visible_slot_count.max(1) as f32;
-    let bar_w = (chart_rect.width() / n_bars).max(1.0);
-    let data_left = chart_rect.left() + first_bar_slot * bar_w;
+    let (bar_w, data_left) = chart_slot_geometry(chart_rect, first_bar_slot, visible_slot_count);
     let price_geometry = PriceViewGeometry {
         chart_rect,
         price_min,
@@ -428,7 +462,15 @@ pub fn draw_chart(
     };
     let candle_w = (bar_w * 0.7).max(1.0);
     let half_body = candle_w * 0.5;
-    let render_step = chart_render_sample_step(bars.len(), chart_rect.width());
+    // Decimate against the pixels the data slice actually paints over, not the
+    // whole pane: with sub-pixel slots the slice can occupy a fraction of the
+    // width, and sampling per pane-pixel would emit many samples per painted
+    // pixel. The span never exceeds the pane, so this only ever removes
+    // indistinguishable samples.
+    let render_step = chart_render_sample_step(
+        bars.len(),
+        (bars.len() as f32 * bar_w).min(chart_rect.width()),
+    );
     let fill_half_w = (bar_w * render_step as f32 * 0.5).max(bar_w * 0.5);
 
     // ── session highlighting (Asian / London / New York) ────────────────────
