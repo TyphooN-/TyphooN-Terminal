@@ -203,6 +203,8 @@ is scheduled on `master`.
 
 ### Phase 21: Multi-Account, Session & Data-Integrity Follow-Through (2026-07)
 - [x] Multi-account broker pools: 4 uniform Alpaca slots (Key/Secret/Paper|Live each); successfully connected slots round-robin historical requests/batches independently of Primary, share canonical cache keys, and scale aggregate capacity + Kraken trading identities and account-primary cycling (ADR-130)
+- [x] Broker/account order targeting: every order mode defaults to Primary, KrakenPro works with every order-capable broker, and multi-account brokers expose a separate account selector with explicit account-id routing (ADR-130)
+- [ ] Complete authoritative non-primary Kraken balance/inventory and Alpaca buying-power snapshots so every account can use percentage/risk sizing without a proxy (ADR-130)
 - [x] Credentials persist to keyring on field edit (no Connect click required); SQLite `cred:` fallback
 - [x] TradeCopy via `TRADECOPY` console command; live order mirroring strictly opt-in per target account, never persisted
 - [x] Holiday-aware Kraken xStocks session status (rule-based NYSE holiday calendar, ADR-110)

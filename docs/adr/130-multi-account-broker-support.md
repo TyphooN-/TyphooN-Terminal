@@ -48,7 +48,15 @@ and after every primary switch.
 
 **Routing rules:**
 
-- *Trading / account data / streams* → the **primary** account only.
+- *Default trading / account data / streams* → the **primary** account. Every order mode,
+  including the broker-neutral `KrakenPro` compact-market mode, resets its destination to the
+  current primary broker/account when selected. The Trading panel may then explicitly select a
+  different connected, trade-enabled account. `BrokerCmd::ForAccount` carries that account id to
+  the runtime, which resolves the matching pool member and never silently falls back to Primary
+  when the requested account is missing or disconnected. The panel labels the target
+  `Broker / Account` and adds a separate Account dropdown only when the selected broker has
+  multiple eligible accounts.
+- *Primary account data / private streams* remain primary-owned.
   `SetPrimaryAccount` re-points it at runtime, re-emits account state
   (account, positions, open orders, recent fills), and **aborts + restarts the
   Alpaca trade-updates WS** so the old account's fills stop overwriting the
@@ -76,6 +84,19 @@ and after every primary switch.
 - Primary-account selection is independent of historical sync routing. Changing
   Primary changes trading/account-data/private-stream ownership, but does not
   pin bars to that account or remove other connected accounts from rotation.
+
+#### Explicit order-target limitations and remaining work (2026-07-27)
+
+- Alpaca exposes per-account roster equity but only the primary account has the complete live
+  buying-power/margin snapshot. Risk sizing for a selected secondary account therefore uses its
+  roster equity as a conservative ceiling; Alpaca remains the final buying-power authority.
+- Kraken currently emits detailed balance/inventory snapshots only for the pool primary. A
+  selected secondary Kraken account can place account-targeted Fixed or manually sized compact
+  market orders, but percentage-of-cash sizing, inventory-capped Sell, and balance-based risk
+  modes are deliberately unavailable rather than borrowing the primary account's balances.
+- Remaining work: add account-id-bearing Kraken balance/inventory messages and complete
+  per-account Alpaca buying-power snapshots. Once those authoritative snapshots exist, the same
+  Account dropdown can enable percentage/risk sizing and inventory-capped exits without proxies.
 - There is one scheduler work item and one canonical cache key per
   `(symbol,timeframe)`. Multiple accounts increase execution capacity; they do
   not create parallel duplicate copies of the same requested work.
