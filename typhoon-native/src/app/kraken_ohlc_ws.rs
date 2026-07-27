@@ -148,11 +148,10 @@ impl TyphooNApp {
         if intervals_min.is_empty() {
             return false;
         }
-        // xStock WS OHLC breadth is M1/M5-only. Higher xStock intervals have
-        // repeatedly returned no bars, so do not sweep them just to re-discover
-        // permanent holes every cadence. A pair re-arms automatically once its
-        // newest low-TF bar ages past the WS-fresh window, and a fully-fresh
-        // catalog yields no batch (the sweep stays idle).
+        // Sweep every enabled WS-native xStock interval. Kraken currently serves
+        // snapshots from 1Min through 1Week for supported tokenized symbols; the
+        // per-pair empty-streak backoff below still bounds genuinely unavailable
+        // symbol/interval combinations without suppressing an entire timeframe.
         let now_ms = chrono::Utc::now().timestamp_millis();
         let Some((interval_min, pairs)) = select_kraken_ws_snapshot_sweep_batch_high_first(
             &catalog,
@@ -191,7 +190,7 @@ impl TyphooNApp {
             pairs,
         });
         self.log.push_back(LogEntry::info(format!(
-            "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf} (M1/M5 native-only)"
+            "Kraken WS OHLC snapshot sweep: queued {pair_count} missing xStocks for {tf}"
         )));
         true
     }
@@ -237,14 +236,19 @@ pub(super) fn build_kraken_ws_subscribe_symbols_for_app(
     out.into_iter().collect()
 }
 
-const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 2] = [
+const KRAKEN_WS_SNAPSHOT_SWEEP_INTERVALS_HIGH_FIRST: [u32; 8] = [
+    10_080, // 1Week
+    1_440,  // 1Day
+    240,    // 4Hour
+    60,     // 1Hour
+    30,     // 30Min
+    15,     // 15Min
     5, // 5Min
     1, // 1Min
 ];
 
 const KRAKEN_WS_SNAPSHOT_SWEEP_BATCH_SIZE: usize = 250;
-/// Per-tick cap for the low timeframes (1Min/5Min) that carry xStocks native
-/// breadth (M1/M5-only per design; higher TFs via other lanes).
+/// Per-tick cap for the highest-volume low-timeframe snapshot waves.
 /// Raised 32→64 to clear remaining "missing" cells faster and help close the
 /// Kraken Spot reachable gap (observed 123 no-data + repeated small 1-32 pair
 /// queues late in run). Protected by 10s cadence, per-pair empty-streak backoff
@@ -301,15 +305,10 @@ fn enabled_kraken_ws_ohlc_snapshot_sweep_intervals(
         .collect()
 }
 
-/// Pick the snapshot-sweep batch for xStock WS-native M1/M5 breadth: the
-/// highest enabled native low timeframe that still has missing (non-WS-fresh)
+/// Pick the snapshot-sweep batch for xStock WS-native breadth: the highest
+/// enabled native timeframe that still has missing (non-WS-fresh)
 /// xStock pairs, capped at `batch_size`. `None` when every interval is fully
 /// fresh.
-///
-/// This deliberately excludes higher xStock intervals (15Min and above), which
-/// have been observed to stay empty and churn repeated no-data snapshot sweeps.
-/// Higher equity candles are handled by merged/assist lanes; Kraken WS snapshot
-/// breadth is reserved for native low-TF rows that the chart path can use.
 fn select_kraken_ws_snapshot_sweep_batch_high_first(
     catalog_symbols: &[String],
     intervals_high_first: &[u32],

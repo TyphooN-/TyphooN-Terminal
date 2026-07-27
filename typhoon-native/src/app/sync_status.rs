@@ -236,7 +236,7 @@ impl TyphooNApp {
                 if tradable_count > 0 {
                     ui.label(
                         egui::RichText::new(format!(
-                            "Kraken Equities (Tradable): {tradable_count} catalog symbols. This is the denominator for Merged plus Alpaca/Yahoo assist target lists; native Kraken Equities history rows stay demand-scoped."
+                            "Kraken Equities (Tradable): {tradable_count} reference-catalog symbols. This is the denominator for Merged plus Alpaca/Yahoo assist targets. Native Kraken rows cover the WS-tokenized subset from 1Min through 1Week; iapi depth repair remains demand-scoped."
                         ))
                         .color(AXIS_TEXT)
                         .small(),
