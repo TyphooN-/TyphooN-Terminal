@@ -1031,6 +1031,54 @@ Milestones are **gated by acceptance criteria and prerequisites, not by dates**.
 is not "done" until its gate passes; later milestones do not begin early on the assumption
 that an earlier gate will pass.
 
+### 13.1 Implementation ledger (2026-07-27)
+
+This ledger distinguishes landed foundations from milestone completion. The acceptance gates
+below remain authoritative; a checked foundation does **not** imply that its milestone is done.
+
+**Landed on `master`:**
+
+- `strategy_dataset.rs`: immutable content-addressed dataset manifests, canonical finite-float
+  identity, provenance, deterministic QA, and tamper verification.
+- `strategy_ir.rs`: canonical strategy IR, semantic/type/resource validation, content-addressed
+  strategy and execution identities, bounded persisted-artifact loading, and stable identity
+  vectors.
+- `strategy_interpreter.rs`: bounded scalar lowering from canonical IR into the simulator for
+  closed-bar fixed-unit strategies, deterministic built-in indicator state, three-valued
+  conditions, and explicit rejection of semantics the simulator cannot yet honor.
+- `strategy_simulator.rs`: bounded scalar multi-symbol event ordering, closed-bar decisions with
+  next-open market fills, explicit spread/slippage/commission accounting, no-look-ahead market
+  views, deterministic event/ledger JSON, and a stable golden-ledger digest.
+- `strategy_run.rs`: named dataset-input bindings and cross-artifact assembly that verifies the
+  strategy, execution config, run manifest, dataset manifests, and actual bar content before a
+  run can be treated as resolved.
+
+**Remaining before M0 is complete:**
+
+- Persist/materialize immutable dataset artifacts through the application storage boundary and
+  prove byte-identical restart recovery.
+- Add the tabular dataset inspector and off-render-thread build/QA workflow.
+- Complete the full seeded QA corpus, including spike, carry-bar, split-like level shift, and
+  versioned session/calendar diagnostics.
+
+**Remaining before M1 is complete:**
+
+- Extend canonical-IR interpretation beyond its current closed-bar/fixed-unit subset. Session and
+  news filters, account/equity-based sizing, custom executable indicators, protective orders,
+  non-closed-bar timing, and submission delay are deliberately rejected rather than approximated.
+- Implement stop/target same-bar ambiguity policy, gap-through-stop behavior, limit/stop order
+  lifecycles, latency, warm-up semantics, pre-close/forming-bar decisions, and synchronized
+  multi-timeframe visibility.
+- Bind reviewed Kraken and Alpaca fee schedules to versioned execution configurations rather than
+  relying only on generic cost models.
+- Expand the hand-computed golden corpus, add multi-thread determinism and cheating-strategy
+  canaries, prove zero-cost equivalence for all five legacy strategies, and assert ordered
+  0×/1×/2× cost sensitivity.
+
+**M2–M8:** no milestone gate has passed. Their remaining work is exactly the delivery and gate
+text below; optimization, generation, portfolio, automation, and lifecycle work must not bypass
+the unfinished M0/M1 correctness gates.
+
 ### M0 — Dataset foundation & QA
 **Prereqs:** none (builds on the existing cache/merge stack).
 **Delivers:** immutable content-addressed datasets + manifest + provenance (§5.1); dataset
