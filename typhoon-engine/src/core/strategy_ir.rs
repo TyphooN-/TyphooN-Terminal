@@ -1,0 +1,2646 @@
+//! Canonical versioned strategy IR and deterministic run identity — the
+//! ADR-135 §5.2 foundation slice for milestone M1.
+//!
+//! This module is deliberately narrow. It defines *what a strategy is* — data,
+//! not a Rust `impl` — plus the two identities a reproducible run needs beside
+//! it: the execution config and the run manifest. It contains **no
+//! interpreter, no simulator, no compiler, and no UI**; those are the bulk of
+//! M1 and are not started here. Nothing in this file should be read as M1
+//! being complete.
+//!
+//! ## The three artifacts
+//!
+//! | Artifact | Definition input | Identity |
+//! |---|---|---|
+//! | [`StrategyIr`] | [`StrategyDefinition`] | `strategy_id` |
+//! | [`StrategyExecutionConfig`] | [`ExecutionSettings`] | `config_id` |
+//! | [`StrategyRunManifest`] | [`RunBinding`] | `run_id` |
+//!
+//! Each is built from its input, carries its own schema version, and can be
+//! re-derived and verified. A stored artifact that verifies is byte-equivalent
+//! to the one that was written.
+//!
+//! ## Identity
+//!
+//! Every id is a lowercase hex SHA-256 over an explicitly framed,
+//! domain-separated byte encoding (see [`CanonicalDigest`]). The encoding is
+//! *not* `Debug`, `Display`, or JSON: those are unstable across versions,
+//! locales, and float formatting, and JSON in particular has no defined field
+//! order for unordered maps. The rules:
+//!
+//! - Each artifact has its **own domain string**, so the same bytes hashed as
+//!   a strategy and as a config cannot collide.
+//! - Every element is `len: u64 BE || bytes`, preceded by its framed field
+//!   tag, so `("ab", "c")` and `("a", "bc")` cannot produce the same stream.
+//! - Every enum contributes an explicit **variant tag** before its payload,
+//!   so `Custom { name: "ema" }` and the built-in `Ema` stay distinct.
+//! - Every sequence writes its **length before its elements**, and order is
+//!   significant — a truncated or reordered sequence cannot be re-framed.
+//! - Floats are hashed by [`f64::to_bits`], never by a decimal rendering, and
+//!   identity performs no floating-point arithmetic.
+//! - Lookups during validation use ordered containers. Nothing here iterates a
+//!   `HashMap`.
+//!
+//! One numeric normalization is applied, and only one: **`-0.0` is hashed as
+//! `+0.0`** ([`canonical_f64_bits`]). The two are numerically equal, so
+//! treating them as different strategies would be a false negative on every
+//! reproducibility check. Values that cannot be encoded unambiguously are
+//! **rejected, not hashed**: non-finite floats, and empty, whitespace-padded,
+//! over-long, or control-character text.
+//!
+//! ## What "canonical" does *not* yet mean
+//!
+//! ADR-135 §5.2 also calls for a normalisation pass — constant folding,
+//! commutative reordering, dead-branch removal — so that two structurally
+//! identical strategies found by different searches share an id. **That pass
+//! is not implemented here.** Identity is over the definition *as written*:
+//! reordering the children of an [`Condition::All`], the [`RoleAssignment`]
+//! list, or the parameter list yields a *different* id today. Dedup (§8.3)
+//! needs that pass and must not be built on this module until it exists.
+//!
+//! ## Temporal safety
+//!
+//! `bars_ago` is unsigned and bounded ([`MAX_BARS_AGO`]): `0` is the latest
+//! observation visible at the decision event, and a future observation is not
+//! representable. That is §6.12's no-look-ahead guarantee enforced by the
+//! grammar. The complementary runtime guard belongs to the simulator, which
+//! does not exist yet.
+//!
+//! ## Bounds
+//!
+//! [`Condition`] is recursive, so validation bounds both its depth
+//! ([`MAX_CONDITION_DEPTH`]) and its node count ([`MAX_CONDITION_NODES`]) per
+//! tree, and collections are individually capped. Note the honest limit:
+//! *deserialization itself* is not bounded — `serde` will recurse while
+//! parsing a hostile document before any of this code runs. Untrusted input
+//! must be size-limited by the caller, and every loaded artifact must be run
+//! through [`StrategyIr::verify`] before it is trusted.
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+
+// ── Versions and bounds ────────────────────────────────────────────
+
+/// Wire-format version of [`StrategyIr`]. Bump on any change to the hashed
+/// encoding, the field set, or the validation rules.
+pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
+
+/// Wire-format version of [`StrategyExecutionConfig`].
+pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 1;
+
+/// Wire-format version of [`StrategyRunManifest`].
+pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+
+/// Domain-separation prefix for the strategy-id hash. Any change to the
+/// framing rules must change this string *and* the schema version.
+const STRATEGY_ID_DOMAIN: &str = "typhoon.strategy_ir.strategy_id.v1";
+
+/// Domain-separation prefix for the config-id hash.
+const CONFIG_ID_DOMAIN: &str = "typhoon.strategy_ir.config_id.v1";
+
+/// Domain-separation prefix for the run-id hash.
+const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v1";
+
+/// Longest root-to-leaf path allowed in one [`Condition`] tree, counting the
+/// leaf. Bounds both validation recursion and the future interpreter's.
+pub const MAX_CONDITION_DEPTH: usize = 16;
+
+/// Total nodes allowed in one [`Condition`] tree.
+pub const MAX_CONDITION_NODES: usize = 512;
+
+/// Largest `bars_ago` an operand may look back. Bounds indicator warm-up.
+pub const MAX_BARS_AGO: u32 = 4_096;
+
+/// Longest free-text metadata field (name, author, notes, engine version).
+pub const MAX_TEXT_LEN: usize = 256;
+
+/// Longest stable reference id (parameter and indicator ids).
+pub const MAX_STABLE_ID_LEN: usize = 64;
+
+/// Maximum declared parameters.
+pub const MAX_PARAMETERS: usize = 128;
+
+/// Maximum declared indicator nodes.
+pub const MAX_INDICATORS: usize = 64;
+
+/// Maximum inputs to a single indicator node.
+pub const MAX_INDICATOR_INPUTS: usize = 8;
+
+/// Maximum metadata tags.
+pub const MAX_TAGS: usize = 16;
+
+/// Maximum session windows in a session filter.
+pub const MAX_SESSION_WINDOWS: usize = 8;
+
+/// Maximum trade-management legs (ADR-135 §5.2 two-leg templates, with room).
+pub const MAX_TRADE_LEGS: usize = 4;
+
+/// Maximum datasets one run may bind.
+pub const MAX_DATASETS_PER_RUN: usize = 64;
+
+/// Longest news blackout window, in minutes, on either side of an event.
+pub const MAX_NEWS_BLOCK_MINUTES: u32 = 1_440;
+
+/// Longest pre-close decision offset, in seconds.
+pub const MAX_PRE_CLOSE_OFFSET_SECONDS: u32 = 86_400;
+
+/// Largest decision→submit delay, in bars.
+pub const MAX_SUBMIT_DELAY_BARS: u32 = 16;
+
+/// Minutes in a day. Session windows are expressed in UTC minutes from
+/// midnight and may run to, but not past, this bound.
+const MINUTES_PER_DAY: u32 = 1_440;
+
+/// Trade-leg fractions are integer basis points and must total exactly this.
+/// Integers, not floats, so "the legs add up to 100 %" is an exact check with
+/// no tolerance to argue about.
+const TOTAL_FRACTION_BPS: u32 = 10_000;
+
+/// Length of a content-addressed id in hex characters (SHA-256).
+const DIGEST_ID_LEN: usize = 64;
+
+// ── Error surface ──────────────────────────────────────────────────
+
+/// Why a free-text field could not be encoded unambiguously.
+///
+/// Mirrors `strategy_dataset::InvalidTextReason`; the two should be unified
+/// into one shared canonical-encoding helper once both modules land together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvalidTextReason {
+    /// Empty, or entirely whitespace.
+    Empty,
+    /// Carries leading or trailing whitespace. Rejected rather than trimmed:
+    /// silently normalizing would map two distinct inputs onto one id.
+    SurroundingWhitespace,
+    /// Contains a control character.
+    ControlCharacter,
+    /// Longer than the field's bound.
+    TooLong,
+}
+
+impl InvalidTextReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty or whitespace-only",
+            Self::SurroundingWhitespace => "leading or trailing whitespace",
+            Self::ControlCharacter => "control character",
+            Self::TooLong => "longer than the permitted length",
+        }
+    }
+}
+
+/// Why a stable reference id was rejected.
+///
+/// Reference ids are deliberately stricter than free text: they are matched
+/// exactly across parameters, indicators, roles, sizing, and stops, so a
+/// case- or space-variant id would be a silent dangling reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvalidIdReason {
+    /// Empty.
+    Empty,
+    /// Longer than [`MAX_STABLE_ID_LEN`].
+    TooLong,
+    /// Contains something other than `[a-z0-9_]`.
+    IllegalCharacter,
+    /// Does not start with an ASCII lowercase letter.
+    LeadingNonLetter,
+}
+
+impl InvalidIdReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::TooLong => "longer than the permitted length",
+            Self::IllegalCharacter => "characters outside [a-z0-9_]",
+            Self::LeadingNonLetter => "does not start with a lowercase letter",
+        }
+    }
+}
+
+/// Classification of a non-finite float. The offending value itself is not
+/// carried: `NaN != NaN` would make errors non-comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NonFiniteKind {
+    Nan,
+    PositiveInfinity,
+    NegativeInfinity,
+}
+
+impl NonFiniteKind {
+    /// `None` when the value is finite.
+    fn classify(value: f64) -> Option<Self> {
+        if value.is_nan() {
+            Some(Self::Nan)
+        } else if value == f64::INFINITY {
+            Some(Self::PositiveInfinity)
+        } else if value == f64::NEG_INFINITY {
+            Some(Self::NegativeInfinity)
+        } else {
+            None
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Nan => "NaN",
+            Self::PositiveInfinity => "+inf",
+            Self::NegativeInfinity => "-inf",
+        }
+    }
+}
+
+/// Which namespace a reference id lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefKind {
+    Parameter,
+    Indicator,
+    Dataset,
+}
+
+impl RefKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Parameter => "parameter",
+            Self::Indicator => "indicator",
+            Self::Dataset => "dataset",
+        }
+    }
+}
+
+/// Which of the module's three artifacts an error refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    StrategyIr,
+    ExecutionConfig,
+    RunManifest,
+}
+
+impl ArtifactKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::StrategyIr => "strategy IR",
+            Self::ExecutionConfig => "execution config",
+            Self::RunManifest => "run manifest",
+        }
+    }
+
+    fn id_field(self) -> &'static str {
+        match self {
+            Self::StrategyIr => "strategy_id",
+            Self::ExecutionConfig => "config_id",
+            Self::RunManifest => "run_id",
+        }
+    }
+
+    fn supported_schema_version(self) -> u32 {
+        match self {
+            Self::StrategyIr => STRATEGY_IR_SCHEMA_VERSION,
+            Self::ExecutionConfig => STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION,
+            Self::RunManifest => STRATEGY_RUN_MANIFEST_SCHEMA_VERSION,
+        }
+    }
+}
+
+/// Everything that can go wrong building or verifying a strategy IR, an
+/// execution config, or a run manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StrategyIrError {
+    /// A free-text field has no unambiguous canonical encoding.
+    InvalidText {
+        field: String,
+        reason: InvalidTextReason,
+    },
+    /// A stable reference id is malformed.
+    InvalidId {
+        field: String,
+        id: String,
+        reason: InvalidIdReason,
+    },
+    /// Two declarations claim the same id.
+    DuplicateId { kind: RefKind, id: String },
+    /// A reference names something that was never declared.
+    UnknownRef {
+        kind: RefKind,
+        id: String,
+        context: String,
+    },
+    /// Two role assignments claim the same slot.
+    DuplicateRole { role: IndicatorRole },
+    /// Indicator inputs form a cycle. `path` starts and ends on the repeated
+    /// id, so the loop is readable directly.
+    IndicatorCycle { path: Vec<String> },
+    /// A float has no exact canonical encoding and is refused rather than
+    /// hashed.
+    NonFiniteValue { field: String, kind: NonFiniteKind },
+    /// A value is outside the range its field permits.
+    OutOfRange {
+        field: String,
+        value: String,
+        expected: &'static str,
+    },
+    /// A collection exceeded its cap.
+    TooMany {
+        collection: &'static str,
+        limit: usize,
+        found: usize,
+    },
+    /// A condition tree is deeper than [`MAX_CONDITION_DEPTH`].
+    ConditionTooDeep { limit: usize, found: usize },
+    /// A condition tree has more nodes than [`MAX_CONDITION_NODES`].
+    ConditionTooLarge { limit: usize, found: usize },
+    /// Neither direction can ever enter, so the strategy is inert.
+    NoEnabledDirection,
+    /// The decision-timing fields contradict each other.
+    InconsistentTiming { detail: &'static str },
+    /// A field that must hold a content-addressed id (64 lowercase hex
+    /// characters) does not.
+    MalformedDigestId { field: String, value: String },
+    /// A stored artifact was written by an incompatible schema version.
+    UnsupportedSchemaVersion {
+        artifact: ArtifactKind,
+        found: u32,
+        supported: u32,
+    },
+    /// The recomputed id does not match the recorded one — the artifact was
+    /// edited after it was sealed.
+    IdentityMismatch {
+        artifact: ArtifactKind,
+        expected: String,
+        actual: String,
+    },
+}
+
+impl std::fmt::Display for StrategyIrError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidText { field, reason } => {
+                write!(f, "field `{field}` is invalid: {}", reason.as_str())
+            }
+            Self::InvalidId { field, id, reason } => write!(
+                f,
+                "field `{field}` holds an invalid id `{id}`: {}",
+                reason.as_str()
+            ),
+            Self::DuplicateId { kind, id } => {
+                write!(f, "{} id `{id}` is declared more than once", kind.as_str())
+            }
+            Self::UnknownRef { kind, id, context } => write!(
+                f,
+                "{context} references {} `{id}`, which is not declared",
+                kind.as_str()
+            ),
+            Self::DuplicateRole { role } => write!(
+                f,
+                "indicator role `{}` is assigned more than once",
+                role.wire_tag()
+            ),
+            Self::IndicatorCycle { path } => {
+                write!(f, "indicator inputs form a cycle: {}", path.join(" -> "))
+            }
+            Self::NonFiniteValue { field, kind } => write!(
+                f,
+                "field `{field}` is non-finite ({}) and has no canonical encoding",
+                kind.as_str()
+            ),
+            Self::OutOfRange {
+                field,
+                value,
+                expected,
+            } => write!(f, "field `{field}` is {value}, expected {expected}"),
+            Self::TooMany {
+                collection,
+                limit,
+                found,
+            } => write!(
+                f,
+                "`{collection}` holds {found} entries, more than the limit of {limit}"
+            ),
+            Self::ConditionTooDeep { limit, found } => write!(
+                f,
+                "condition tree is {found} levels deep, more than the limit of {limit}"
+            ),
+            Self::ConditionTooLarge { limit, found } => write!(
+                f,
+                "condition tree holds {found} nodes, more than the limit of {limit}"
+            ),
+            Self::NoEnabledDirection => {
+                write!(f, "neither the long nor the short direction is enabled")
+            }
+            Self::InconsistentTiming { detail } => {
+                write!(f, "execution timing is invalid: {detail}")
+            }
+            Self::MalformedDigestId { field, value } => write!(
+                f,
+                "field `{field}` must be 64 lowercase hex characters, got `{value}`"
+            ),
+            Self::UnsupportedSchemaVersion {
+                artifact,
+                found,
+                supported,
+            } => write!(
+                f,
+                "{} schema version {found} is unsupported (this build supports {supported})",
+                artifact.as_str()
+            ),
+            Self::IdentityMismatch {
+                artifact,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "{} {} mismatch: recorded {expected}, recomputed {actual}",
+                artifact.as_str(),
+                artifact.id_field()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StrategyIrError {}
+
+// ── Metadata ───────────────────────────────────────────────────────
+
+/// Human-facing description of a strategy. Identity-bearing: renaming a
+/// strategy produces a different id, because a stored result must be
+/// attributable to exactly the artifact that produced it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyMetadata {
+    pub name: String,
+    pub author: String,
+    pub notes: Option<String>,
+    /// Free-form labels. Order is significant (see the module note on
+    /// canonicalization).
+    pub tags: Vec<String>,
+}
+
+// ── Parameters ─────────────────────────────────────────────────────
+
+/// A typed parameter value. Types are explicit so the future type-checker can
+/// reject illegal compositions before any simulation runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParamValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(String),
+}
+
+impl ParamValue {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "bool",
+            Self::Int(_) => "int",
+            Self::Float(_) => "float",
+            Self::Text(_) => "text",
+        }
+    }
+
+    fn is_numeric(&self) -> bool {
+        matches!(self, Self::Int(_) | Self::Float(_))
+    }
+}
+
+/// An inclusive search range for a numeric parameter — the typed hole the
+/// optimizer (§5.5) will later fill. Recorded here so the searched space is
+/// part of the strategy's identity rather than an out-of-band setting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParamRange {
+    Int { min: i64, max: i64 },
+    Float { min: f64, max: f64 },
+}
+
+impl ParamRange {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::Int { .. } => "int",
+            Self::Float { .. } => "float",
+        }
+    }
+}
+
+/// One declared parameter. The `id` is the stable name every reference uses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StrategyParameter {
+    pub id: String,
+    pub value: ParamValue,
+    /// Present only for numeric parameters, and must contain `value`.
+    pub range: Option<ParamRange>,
+}
+
+// ── Indicator graph ────────────────────────────────────────────────
+
+/// A field of the current bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PriceField {
+    Open,
+    High,
+    Low,
+    Close,
+    Volume,
+}
+
+impl PriceField {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::High => "high",
+            Self::Low => "low",
+            Self::Close => "close",
+            Self::Volume => "volume",
+        }
+    }
+}
+
+/// Which indicator an [`IndicatorNode`] computes.
+///
+/// The built-in set is the one the terminal already ports from the MQL5 NNFX
+/// system. [`IndicatorKind::Custom`] carries a display name plus the
+/// content-addressed identity of the executable implementation. The digest
+/// prevents different plugins that share a name from sharing a strategy id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorKind {
+    Atr,
+    Sma,
+    Ema,
+    Kama,
+    Rsi,
+    FisherTransform,
+    Macd,
+    Adx,
+    StdDev,
+    Custom {
+        name: String,
+        implementation_id: String,
+    },
+}
+
+impl IndicatorKind {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::Atr => "atr",
+            Self::Sma => "sma",
+            Self::Ema => "ema",
+            Self::Kama => "kama",
+            Self::Rsi => "rsi",
+            Self::FisherTransform => "fisher_transform",
+            Self::Macd => "macd",
+            Self::Adx => "adx",
+            Self::StdDev => "std_dev",
+            Self::Custom { .. } => "custom",
+        }
+    }
+
+    fn input_shape(&self) -> Option<&'static [IndicatorInputShape]> {
+        use IndicatorInputShape::{Scalar, Series};
+        match self {
+            Self::Atr | Self::Adx => Some(&[Scalar]),
+            Self::Sma | Self::Ema | Self::Rsi | Self::FisherTransform | Self::StdDev => {
+                Some(&[Series, Scalar])
+            }
+            Self::Kama | Self::Macd => Some(&[Series, Scalar, Scalar, Scalar]),
+            Self::Custom { .. } => None,
+        }
+    }
+}
+
+/// One input edge of an indicator node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorInput {
+    Constant(f64),
+    Parameter(String),
+    /// An edge to another indicator. These edges form the graph that must stay
+    /// acyclic.
+    Indicator(String),
+    Price(PriceField),
+}
+
+impl IndicatorInput {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::Constant(_) => "constant",
+            Self::Parameter(_) => "parameter",
+            Self::Indicator(_) => "indicator",
+            Self::Price(_) => "price",
+        }
+    }
+
+    fn shape(&self) -> IndicatorInputShape {
+        match self {
+            Self::Price(_) | Self::Indicator(_) => IndicatorInputShape::Series,
+            Self::Constant(_) | Self::Parameter(_) => IndicatorInputShape::Scalar,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndicatorInputShape {
+    Series,
+    Scalar,
+}
+
+/// A node in the indicator graph. Declaration order does not imply dependency
+/// order — a node may reference one declared later, as long as no cycle forms.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IndicatorNode {
+    pub id: String,
+    pub kind: IndicatorKind,
+    pub inputs: Vec<IndicatorInput>,
+}
+
+/// A named slot in the NNFX profile (ADR-135 §5.2's guided editor). Roles are
+/// a *view* onto the indicator graph, not a second representation: each one
+/// points at a node that must already exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorRole {
+    Atr,
+    Baseline,
+    Confirmation1,
+    Confirmation2,
+    Volume,
+    Exit,
+    Continuation,
+}
+
+impl IndicatorRole {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Atr => "atr",
+            Self::Baseline => "baseline",
+            Self::Confirmation1 => "confirmation_1",
+            Self::Confirmation2 => "confirmation_2",
+            Self::Volume => "volume",
+            Self::Exit => "exit",
+            Self::Continuation => "continuation",
+        }
+    }
+}
+
+/// Binds one role to one indicator node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleAssignment {
+    pub role: IndicatorRole,
+    pub indicator: String,
+}
+
+// ── Condition AST ──────────────────────────────────────────────────
+
+/// A value a condition can read at the current decision event.
+///
+/// `bars_ago` is unsigned: `0` is the latest observation visible *now*, and a
+/// future observation cannot be written down. That is the grammar-level half
+/// of §6.12.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Operand {
+    Constant(f64),
+    Parameter(String),
+    Price { field: PriceField, bars_ago: u32 },
+    Indicator { id: String, bars_ago: u32 },
+}
+
+impl Operand {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::Constant(_) => "constant",
+            Self::Parameter(_) => "parameter",
+            Self::Price { .. } => "price",
+            Self::Indicator { .. } => "indicator",
+        }
+    }
+}
+
+/// Comparison used by [`Condition::Compare`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompareOp {
+    Greater,
+    GreaterOrEqual,
+    Less,
+    LessOrEqual,
+    Equal,
+    NotEqual,
+}
+
+impl CompareOp {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Greater => "gt",
+            Self::GreaterOrEqual => "gte",
+            Self::Less => "lt",
+            Self::LessOrEqual => "lte",
+            Self::Equal => "eq",
+            Self::NotEqual => "neq",
+        }
+    }
+}
+
+/// A boolean expression over operands.
+///
+/// Depth and node count are bounded per tree (see the module docs). `All` and
+/// `Any` must carry at least one child: an empty combinator reads as a silent
+/// constant and is rejected in favour of writing [`Condition::Always`] or
+/// [`Condition::Never`] explicitly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Condition {
+    Always,
+    Never,
+    Not(Box<Condition>),
+    All(Vec<Condition>),
+    Any(Vec<Condition>),
+    Compare {
+        left: Operand,
+        op: CompareOp,
+        right: Operand,
+    },
+    CrossesAbove {
+        left: Operand,
+        right: Operand,
+    },
+    CrossesBelow {
+        left: Operand,
+        right: Operand,
+    },
+}
+
+impl Condition {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Never => "never",
+            Self::Not(_) => "not",
+            Self::All(_) => "all",
+            Self::Any(_) => "any",
+            Self::Compare { .. } => "compare",
+            Self::CrossesAbove { .. } => "crosses_above",
+            Self::CrossesBelow { .. } => "crosses_below",
+        }
+    }
+}
+
+/// Entry and exit rules for one direction. A disabled direction is still
+/// validated and still hashed — turning it off is a change to the strategy,
+/// not a licence to leave broken references behind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DirectionRules {
+    pub enabled: bool,
+    pub entry: Condition,
+    pub exit: Condition,
+}
+
+// ── Filters ────────────────────────────────────────────────────────
+
+/// A trading window in UTC minutes from midnight, `start_minute` inclusive and
+/// `end_minute` exclusive.
+///
+/// Honest limitation: this is a UTC clock window, not an exchange calendar.
+/// There is no holiday table, no venue-local session, and no wrap past
+/// midnight — a window that straddles 00:00 UTC must be written as two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWindow {
+    pub start_minute: u32,
+    pub end_minute: u32,
+}
+
+/// When the strategy may trade. Windows must be ordered and non-overlapping,
+/// so the filter has exactly one reading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFilter {
+    pub enabled: bool,
+    pub windows: Vec<SessionWindow>,
+    /// Flatten open positions when the last window closes.
+    pub close_positions_outside: bool,
+}
+
+/// Lowest economic-event impact the news filter reacts to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NewsImpact {
+    Low,
+    Medium,
+    High,
+}
+
+impl NewsImpact {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+/// Blackout around economic events. An enabled filter must block a non-zero
+/// span on at least one side, otherwise it silently does nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewsFilter {
+    pub enabled: bool,
+    pub min_impact: NewsImpact,
+    pub block_minutes_before: u32,
+    pub block_minutes_after: u32,
+    pub close_open_positions: bool,
+}
+
+// ── Sizing and trade management ────────────────────────────────────
+
+/// How much to trade.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SizingRule {
+    FixedUnits {
+        units: f64,
+    },
+    PercentEquity {
+        percent: f64,
+    },
+    /// Risk a percentage of equity across an ATR-derived stop distance. The
+    /// referenced indicator must exist; that it actually computes an ATR is
+    /// not checked here, since a custom node may legitimately supply one.
+    RiskPercentAtr {
+        risk_percent: f64,
+        atr_multiple: f64,
+        atr_indicator: String,
+    },
+}
+
+impl SizingRule {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::FixedUnits { .. } => "fixed_units",
+            Self::PercentEquity { .. } => "percent_equity",
+            Self::RiskPercentAtr { .. } => "risk_percent_atr",
+        }
+    }
+}
+
+/// Sizing plus the portfolio-level cap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PositionSizing {
+    pub rule: SizingRule,
+    pub max_open_positions: u32,
+}
+
+/// A stop, target, or trail distance.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopRule {
+    AtrMultiple { indicator: String, multiple: f64 },
+    PercentOfEntry { percent: f64 },
+    PriceDistance { distance: f64 },
+}
+
+impl StopRule {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::AtrMultiple { .. } => "atr_multiple",
+            Self::PercentOfEntry { .. } => "percent_of_entry",
+            Self::PriceDistance { .. } => "price_distance",
+        }
+    }
+}
+
+/// A trailing stop, optionally dormant until price has moved `activate_after`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrailingStop {
+    pub distance: StopRule,
+    pub activate_after: Option<StopRule>,
+}
+
+/// One leg of a scale-out template. `fraction_bps` is integer basis points of
+/// the position; the legs must total exactly 100 %.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TradeLeg {
+    pub fraction_bps: u32,
+    pub stop: Option<StopRule>,
+    pub target: Option<StopRule>,
+    pub trailing: Option<TrailingStop>,
+}
+
+/// The two-leg NNFX template generalised: N legs, each with its own stop,
+/// target, and trail, plus position-level break-even and time stops.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TradeManagement {
+    pub legs: Vec<TradeLeg>,
+    pub break_even_after: Option<StopRule>,
+    pub max_bars_in_trade: Option<u32>,
+}
+
+// ── Execution timing ───────────────────────────────────────────────
+
+/// When the strategy makes its decision (ADR-135 §6.13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionTiming {
+    /// At the close of the completed bar.
+    ClosedBar,
+    /// At the open of the next bar.
+    NextBarOpen,
+    /// A fixed offset before the bar closes, reading only the forming-bar
+    /// state actually available at that instant.
+    PreClose { offset_seconds: u32 },
+}
+
+impl DecisionTiming {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::ClosedBar => "closed_bar",
+            Self::NextBarOpen => "next_bar_open",
+            Self::PreClose { .. } => "pre_close",
+        }
+    }
+}
+
+/// Decision timing plus the two knobs that decide what the strategy can see
+/// and how long it waits to act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionTiming {
+    pub decision: DecisionTiming,
+    /// Whether the forming bar is visible. Only a [`DecisionTiming::PreClose`]
+    /// rule may see it — at a closed-bar or next-open decision the forming bar
+    /// either does not exist yet or would leak the future.
+    pub forming_bar_visible: bool,
+    /// Bars between the decision and order submission.
+    pub submit_delay_bars: u32,
+}
+
+// ── Strategy definition and IR ─────────────────────────────────────
+
+/// A complete strategy, as data. This is the input half of [`StrategyIr`]:
+/// everything that is hashed, and nothing that is derived.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StrategyDefinition {
+    pub metadata: StrategyMetadata,
+    pub parameters: Vec<StrategyParameter>,
+    pub indicators: Vec<IndicatorNode>,
+    pub roles: Vec<RoleAssignment>,
+    pub long: DirectionRules,
+    pub short: DirectionRules,
+    pub session: SessionFilter,
+    pub news: NewsFilter,
+    pub sizing: PositionSizing,
+    pub trade_management: TradeManagement,
+    pub timing: ExecutionTiming,
+}
+
+/// A validated, sealed strategy definition and its content-addressed id.
+///
+/// Construct with [`StrategyIr::build`]. Editing `definition` afterwards
+/// invalidates `strategy_id`; [`StrategyIr::verify`] is what proves a loaded
+/// artifact was not edited.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StrategyIr {
+    pub schema_version: u32,
+    pub definition: StrategyDefinition,
+    /// Lowercase hex SHA-256 over the canonical encoding of `definition`.
+    pub strategy_id: String,
+}
+
+impl StrategyIr {
+    /// Validate `definition` and seal it with its id.
+    pub fn build(definition: &StrategyDefinition) -> Result<Self, StrategyIrError> {
+        let strategy_id = compute_strategy_id(definition)?;
+        Ok(Self {
+            schema_version: STRATEGY_IR_SCHEMA_VERSION,
+            definition: definition.clone(),
+            strategy_id,
+        })
+    }
+
+    /// The definition this IR seals, for rebuilding it.
+    pub fn to_input(&self) -> StrategyDefinition {
+        self.definition.clone()
+    }
+
+    /// Recompute the id from the current definition without comparing it.
+    pub fn recompute_strategy_id(&self) -> Result<String, StrategyIrError> {
+        check_schema_version(ArtifactKind::StrategyIr, self.schema_version)?;
+        compute_strategy_id(&self.definition)
+    }
+
+    /// Prove this artifact is the one that was sealed: supported schema, still
+    /// valid, and the recorded id still derives from the definition.
+    pub fn verify(&self) -> Result<(), StrategyIrError> {
+        let actual = self.recompute_strategy_id()?;
+        expect_identity(ArtifactKind::StrategyIr, &self.strategy_id, actual)
+    }
+}
+
+// ── Execution config ───────────────────────────────────────────────
+
+/// How trading costs are charged.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommissionModel {
+    /// Explicitly free. Valid, and loudly labelled — never a silent default.
+    None,
+    PerShare {
+        amount: f64,
+        minimum: f64,
+    },
+    PercentOfNotional {
+        percent: f64,
+        minimum: f64,
+    },
+    PerOrder {
+        amount: f64,
+    },
+}
+
+impl CommissionModel {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::PerShare { .. } => "per_share",
+            Self::PercentOfNotional { .. } => "percent_of_notional",
+            Self::PerOrder { .. } => "per_order",
+        }
+    }
+}
+
+/// How far fills drift from the decision price.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlippageModel {
+    None,
+    FixedPriceDistance { distance: f64 },
+    SpreadFraction { fraction: f64 },
+    VolatilityScaled { atr_fraction: f64 },
+}
+
+impl SlippageModel {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::FixedPriceDistance { .. } => "fixed_price_distance",
+            Self::SpreadFraction { .. } => "spread_fraction",
+            Self::VolatilityScaled { .. } => "volatility_scaled",
+        }
+    }
+}
+
+/// Where the bid/ask spread comes from (§6.2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpreadModel {
+    /// No spread at all. Valid, but a deliberately loud choice: it is stamped
+    /// on the run and must never be presented as realistic.
+    None,
+    Constant {
+        price_units: f64,
+    },
+    PercentOfPrice {
+        percent: f64,
+    },
+    /// Use the dataset's recorded quotes.
+    RecordedQuotes,
+}
+
+impl SpreadModel {
+    fn wire_tag(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Constant { .. } => "constant",
+            Self::PercentOfPrice { .. } => "percent_of_price",
+            Self::RecordedQuotes => "recorded_quotes",
+        }
+    }
+}
+
+/// What the simulator assumes when a stop and a target are both reachable
+/// inside one bar (§6.1). The default is the pessimistic one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OhlcAmbiguityPolicy {
+    /// Assume the stop filled first.
+    #[default]
+    StopFirst,
+    /// Assume the target filled first.
+    TargetFirst,
+    /// Walk O→H→L→C on up bars and O→L→H→C on down bars.
+    OhlcPath,
+}
+
+impl OhlcAmbiguityPolicy {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::StopFirst => "stop_first",
+            Self::TargetFirst => "target_first",
+            Self::OhlcPath => "ohlc_path",
+        }
+    }
+}
+
+/// How simultaneous events are ordered (§5.3, §6.11). Both variants are total
+/// orders — neither ever falls back to hash-map or completion order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TieBreakPolicy {
+    /// `(timestamp, event priority, submission sequence)`.
+    #[default]
+    TimestampPrioritySequence,
+    /// `(timestamp, event priority, symbol, submission sequence)` — pins
+    /// cross-symbol ties to a lexicographic symbol order.
+    TimestampPrioritySymbolSequence,
+}
+
+impl TieBreakPolicy {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::TimestampPrioritySequence => "timestamp_priority_sequence",
+            Self::TimestampPrioritySymbolSequence => "timestamp_priority_symbol_sequence",
+        }
+    }
+}
+
+/// The cost and execution-policy half of a run: everything that is not the
+/// strategy and not the data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionSettings {
+    pub initial_capital: f64,
+    pub account_currency: String,
+    pub commission: CommissionModel,
+    pub slippage: SlippageModel,
+    pub spread: SpreadModel,
+    pub ambiguity: OhlcAmbiguityPolicy,
+    pub tie_break: TieBreakPolicy,
+}
+
+/// Validated execution settings and their content-addressed id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StrategyExecutionConfig {
+    pub schema_version: u32,
+    pub settings: ExecutionSettings,
+    /// Lowercase hex SHA-256 over the canonical encoding of `settings`.
+    pub config_id: String,
+}
+
+impl StrategyExecutionConfig {
+    /// Validate `settings` and seal them with their id.
+    pub fn build(settings: &ExecutionSettings) -> Result<Self, StrategyIrError> {
+        let config_id = compute_config_id(settings)?;
+        Ok(Self {
+            schema_version: STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION,
+            settings: settings.clone(),
+            config_id,
+        })
+    }
+
+    /// The settings this config seals, for rebuilding it.
+    pub fn to_input(&self) -> ExecutionSettings {
+        self.settings.clone()
+    }
+
+    /// Recompute the id from the current settings without comparing it.
+    pub fn recompute_config_id(&self) -> Result<String, StrategyIrError> {
+        check_schema_version(ArtifactKind::ExecutionConfig, self.schema_version)?;
+        compute_config_id(&self.settings)
+    }
+
+    /// Prove this config is the one that was sealed.
+    pub fn verify(&self) -> Result<(), StrategyIrError> {
+        let actual = self.recompute_config_id()?;
+        expect_identity(ArtifactKind::ExecutionConfig, &self.config_id, actual)
+    }
+}
+
+// ── Run manifest ───────────────────────────────────────────────────
+
+/// Everything a run is pinned to. Reproducing a result means rebuilding this
+/// binding and getting the same `run_id`.
+///
+/// The id fields are content-addressed digests produced elsewhere:
+/// `dataset_ids` come from the dataset layer (§5.1), `strategy_id` from
+/// [`StrategyIr`], `config_id` from [`StrategyExecutionConfig`], and
+/// `intervention_log_id` from the recorded `UserDecision` stream of a hybrid
+/// run (§5.3). This module validates their *shape* — 64 lowercase hex
+/// characters — and binds them in order; it does not resolve them, so a
+/// manifest can be verified without loading the artifacts it names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunBinding {
+    /// Datasets in the order the run consumed them. Order is significant and
+    /// duplicates are rejected.
+    pub dataset_ids: Vec<String>,
+    pub strategy_id: String,
+    pub config_id: String,
+    /// Root seed for every derived RNG stream (§6.10).
+    pub seed: u64,
+    pub engine_version: String,
+    /// Present only for hybrid runs that recorded operator interventions.
+    pub intervention_log_id: Option<String>,
+}
+
+/// A validated run binding and its content-addressed id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyRunManifest {
+    pub schema_version: u32,
+    pub binding: RunBinding,
+    /// Lowercase hex SHA-256 over the canonical encoding of `binding`.
+    pub run_id: String,
+}
+
+impl StrategyRunManifest {
+    /// Validate `binding` and seal it with its run id.
+    pub fn build(binding: &RunBinding) -> Result<Self, StrategyIrError> {
+        let run_id = compute_run_id(binding)?;
+        Ok(Self {
+            schema_version: STRATEGY_RUN_MANIFEST_SCHEMA_VERSION,
+            binding: binding.clone(),
+            run_id,
+        })
+    }
+
+    /// The binding this manifest seals, for rebuilding it.
+    pub fn to_input(&self) -> RunBinding {
+        self.binding.clone()
+    }
+
+    /// Recompute the id from the current binding without comparing it.
+    pub fn recompute_run_id(&self) -> Result<String, StrategyIrError> {
+        check_schema_version(ArtifactKind::RunManifest, self.schema_version)?;
+        compute_run_id(&self.binding)
+    }
+
+    /// Prove this manifest is the one that was sealed. Any edit to the bound
+    /// ids, the seed, the engine version, or the dataset order is detected.
+    pub fn verify(&self) -> Result<(), StrategyIrError> {
+        let actual = self.recompute_run_id()?;
+        expect_identity(ArtifactKind::RunManifest, &self.run_id, actual)
+    }
+}
+
+// ── Canonical encoding ─────────────────────────────────────────────
+
+/// Bit pattern of `-0.0`, normalized to `+0.0` before hashing.
+const NEGATIVE_ZERO_BITS: u64 = 0x8000_0000_0000_0000;
+
+/// Exact, platform-independent bits for a finite `f64`.
+///
+/// `-0.0` maps onto `+0.0` (the one documented numeric normalization); every
+/// other value keeps its exact IEEE-754 bit pattern. This is pure integer
+/// work — no floating-point arithmetic participates in identity. Callers must
+/// reject non-finite values first.
+fn canonical_f64_bits(value: f64) -> u64 {
+    let bits = value.to_bits();
+    if bits == NEGATIVE_ZERO_BITS { 0 } else { bits }
+}
+
+/// Length-prefixed, domain-separated SHA-256 writer.
+///
+/// Every element is `len: u64 BE || bytes`, and every value is preceded by its
+/// framed field tag, so `("AB", "C")` and `("A", "BC")` cannot collide.
+struct CanonicalDigest {
+    hasher: Sha256,
+}
+
+impl CanonicalDigest {
+    fn new(domain: &str) -> Self {
+        let mut digest = Self {
+            hasher: Sha256::new(),
+        };
+        digest.frame(domain.as_bytes());
+        digest
+    }
+
+    fn frame(&mut self, bytes: &[u8]) {
+        self.hasher.update((bytes.len() as u64).to_be_bytes());
+        self.hasher.update(bytes);
+    }
+
+    fn tagged_text(&mut self, tag: &str, value: &str) {
+        self.frame(tag.as_bytes());
+        self.frame(value.as_bytes());
+    }
+
+    fn tagged_u64(&mut self, tag: &str, value: u64) {
+        self.frame(tag.as_bytes());
+        self.hasher.update(value.to_be_bytes());
+    }
+
+    fn tagged_u32(&mut self, tag: &str, value: u32) {
+        self.tagged_u64(tag, u64::from(value));
+    }
+
+    /// Signed integers are hashed as their two's-complement big-endian bytes —
+    /// no sign-magnitude rendering, no locale.
+    fn tagged_i64(&mut self, tag: &str, value: i64) {
+        self.frame(tag.as_bytes());
+        self.hasher.update(value.to_be_bytes());
+    }
+
+    fn tagged_bool(&mut self, tag: &str, value: bool) {
+        self.tagged_u64(tag, u64::from(value));
+    }
+
+    /// Hash a finite `f64` by its canonical bits. Non-finite values must have
+    /// been rejected upstream.
+    fn tagged_f64(&mut self, tag: &str, value: f64) {
+        self.frame(tag.as_bytes());
+        self.hasher.update(canonical_f64_bits(value).to_be_bytes());
+    }
+
+    /// Open a sequence by writing its length, so elements cannot be re-framed
+    /// across the boundary of an adjacent field.
+    fn begin_seq(&mut self, tag: &str, len: usize) {
+        self.tagged_u64(tag, len as u64);
+    }
+
+    /// Record whether an optional field is present. The payload, if any,
+    /// follows.
+    fn begin_option(&mut self, tag: &str, present: bool) {
+        self.tagged_text(tag, if present { "some" } else { "none" });
+    }
+
+    fn finish_hex(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let out = self.hasher.finalize();
+        let mut hex = String::with_capacity(out.len() * 2);
+        for &byte in out.iter() {
+            hex.push(HEX[(byte >> 4) as usize] as char);
+            hex.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        hex
+    }
+}
+
+// ── Validation helpers ─────────────────────────────────────────────
+
+/// Reject text that has no unambiguous canonical encoding.
+fn validate_text(value: &str, max_len: usize) -> Result<(), InvalidTextReason> {
+    if value.trim().is_empty() {
+        return Err(InvalidTextReason::Empty);
+    }
+    if value.trim() != value {
+        return Err(InvalidTextReason::SurroundingWhitespace);
+    }
+    if value.chars().any(char::is_control) {
+        return Err(InvalidTextReason::ControlCharacter);
+    }
+    if value.chars().count() > max_len {
+        return Err(InvalidTextReason::TooLong);
+    }
+    Ok(())
+}
+
+fn check_text(field: &str, value: &str, max_len: usize) -> Result<(), StrategyIrError> {
+    validate_text(value, max_len).map_err(|reason| StrategyIrError::InvalidText {
+        field: field.to_string(),
+        reason,
+    })
+}
+
+fn check_optional_text(
+    field: &str,
+    value: Option<&str>,
+    max_len: usize,
+) -> Result<(), StrategyIrError> {
+    match value {
+        Some(text) => check_text(field, text, max_len),
+        None => Ok(()),
+    }
+}
+
+/// Reject reference ids that are not stable, exact-match-safe names.
+fn validate_stable_id(value: &str) -> Result<(), InvalidIdReason> {
+    if value.is_empty() {
+        return Err(InvalidIdReason::Empty);
+    }
+    if value.len() > MAX_STABLE_ID_LEN {
+        return Err(InvalidIdReason::TooLong);
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err(InvalidIdReason::IllegalCharacter);
+    }
+    if !value.starts_with(|c: char| c.is_ascii_lowercase()) {
+        return Err(InvalidIdReason::LeadingNonLetter);
+    }
+    Ok(())
+}
+
+fn check_stable_id(field: &str, value: &str) -> Result<(), StrategyIrError> {
+    validate_stable_id(value).map_err(|reason| StrategyIrError::InvalidId {
+        field: field.to_string(),
+        id: value.to_string(),
+        reason,
+    })
+}
+
+/// Reject anything that is not a 64-character lowercase hex digest.
+fn check_digest_id(field: &str, value: &str) -> Result<(), StrategyIrError> {
+    let well_formed = value.len() == DIGEST_ID_LEN
+        && value
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+    if well_formed {
+        Ok(())
+    } else {
+        Err(StrategyIrError::MalformedDigestId {
+            field: field.to_string(),
+            value: value.to_string(),
+        })
+    }
+}
+
+fn check_finite(field: &str, value: f64) -> Result<(), StrategyIrError> {
+    match NonFiniteKind::classify(value) {
+        Some(kind) => Err(StrategyIrError::NonFiniteValue {
+            field: field.to_string(),
+            kind,
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Finite *and* inside `(low, high]`-style bounds described by `expected`.
+fn check_finite_in(
+    field: &str,
+    value: f64,
+    ok: bool,
+    expected: &'static str,
+) -> Result<(), StrategyIrError> {
+    check_finite(field, value)?;
+    if ok {
+        Ok(())
+    } else {
+        Err(StrategyIrError::OutOfRange {
+            field: field.to_string(),
+            value: format_f64(value),
+            expected,
+        })
+    }
+}
+
+fn check_size(collection: &'static str, len: usize, limit: usize) -> Result<(), StrategyIrError> {
+    if len <= limit {
+        Ok(())
+    } else {
+        Err(StrategyIrError::TooMany {
+            collection,
+            limit,
+            found: len,
+        })
+    }
+}
+
+fn out_of_range<T: std::fmt::Display>(
+    field: &str,
+    value: T,
+    expected: &'static str,
+) -> StrategyIrError {
+    StrategyIrError::OutOfRange {
+        field: field.to_string(),
+        value: value.to_string(),
+        expected,
+    }
+}
+
+/// Render a finite float for an error message only — never for hashing.
+fn format_f64(value: f64) -> String {
+    format!("{value}")
+}
+
+fn check_schema_version(artifact: ArtifactKind, found: u32) -> Result<(), StrategyIrError> {
+    let supported = artifact.supported_schema_version();
+    if found == supported {
+        Ok(())
+    } else {
+        Err(StrategyIrError::UnsupportedSchemaVersion {
+            artifact,
+            found,
+            supported,
+        })
+    }
+}
+
+fn expect_identity(
+    artifact: ArtifactKind,
+    recorded: &str,
+    actual: String,
+) -> Result<(), StrategyIrError> {
+    if recorded == actual {
+        Ok(())
+    } else {
+        Err(StrategyIrError::IdentityMismatch {
+            artifact,
+            expected: recorded.to_string(),
+            actual,
+        })
+    }
+}
+
+// ── Strategy identity ──────────────────────────────────────────────
+
+/// Resolved declarations, used to check every reference exactly once.
+struct DeclaredIds<'a> {
+    parameters: BTreeMap<&'a str, &'a ParamValue>,
+    indicators: BTreeSet<&'a str>,
+}
+
+impl<'a> DeclaredIds<'a> {
+    fn check_ref(&self, kind: RefKind, id: &str, context: &str) -> Result<(), StrategyIrError> {
+        let known = match kind {
+            RefKind::Parameter => self.parameters.contains_key(id),
+            RefKind::Indicator => self.indicators.contains(id),
+            RefKind::Dataset => false,
+        };
+        if known {
+            Ok(())
+        } else {
+            Err(StrategyIrError::UnknownRef {
+                kind,
+                id: id.to_string(),
+                context: context.to_string(),
+            })
+        }
+    }
+
+    fn check_numeric_parameter(&self, id: &str, context: &str) -> Result<(), StrategyIrError> {
+        self.check_ref(RefKind::Parameter, id, context)?;
+        if self.parameters[id].is_numeric() {
+            Ok(())
+        } else {
+            Err(out_of_range(
+                context,
+                self.parameters[id].wire_tag(),
+                "a numeric parameter",
+            ))
+        }
+    }
+}
+
+/// The content-addressed strategy id: lowercase hex SHA-256 over the canonical
+/// encoding of a fully validated definition.
+///
+/// Validation runs first and in a fixed order, so the same malformed
+/// definition always reports the same error.
+pub fn compute_strategy_id(definition: &StrategyDefinition) -> Result<String, StrategyIrError> {
+    let declared = validate_definition(definition)?;
+    // `declared` borrows the definition; identity only needs it to have been
+    // proven, not to be re-read.
+    drop(declared);
+
+    let mut digest = CanonicalDigest::new(STRATEGY_ID_DOMAIN);
+    digest.tagged_u32("schema_version", STRATEGY_IR_SCHEMA_VERSION);
+    hash_metadata(&mut digest, &definition.metadata);
+    hash_parameters(&mut digest, &definition.parameters);
+    hash_indicators(&mut digest, &definition.indicators);
+    hash_roles(&mut digest, &definition.roles);
+    hash_direction(&mut digest, "long", &definition.long);
+    hash_direction(&mut digest, "short", &definition.short);
+    hash_session(&mut digest, &definition.session);
+    hash_news(&mut digest, &definition.news);
+    hash_sizing(&mut digest, &definition.sizing);
+    hash_trade_management(&mut digest, &definition.trade_management);
+    hash_timing(&mut digest, &definition.timing);
+    Ok(digest.finish_hex())
+}
+
+fn validate_definition(
+    definition: &StrategyDefinition,
+) -> Result<DeclaredIds<'_>, StrategyIrError> {
+    validate_metadata(&definition.metadata)?;
+    let parameters = validate_parameters(&definition.parameters)?;
+    let indicators = validate_indicator_ids(&definition.indicators)?;
+    let declared = DeclaredIds {
+        parameters,
+        indicators,
+    };
+
+    validate_indicator_inputs(&definition.indicators, &declared)?;
+    check_indicator_acyclic(&definition.indicators)?;
+    validate_roles(&definition.roles, &declared)?;
+
+    for (label, rules) in [("long", &definition.long), ("short", &definition.short)] {
+        validate_condition(&rules.entry, &format!("{label}.entry"), &declared)?;
+        validate_condition(&rules.exit, &format!("{label}.exit"), &declared)?;
+    }
+    if !definition.long.enabled && !definition.short.enabled {
+        return Err(StrategyIrError::NoEnabledDirection);
+    }
+
+    validate_session(&definition.session)?;
+    validate_news(&definition.news)?;
+    validate_sizing(&definition.sizing, &declared)?;
+    validate_trade_management(&definition.trade_management, &declared)?;
+    validate_timing(&definition.timing)?;
+    Ok(declared)
+}
+
+fn validate_metadata(metadata: &StrategyMetadata) -> Result<(), StrategyIrError> {
+    check_text("metadata.name", &metadata.name, MAX_TEXT_LEN)?;
+    check_text("metadata.author", &metadata.author, MAX_TEXT_LEN)?;
+    check_optional_text("metadata.notes", metadata.notes.as_deref(), MAX_TEXT_LEN)?;
+    check_size("metadata.tags", metadata.tags.len(), MAX_TAGS)?;
+    for (index, tag) in metadata.tags.iter().enumerate() {
+        check_text(&format!("metadata.tags[{index}]"), tag, MAX_TEXT_LEN)?;
+    }
+    Ok(())
+}
+
+fn validate_parameters(
+    parameters: &[StrategyParameter],
+) -> Result<BTreeMap<&str, &ParamValue>, StrategyIrError> {
+    check_size("parameters", parameters.len(), MAX_PARAMETERS)?;
+    let mut declared = BTreeMap::new();
+    for (index, parameter) in parameters.iter().enumerate() {
+        let field = format!("parameters[{index}]");
+        check_stable_id(&format!("{field}.id"), &parameter.id)?;
+        if declared
+            .insert(parameter.id.as_str(), &parameter.value)
+            .is_some()
+        {
+            return Err(StrategyIrError::DuplicateId {
+                kind: RefKind::Parameter,
+                id: parameter.id.clone(),
+            });
+        }
+        validate_parameter_value(&field, parameter)?;
+    }
+    Ok(declared)
+}
+
+fn validate_parameter_value(
+    field: &str,
+    parameter: &StrategyParameter,
+) -> Result<(), StrategyIrError> {
+    if let ParamValue::Float(value) = parameter.value {
+        check_finite(&format!("{field}.value"), value)?;
+    }
+    if let ParamValue::Text(text) = &parameter.value {
+        check_text(&format!("{field}.value"), text, MAX_TEXT_LEN)?;
+    }
+
+    let Some(range) = &parameter.range else {
+        return Ok(());
+    };
+    let range_field = format!("{field}.range");
+    match (range, &parameter.value) {
+        (ParamRange::Int { min, max }, ParamValue::Int(value)) => {
+            if min > max {
+                return Err(out_of_range(
+                    &range_field,
+                    format!("[{min}, {max}]"),
+                    "min <= max",
+                ));
+            }
+            if value < min || value > max {
+                return Err(out_of_range(
+                    &format!("{field}.value"),
+                    value,
+                    "a value inside the declared range",
+                ));
+            }
+            Ok(())
+        }
+        (ParamRange::Float { min, max }, ParamValue::Float(value)) => {
+            check_finite(&format!("{range_field}.min"), *min)?;
+            check_finite(&format!("{range_field}.max"), *max)?;
+            if min > max {
+                return Err(out_of_range(
+                    &range_field,
+                    format!("[{}, {}]", format_f64(*min), format_f64(*max)),
+                    "min <= max",
+                ));
+            }
+            if value < min || value > max {
+                return Err(out_of_range(
+                    &format!("{field}.value"),
+                    format_f64(*value),
+                    "a value inside the declared range",
+                ));
+            }
+            Ok(())
+        }
+        // A range on a non-numeric parameter, or a range whose type disagrees
+        // with the value's, has no meaning the optimizer could act on.
+        _ => Err(out_of_range(
+            &range_field,
+            range.wire_tag(),
+            "a range matching the parameter's own type",
+        )),
+    }
+}
+
+fn validate_indicator_ids(indicators: &[IndicatorNode]) -> Result<BTreeSet<&str>, StrategyIrError> {
+    check_size("indicators", indicators.len(), MAX_INDICATORS)?;
+    let mut declared = BTreeSet::new();
+    for (index, indicator) in indicators.iter().enumerate() {
+        check_stable_id(&format!("indicators[{index}].id"), &indicator.id)?;
+        if !declared.insert(indicator.id.as_str()) {
+            return Err(StrategyIrError::DuplicateId {
+                kind: RefKind::Indicator,
+                id: indicator.id.clone(),
+            });
+        }
+        if let IndicatorKind::Custom {
+            name,
+            implementation_id,
+        } = &indicator.kind
+        {
+            check_stable_id(&format!("indicators[{index}].kind.name"), name)?;
+            check_digest_id(
+                &format!("indicators[{index}].kind.implementation_id"),
+                implementation_id,
+            )?;
+        }
+    }
+    Ok(declared)
+}
+
+fn validate_indicator_inputs(
+    indicators: &[IndicatorNode],
+    declared: &DeclaredIds<'_>,
+) -> Result<(), StrategyIrError> {
+    for (indicator_index, indicator) in indicators.iter().enumerate() {
+        let context = format!("indicator `{}`", indicator.id);
+        check_size(
+            "indicator inputs",
+            indicator.inputs.len(),
+            MAX_INDICATOR_INPUTS,
+        )?;
+        if let Some(expected) = indicator.kind.input_shape() {
+            if indicator.inputs.len() != expected.len() {
+                return Err(out_of_range(
+                    &format!("indicators[{indicator_index}].inputs"),
+                    indicator.inputs.len(),
+                    "the built-in indicator's exact input arity",
+                ));
+            }
+            for (index, (input, expected_shape)) in
+                indicator.inputs.iter().zip(expected).enumerate()
+            {
+                if input.shape() != *expected_shape {
+                    return Err(out_of_range(
+                        &format!("indicators[{indicator_index}].inputs[{index}]"),
+                        format!("{:?}", input.shape()).to_ascii_lowercase(),
+                        match expected_shape {
+                            IndicatorInputShape::Series => "a price or indicator series",
+                            IndicatorInputShape::Scalar => "a numeric constant or parameter",
+                        },
+                    ));
+                }
+            }
+        }
+        for (index, input) in indicator.inputs.iter().enumerate() {
+            match input {
+                IndicatorInput::Constant(value) => {
+                    check_finite(&format!("{context}.inputs[{index}]"), *value)?
+                }
+                IndicatorInput::Parameter(id) => declared.check_numeric_parameter(id, &context)?,
+                IndicatorInput::Indicator(id) => {
+                    declared.check_ref(RefKind::Indicator, id, &context)?
+                }
+                IndicatorInput::Price(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Depth-first cycle check over indicator→indicator edges.
+///
+/// Nodes are visited in declaration order and edges in input order, so the
+/// reported cycle is deterministic. References were resolved beforehand, so a
+/// missing edge target is impossible here.
+fn check_indicator_acyclic(indicators: &[IndicatorNode]) -> Result<(), StrategyIrError> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        Unvisited,
+        InProgress,
+        Done,
+    }
+
+    let index_of: BTreeMap<&str, usize> = indicators
+        .iter()
+        .enumerate()
+        .map(|(index, indicator)| (indicator.id.as_str(), index))
+        .collect();
+    let mut marks = vec![Mark::Unvisited; indicators.len()];
+
+    // Explicit stack: recursion here would be bounded by MAX_INDICATORS, but
+    // an iterative walk keeps the bound obvious.
+    for start in 0..indicators.len() {
+        if marks[start] != Mark::Unvisited {
+            continue;
+        }
+        let mut stack = vec![(start, 0usize)];
+        marks[start] = Mark::InProgress;
+
+        while let Some((node, cursor)) = stack.pop() {
+            let Some(input) = indicators[node].inputs.get(cursor) else {
+                marks[node] = Mark::Done;
+                continue;
+            };
+            stack.push((node, cursor + 1));
+
+            let IndicatorInput::Indicator(target_id) = input else {
+                continue;
+            };
+            let target = index_of[target_id.as_str()];
+            match marks[target] {
+                Mark::Done => {}
+                Mark::Unvisited => {
+                    marks[target] = Mark::InProgress;
+                    stack.push((target, 0));
+                }
+                Mark::InProgress => {
+                    let mut path: Vec<String> = stack
+                        .iter()
+                        .skip_while(|(node, _)| *node != target)
+                        .map(|(node, _)| indicators[*node].id.clone())
+                        .collect();
+                    path.push(indicators[target].id.clone());
+                    return Err(StrategyIrError::IndicatorCycle { path });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_roles(
+    roles: &[RoleAssignment],
+    declared: &DeclaredIds<'_>,
+) -> Result<(), StrategyIrError> {
+    let mut seen = BTreeSet::new();
+    for assignment in roles {
+        if !seen.insert(assignment.role) {
+            return Err(StrategyIrError::DuplicateRole {
+                role: assignment.role,
+            });
+        }
+        declared.check_ref(
+            RefKind::Indicator,
+            &assignment.indicator,
+            &format!("role `{}`", assignment.role.wire_tag()),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_condition(
+    condition: &Condition,
+    context: &str,
+    declared: &DeclaredIds<'_>,
+) -> Result<(), StrategyIrError> {
+    let mut nodes = 0usize;
+    validate_condition_node(condition, context, declared, 1, &mut nodes)
+}
+
+fn validate_condition_node(
+    condition: &Condition,
+    context: &str,
+    declared: &DeclaredIds<'_>,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<(), StrategyIrError> {
+    if depth > MAX_CONDITION_DEPTH {
+        return Err(StrategyIrError::ConditionTooDeep {
+            limit: MAX_CONDITION_DEPTH,
+            found: depth,
+        });
+    }
+    *nodes += 1;
+    if *nodes > MAX_CONDITION_NODES {
+        return Err(StrategyIrError::ConditionTooLarge {
+            limit: MAX_CONDITION_NODES,
+            found: *nodes,
+        });
+    }
+
+    match condition {
+        Condition::Always | Condition::Never => Ok(()),
+        Condition::Not(inner) => {
+            validate_condition_node(inner, context, declared, depth + 1, nodes)
+        }
+        Condition::All(children) | Condition::Any(children) => {
+            if children.is_empty() {
+                return Err(out_of_range(
+                    &format!("{context}.{}", condition.wire_tag()),
+                    0,
+                    "at least one child condition",
+                ));
+            }
+            for child in children {
+                validate_condition_node(child, context, declared, depth + 1, nodes)?;
+            }
+            Ok(())
+        }
+        Condition::Compare { left, right, .. }
+        | Condition::CrossesAbove { left, right }
+        | Condition::CrossesBelow { left, right } => {
+            validate_operand(left, context, declared)?;
+            validate_operand(right, context, declared)
+        }
+    }
+}
+
+fn validate_operand(
+    operand: &Operand,
+    context: &str,
+    declared: &DeclaredIds<'_>,
+) -> Result<(), StrategyIrError> {
+    match operand {
+        Operand::Constant(value) => check_finite(context, *value),
+        Operand::Parameter(id) => declared.check_numeric_parameter(id, context),
+        Operand::Price { bars_ago, .. } => check_bars_ago(context, *bars_ago),
+        Operand::Indicator { id, bars_ago } => {
+            declared.check_ref(RefKind::Indicator, id, context)?;
+            check_bars_ago(context, *bars_ago)
+        }
+    }
+}
+
+fn check_bars_ago(context: &str, bars_ago: u32) -> Result<(), StrategyIrError> {
+    if bars_ago <= MAX_BARS_AGO {
+        Ok(())
+    } else {
+        Err(out_of_range(
+            &format!("{context}.bars_ago"),
+            bars_ago,
+            "a lookback within MAX_BARS_AGO",
+        ))
+    }
+}
+
+fn validate_session(session: &SessionFilter) -> Result<(), StrategyIrError> {
+    check_size(
+        "session.windows",
+        session.windows.len(),
+        MAX_SESSION_WINDOWS,
+    )?;
+    if session.enabled && session.windows.is_empty() {
+        return Err(out_of_range(
+            "session.windows",
+            0,
+            "at least one window while the filter is enabled",
+        ));
+    }
+
+    let mut previous_end: Option<u32> = None;
+    for (index, window) in session.windows.iter().enumerate() {
+        let field = format!("session.windows[{index}]");
+        if window.start_minute >= window.end_minute {
+            return Err(out_of_range(
+                &field,
+                format!("[{}, {})", window.start_minute, window.end_minute),
+                "start_minute < end_minute (a window may not wrap past midnight)",
+            ));
+        }
+        if window.end_minute > MINUTES_PER_DAY {
+            return Err(out_of_range(
+                &format!("{field}.end_minute"),
+                window.end_minute,
+                "a UTC minute within the day",
+            ));
+        }
+        if previous_end.is_some_and(|end| window.start_minute < end) {
+            return Err(out_of_range(
+                &field,
+                window.start_minute,
+                "windows in ascending, non-overlapping order",
+            ));
+        }
+        previous_end = Some(window.end_minute);
+    }
+    Ok(())
+}
+
+fn validate_news(news: &NewsFilter) -> Result<(), StrategyIrError> {
+    for (field, minutes) in [
+        ("news.block_minutes_before", news.block_minutes_before),
+        ("news.block_minutes_after", news.block_minutes_after),
+    ] {
+        if minutes > MAX_NEWS_BLOCK_MINUTES {
+            return Err(out_of_range(
+                field,
+                minutes,
+                "a blackout within MAX_NEWS_BLOCK_MINUTES",
+            ));
+        }
+    }
+    if news.enabled && news.block_minutes_before == 0 && news.block_minutes_after == 0 {
+        return Err(out_of_range(
+            "news.block_minutes_before + news.block_minutes_after",
+            0,
+            "a non-zero blackout while the filter is enabled",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sizing(
+    sizing: &PositionSizing,
+    declared: &DeclaredIds<'_>,
+) -> Result<(), StrategyIrError> {
+    if sizing.max_open_positions == 0 {
+        return Err(out_of_range(
+            "sizing.max_open_positions",
+            0,
+            "at least one open position",
+        ));
+    }
+    match &sizing.rule {
+        SizingRule::FixedUnits { units } => {
+            check_finite_in("sizing.units", *units, *units > 0.0, "a positive quantity")
+        }
+        SizingRule::PercentEquity { percent } => check_finite_in(
+            "sizing.percent",
+            *percent,
+            *percent > 0.0 && *percent <= 100.0,
+            "a percentage in (0, 100]",
+        ),
+        SizingRule::RiskPercentAtr {
+            risk_percent,
+            atr_multiple,
+            atr_indicator,
+        } => {
+            check_finite_in(
+                "sizing.risk_percent",
+                *risk_percent,
+                *risk_percent > 0.0 && *risk_percent <= 100.0,
+                "a percentage in (0, 100]",
+            )?;
+            check_finite_in(
+                "sizing.atr_multiple",
+                *atr_multiple,
+                *atr_multiple > 0.0,
+                "a positive multiple",
+            )?;
+            declared.check_ref(RefKind::Indicator, atr_indicator, "sizing")
+        }
+    }
+}
+
+fn validate_trade_management(
+    management: &TradeManagement,
+    declared: &DeclaredIds<'_>,
+) -> Result<(), StrategyIrError> {
+    check_size(
+        "trade_management.legs",
+        management.legs.len(),
+        MAX_TRADE_LEGS,
+    )?;
+    if management.legs.is_empty() {
+        return Err(out_of_range("trade_management.legs", 0, "at least one leg"));
+    }
+
+    let mut total_bps: u64 = 0;
+    for (index, leg) in management.legs.iter().enumerate() {
+        let field = format!("trade_management.legs[{index}]");
+        if leg.fraction_bps == 0 {
+            return Err(out_of_range(
+                &format!("{field}.fraction_bps"),
+                0,
+                "a non-zero share of the position",
+            ));
+        }
+        total_bps += u64::from(leg.fraction_bps);
+
+        for (label, rule) in [("stop", &leg.stop), ("target", &leg.target)] {
+            if let Some(rule) = rule {
+                validate_stop_rule(rule, &format!("{field}.{label}"), declared)?;
+            }
+        }
+        if let Some(trailing) = &leg.trailing {
+            validate_stop_rule(
+                &trailing.distance,
+                &format!("{field}.trailing.distance"),
+                declared,
+            )?;
+            if let Some(activate) = &trailing.activate_after {
+                validate_stop_rule(
+                    activate,
+                    &format!("{field}.trailing.activate_after"),
+                    declared,
+                )?;
+            }
+        }
+    }
+    if total_bps != u64::from(TOTAL_FRACTION_BPS) {
+        return Err(out_of_range(
+            "trade_management.legs.fraction_bps",
+            total_bps,
+            "leg fractions totalling exactly 10000 basis points",
+        ));
+    }
+
+    if let Some(break_even) = &management.break_even_after {
+        validate_stop_rule(break_even, "trade_management.break_even_after", declared)?;
+    }
+    if management.max_bars_in_trade == Some(0) {
+        return Err(out_of_range(
+            "trade_management.max_bars_in_trade",
+            0,
+            "at least one bar, or no limit at all",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stop_rule(
+    rule: &StopRule,
+    field: &str,
+    declared: &DeclaredIds<'_>,
+) -> Result<(), StrategyIrError> {
+    match rule {
+        StopRule::AtrMultiple {
+            indicator,
+            multiple,
+        } => {
+            check_finite_in(
+                &format!("{field}.multiple"),
+                *multiple,
+                *multiple > 0.0,
+                "a positive multiple",
+            )?;
+            declared.check_ref(RefKind::Indicator, indicator, field)
+        }
+        StopRule::PercentOfEntry { percent } => check_finite_in(
+            &format!("{field}.percent"),
+            *percent,
+            *percent > 0.0 && *percent <= 100.0,
+            "a percentage in (0, 100]",
+        ),
+        StopRule::PriceDistance { distance } => check_finite_in(
+            &format!("{field}.distance"),
+            *distance,
+            *distance > 0.0,
+            "a positive price distance",
+        ),
+    }
+}
+
+fn validate_timing(timing: &ExecutionTiming) -> Result<(), StrategyIrError> {
+    if let DecisionTiming::PreClose { offset_seconds } = timing.decision {
+        if offset_seconds == 0 {
+            return Err(out_of_range(
+                "timing.decision.offset_seconds",
+                0,
+                "a positive offset before the close",
+            ));
+        }
+        if offset_seconds > MAX_PRE_CLOSE_OFFSET_SECONDS {
+            return Err(out_of_range(
+                "timing.decision.offset_seconds",
+                offset_seconds,
+                "an offset within MAX_PRE_CLOSE_OFFSET_SECONDS",
+            ));
+        }
+    } else if timing.forming_bar_visible {
+        return Err(StrategyIrError::InconsistentTiming {
+            detail: "only a pre-close decision may observe the forming bar",
+        });
+    }
+
+    if timing.submit_delay_bars > MAX_SUBMIT_DELAY_BARS {
+        return Err(out_of_range(
+            "timing.submit_delay_bars",
+            timing.submit_delay_bars,
+            "a delay within MAX_SUBMIT_DELAY_BARS",
+        ));
+    }
+    Ok(())
+}
+
+// ── Strategy encoding ──────────────────────────────────────────────
+
+fn hash_metadata(digest: &mut CanonicalDigest, metadata: &StrategyMetadata) {
+    digest.tagged_text("metadata.name", &metadata.name);
+    digest.tagged_text("metadata.author", &metadata.author);
+    digest.begin_option("metadata.notes", metadata.notes.is_some());
+    if let Some(notes) = &metadata.notes {
+        digest.tagged_text("notes", notes);
+    }
+    digest.begin_seq("metadata.tags", metadata.tags.len());
+    for tag in &metadata.tags {
+        digest.tagged_text("tag", tag);
+    }
+}
+
+fn hash_parameters(digest: &mut CanonicalDigest, parameters: &[StrategyParameter]) {
+    digest.begin_seq("parameters", parameters.len());
+    for parameter in parameters {
+        digest.tagged_text("parameter.id", &parameter.id);
+        digest.tagged_text("parameter.type", parameter.value.wire_tag());
+        match &parameter.value {
+            ParamValue::Bool(value) => digest.tagged_bool("value", *value),
+            ParamValue::Int(value) => digest.tagged_i64("value", *value),
+            ParamValue::Float(value) => digest.tagged_f64("value", *value),
+            ParamValue::Text(value) => digest.tagged_text("value", value),
+        }
+        digest.begin_option("parameter.range", parameter.range.is_some());
+        if let Some(range) = &parameter.range {
+            digest.tagged_text("range.type", range.wire_tag());
+            match range {
+                ParamRange::Int { min, max } => {
+                    digest.tagged_i64("min", *min);
+                    digest.tagged_i64("max", *max);
+                }
+                ParamRange::Float { min, max } => {
+                    digest.tagged_f64("min", *min);
+                    digest.tagged_f64("max", *max);
+                }
+            }
+        }
+    }
+}
+
+fn hash_indicators(digest: &mut CanonicalDigest, indicators: &[IndicatorNode]) {
+    digest.begin_seq("indicators", indicators.len());
+    for indicator in indicators {
+        digest.tagged_text("indicator.id", &indicator.id);
+        digest.tagged_text("indicator.kind", indicator.kind.wire_tag());
+        if let IndicatorKind::Custom {
+            name,
+            implementation_id,
+        } = &indicator.kind
+        {
+            digest.tagged_text("kind.name", name);
+            digest.tagged_text("kind.implementation_id", implementation_id);
+        }
+        digest.begin_seq("indicator.inputs", indicator.inputs.len());
+        for input in &indicator.inputs {
+            digest.tagged_text("input.type", input.wire_tag());
+            match input {
+                IndicatorInput::Constant(value) => digest.tagged_f64("constant", *value),
+                IndicatorInput::Parameter(id) => digest.tagged_text("parameter", id),
+                IndicatorInput::Indicator(id) => digest.tagged_text("indicator", id),
+                IndicatorInput::Price(field) => digest.tagged_text("price", field.wire_tag()),
+            }
+        }
+    }
+}
+
+fn hash_roles(digest: &mut CanonicalDigest, roles: &[RoleAssignment]) {
+    digest.begin_seq("roles", roles.len());
+    for assignment in roles {
+        digest.tagged_text("role", assignment.role.wire_tag());
+        digest.tagged_text("role.indicator", &assignment.indicator);
+    }
+}
+
+fn hash_direction(digest: &mut CanonicalDigest, tag: &str, rules: &DirectionRules) {
+    digest.tagged_bool(&format!("{tag}.enabled"), rules.enabled);
+    digest.frame(format!("{tag}.entry").as_bytes());
+    hash_condition(digest, &rules.entry);
+    digest.frame(format!("{tag}.exit").as_bytes());
+    hash_condition(digest, &rules.exit);
+}
+
+/// Encode a condition tree. The variant tag comes first and every child list
+/// writes its length, so neither the shape nor the operand positions can be
+/// re-framed into a different tree.
+fn hash_condition(digest: &mut CanonicalDigest, condition: &Condition) {
+    digest.tagged_text("condition", condition.wire_tag());
+    match condition {
+        Condition::Always | Condition::Never => {}
+        Condition::Not(inner) => hash_condition(digest, inner),
+        Condition::All(children) | Condition::Any(children) => {
+            digest.begin_seq("children", children.len());
+            for child in children {
+                hash_condition(digest, child);
+            }
+        }
+        Condition::Compare { left, op, right } => {
+            digest.tagged_text("op", op.wire_tag());
+            hash_operand(digest, "left", left);
+            hash_operand(digest, "right", right);
+        }
+        Condition::CrossesAbove { left, right } | Condition::CrossesBelow { left, right } => {
+            hash_operand(digest, "left", left);
+            hash_operand(digest, "right", right);
+        }
+    }
+}
+
+fn hash_operand(digest: &mut CanonicalDigest, position: &str, operand: &Operand) {
+    digest.tagged_text(position, operand.wire_tag());
+    match operand {
+        Operand::Constant(value) => digest.tagged_f64("constant", *value),
+        Operand::Parameter(id) => digest.tagged_text("parameter", id),
+        Operand::Price { field, bars_ago } => {
+            digest.tagged_text("price", field.wire_tag());
+            digest.tagged_u32("bars_ago", *bars_ago);
+        }
+        Operand::Indicator { id, bars_ago } => {
+            digest.tagged_text("indicator", id);
+            digest.tagged_u32("bars_ago", *bars_ago);
+        }
+    }
+}
+
+fn hash_session(digest: &mut CanonicalDigest, session: &SessionFilter) {
+    digest.tagged_bool("session.enabled", session.enabled);
+    digest.tagged_bool("session.close_outside", session.close_positions_outside);
+    digest.begin_seq("session.windows", session.windows.len());
+    for window in &session.windows {
+        digest.tagged_u32("window.start", window.start_minute);
+        digest.tagged_u32("window.end", window.end_minute);
+    }
+}
+
+fn hash_news(digest: &mut CanonicalDigest, news: &NewsFilter) {
+    digest.tagged_bool("news.enabled", news.enabled);
+    digest.tagged_text("news.min_impact", news.min_impact.wire_tag());
+    digest.tagged_u32("news.before", news.block_minutes_before);
+    digest.tagged_u32("news.after", news.block_minutes_after);
+    digest.tagged_bool("news.close_open", news.close_open_positions);
+}
+
+fn hash_sizing(digest: &mut CanonicalDigest, sizing: &PositionSizing) {
+    digest.tagged_text("sizing.rule", sizing.rule.wire_tag());
+    match &sizing.rule {
+        SizingRule::FixedUnits { units } => digest.tagged_f64("units", *units),
+        SizingRule::PercentEquity { percent } => digest.tagged_f64("percent", *percent),
+        SizingRule::RiskPercentAtr {
+            risk_percent,
+            atr_multiple,
+            atr_indicator,
+        } => {
+            digest.tagged_f64("risk_percent", *risk_percent);
+            digest.tagged_f64("atr_multiple", *atr_multiple);
+            digest.tagged_text("atr_indicator", atr_indicator);
+        }
+    }
+    digest.tagged_u32("sizing.max_open_positions", sizing.max_open_positions);
+}
+
+fn hash_trade_management(digest: &mut CanonicalDigest, management: &TradeManagement) {
+    digest.begin_seq("trade.legs", management.legs.len());
+    for leg in &management.legs {
+        digest.tagged_u32("leg.fraction_bps", leg.fraction_bps);
+        hash_optional_stop(digest, "leg.stop", leg.stop.as_ref());
+        hash_optional_stop(digest, "leg.target", leg.target.as_ref());
+        digest.begin_option("leg.trailing", leg.trailing.is_some());
+        if let Some(trailing) = &leg.trailing {
+            hash_stop_rule(digest, "trailing.distance", &trailing.distance);
+            hash_optional_stop(
+                digest,
+                "trailing.activate_after",
+                trailing.activate_after.as_ref(),
+            );
+        }
+    }
+    hash_optional_stop(
+        digest,
+        "trade.break_even_after",
+        management.break_even_after.as_ref(),
+    );
+    digest.begin_option("trade.max_bars", management.max_bars_in_trade.is_some());
+    if let Some(bars) = management.max_bars_in_trade {
+        digest.tagged_u32("max_bars", bars);
+    }
+}
+
+fn hash_optional_stop(digest: &mut CanonicalDigest, tag: &str, rule: Option<&StopRule>) {
+    digest.begin_option(tag, rule.is_some());
+    if let Some(rule) = rule {
+        hash_stop_rule(digest, tag, rule);
+    }
+}
+
+fn hash_stop_rule(digest: &mut CanonicalDigest, tag: &str, rule: &StopRule) {
+    digest.tagged_text(tag, rule.wire_tag());
+    match rule {
+        StopRule::AtrMultiple {
+            indicator,
+            multiple,
+        } => {
+            digest.tagged_text("indicator", indicator);
+            digest.tagged_f64("multiple", *multiple);
+        }
+        StopRule::PercentOfEntry { percent } => digest.tagged_f64("percent", *percent),
+        StopRule::PriceDistance { distance } => digest.tagged_f64("distance", *distance),
+    }
+}
+
+fn hash_timing(digest: &mut CanonicalDigest, timing: &ExecutionTiming) {
+    digest.tagged_text("timing.decision", timing.decision.wire_tag());
+    if let DecisionTiming::PreClose { offset_seconds } = timing.decision {
+        digest.tagged_u32("offset_seconds", offset_seconds);
+    }
+    digest.tagged_bool("timing.forming_bar_visible", timing.forming_bar_visible);
+    digest.tagged_u32("timing.submit_delay_bars", timing.submit_delay_bars);
+}
+
+// ── Config identity ────────────────────────────────────────────────
+
+/// The content-addressed config id: lowercase hex SHA-256 over the canonical
+/// encoding of fully validated execution settings.
+pub fn compute_config_id(settings: &ExecutionSettings) -> Result<String, StrategyIrError> {
+    validate_settings(settings)?;
+
+    let mut digest = CanonicalDigest::new(CONFIG_ID_DOMAIN);
+    digest.tagged_u32("schema_version", STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION);
+    digest.tagged_f64("initial_capital", settings.initial_capital);
+    digest.tagged_text("account_currency", &settings.account_currency);
+
+    digest.tagged_text("commission", settings.commission.wire_tag());
+    match &settings.commission {
+        CommissionModel::None => {}
+        CommissionModel::PerShare { amount, minimum } => {
+            digest.tagged_f64("amount", *amount);
+            digest.tagged_f64("minimum", *minimum);
+        }
+        CommissionModel::PercentOfNotional { percent, minimum } => {
+            digest.tagged_f64("percent", *percent);
+            digest.tagged_f64("minimum", *minimum);
+        }
+        CommissionModel::PerOrder { amount } => digest.tagged_f64("amount", *amount),
+    }
+
+    digest.tagged_text("slippage", settings.slippage.wire_tag());
+    match &settings.slippage {
+        SlippageModel::None => {}
+        SlippageModel::FixedPriceDistance { distance } => digest.tagged_f64("distance", *distance),
+        SlippageModel::SpreadFraction { fraction } => digest.tagged_f64("fraction", *fraction),
+        SlippageModel::VolatilityScaled { atr_fraction } => {
+            digest.tagged_f64("atr_fraction", *atr_fraction)
+        }
+    }
+
+    digest.tagged_text("spread", settings.spread.wire_tag());
+    match &settings.spread {
+        SpreadModel::None | SpreadModel::RecordedQuotes => {}
+        SpreadModel::Constant { price_units } => digest.tagged_f64("price_units", *price_units),
+        SpreadModel::PercentOfPrice { percent } => digest.tagged_f64("percent", *percent),
+    }
+
+    digest.tagged_text("ambiguity", settings.ambiguity.wire_tag());
+    digest.tagged_text("tie_break", settings.tie_break.wire_tag());
+    Ok(digest.finish_hex())
+}
+
+fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError> {
+    check_finite_in(
+        "settings.initial_capital",
+        settings.initial_capital,
+        settings.initial_capital > 0.0,
+        "a positive account balance",
+    )?;
+    check_text(
+        "settings.account_currency",
+        &settings.account_currency,
+        MAX_TEXT_LEN,
+    )?;
+
+    // Costs may be zero — that is the zero-cost equivalence baseline of the M1
+    // gate — but never negative, which would pay the account to trade.
+    let non_negative = "a non-negative cost";
+    match &settings.commission {
+        CommissionModel::None => {}
+        CommissionModel::PerShare { amount, minimum } => {
+            check_finite_in(
+                "settings.commission.amount",
+                *amount,
+                *amount >= 0.0,
+                non_negative,
+            )?;
+            check_finite_in(
+                "settings.commission.minimum",
+                *minimum,
+                *minimum >= 0.0,
+                non_negative,
+            )?;
+        }
+        CommissionModel::PercentOfNotional { percent, minimum } => {
+            check_finite_in(
+                "settings.commission.percent",
+                *percent,
+                *percent >= 0.0 && *percent <= 100.0,
+                "a percentage in [0, 100]",
+            )?;
+            check_finite_in(
+                "settings.commission.minimum",
+                *minimum,
+                *minimum >= 0.0,
+                non_negative,
+            )?;
+        }
+        CommissionModel::PerOrder { amount } => check_finite_in(
+            "settings.commission.amount",
+            *amount,
+            *amount >= 0.0,
+            non_negative,
+        )?,
+    }
+
+    match &settings.slippage {
+        SlippageModel::None => {}
+        SlippageModel::FixedPriceDistance { distance } => check_finite_in(
+            "settings.slippage.distance",
+            *distance,
+            *distance >= 0.0,
+            non_negative,
+        )?,
+        SlippageModel::SpreadFraction { fraction } => check_finite_in(
+            "settings.slippage.fraction",
+            *fraction,
+            *fraction >= 0.0,
+            non_negative,
+        )?,
+        SlippageModel::VolatilityScaled { atr_fraction } => check_finite_in(
+            "settings.slippage.atr_fraction",
+            *atr_fraction,
+            *atr_fraction >= 0.0,
+            non_negative,
+        )?,
+    }
+
+    match &settings.spread {
+        SpreadModel::None | SpreadModel::RecordedQuotes => {}
+        SpreadModel::Constant { price_units } => check_finite_in(
+            "settings.spread.price_units",
+            *price_units,
+            *price_units >= 0.0,
+            non_negative,
+        )?,
+        SpreadModel::PercentOfPrice { percent } => check_finite_in(
+            "settings.spread.percent",
+            *percent,
+            *percent >= 0.0 && *percent <= 100.0,
+            "a percentage in [0, 100]",
+        )?,
+    }
+    Ok(())
+}
+
+// ── Run identity ───────────────────────────────────────────────────
+
+/// The content-addressed run id: lowercase hex SHA-256 over the canonical
+/// encoding of a fully validated binding.
+pub fn compute_run_id(binding: &RunBinding) -> Result<String, StrategyIrError> {
+    validate_binding(binding)?;
+
+    let mut digest = CanonicalDigest::new(RUN_ID_DOMAIN);
+    digest.tagged_u32("schema_version", STRATEGY_RUN_MANIFEST_SCHEMA_VERSION);
+    digest.begin_seq("dataset_ids", binding.dataset_ids.len());
+    for dataset_id in &binding.dataset_ids {
+        digest.tagged_text("dataset_id", dataset_id);
+    }
+    digest.tagged_text("strategy_id", &binding.strategy_id);
+    digest.tagged_text("config_id", &binding.config_id);
+    digest.tagged_u64("seed", binding.seed);
+    digest.tagged_text("engine_version", &binding.engine_version);
+    digest.begin_option("intervention_log_id", binding.intervention_log_id.is_some());
+    if let Some(intervention_log_id) = &binding.intervention_log_id {
+        digest.tagged_text("intervention_log_id", intervention_log_id);
+    }
+    Ok(digest.finish_hex())
+}
+
+fn validate_binding(binding: &RunBinding) -> Result<(), StrategyIrError> {
+    check_size(
+        "binding.dataset_ids",
+        binding.dataset_ids.len(),
+        MAX_DATASETS_PER_RUN,
+    )?;
+    if binding.dataset_ids.is_empty() {
+        return Err(out_of_range(
+            "binding.dataset_ids",
+            0,
+            "at least one bound dataset",
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    for (index, dataset_id) in binding.dataset_ids.iter().enumerate() {
+        check_digest_id(&format!("binding.dataset_ids[{index}]"), dataset_id)?;
+        if !seen.insert(dataset_id.as_str()) {
+            return Err(StrategyIrError::DuplicateId {
+                kind: RefKind::Dataset,
+                id: dataset_id.clone(),
+            });
+        }
+    }
+
+    check_digest_id("binding.strategy_id", &binding.strategy_id)?;
+    check_digest_id("binding.config_id", &binding.config_id)?;
+    if let Some(intervention_log_id) = &binding.intervention_log_id {
+        check_digest_id("binding.intervention_log_id", intervention_log_id)?;
+    }
+    check_text(
+        "binding.engine_version",
+        &binding.engine_version,
+        MAX_TEXT_LEN,
+    )
+}
+
+#[cfg(test)]
+mod tests;
