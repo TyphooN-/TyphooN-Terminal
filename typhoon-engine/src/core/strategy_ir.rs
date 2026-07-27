@@ -1011,10 +1011,11 @@ pub struct StrategyIr {
 impl StrategyIr {
     /// Validate `definition` and seal it with its id.
     pub fn build(definition: &StrategyDefinition) -> Result<Self, StrategyIrError> {
-        let strategy_id = compute_strategy_id(definition)?;
+        let definition = normalize_definition(definition)?;
+        let strategy_id = compute_validated_strategy_id(&definition);
         Ok(Self {
             schema_version: STRATEGY_IR_SCHEMA_VERSION,
-            definition: definition.clone(),
+            definition,
             strategy_id,
         })
     }
@@ -1589,11 +1590,67 @@ impl<'a> DeclaredIds<'a> {
 /// Validation runs first and in a fixed order, so the same malformed
 /// definition always reports the same error.
 pub fn compute_strategy_id(definition: &StrategyDefinition) -> Result<String, StrategyIrError> {
+    let definition = normalize_definition(definition)?;
+    Ok(compute_validated_strategy_id(&definition))
+}
+
+/// Return the one stored representation for order-insensitive declarations.
+/// Indicator input order and trade-leg order remain semantically meaningful.
+fn normalize_definition(
+    definition: &StrategyDefinition,
+) -> Result<StrategyDefinition, StrategyIrError> {
     let declared = validate_definition(definition)?;
-    // `declared` borrows the definition; identity only needs it to have been
-    // proven, not to be re-read.
     drop(declared);
 
+    let mut normalized = definition.clone();
+    normalized
+        .parameters
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    normalized
+        .indicators
+        .sort_by(|left, right| left.id.cmp(&right.id));
+    normalized.roles.sort_by(|left, right| {
+        left.role
+            .wire_tag()
+            .cmp(right.role.wire_tag())
+            .then_with(|| left.indicator.cmp(&right.indicator))
+    });
+    normalized.metadata.tags.sort();
+    normalized
+        .session
+        .windows
+        .sort_by_key(|window| (window.start_minute, window.end_minute));
+    normalize_condition(&mut normalized.long.entry);
+    normalize_condition(&mut normalized.long.exit);
+    normalize_condition(&mut normalized.short.entry);
+    normalize_condition(&mut normalized.short.exit);
+    Ok(normalized)
+}
+
+fn normalize_condition(condition: &mut Condition) {
+    match condition {
+        Condition::Not(inner) => normalize_condition(inner),
+        Condition::All(children) | Condition::Any(children) => {
+            for child in children.iter_mut() {
+                normalize_condition(child);
+            }
+            children.sort_by_cached_key(|child| condition_sort_key(child));
+        }
+        Condition::Always
+        | Condition::Never
+        | Condition::Compare { .. }
+        | Condition::CrossesAbove { .. }
+        | Condition::CrossesBelow { .. } => {}
+    }
+}
+
+fn condition_sort_key(condition: &Condition) -> String {
+    let mut digest = CanonicalDigest::new("typhoon.strategy.condition-sort.v1");
+    hash_condition(&mut digest, condition);
+    digest.finish_hex()
+}
+
+fn compute_validated_strategy_id(definition: &StrategyDefinition) -> String {
     let mut digest = CanonicalDigest::new(STRATEGY_ID_DOMAIN);
     digest.tagged_u32("schema_version", STRATEGY_IR_SCHEMA_VERSION);
     hash_metadata(&mut digest, &definition.metadata);
@@ -1607,7 +1664,7 @@ pub fn compute_strategy_id(definition: &StrategyDefinition) -> Result<String, St
     hash_sizing(&mut digest, &definition.sizing);
     hash_trade_management(&mut digest, &definition.trade_management);
     hash_timing(&mut digest, &definition.timing);
-    Ok(digest.finish_hex())
+    digest.finish_hex()
 }
 
 fn validate_definition(

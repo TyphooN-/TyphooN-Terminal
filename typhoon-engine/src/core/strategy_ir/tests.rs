@@ -405,9 +405,20 @@ fn build_verify_and_recompute_agree() {
 
 // ── Identity: per-field sensitivity ────────────────────────────────
 
-/// Every mutation must yield a *valid* definition with a *different* id, and
-/// no two mutations may collide with each other — that second property is what
+/// One mutation for every identity-bearing StrategyDefinition field. Keeping
+/// this as data makes both sensitivity and tamper tests exhaustive, and also
 /// catches field-boundary framing bugs.
+fn parameter_mut<'a>(
+    definition: &'a mut StrategyDefinition,
+    id: &str,
+) -> &'a mut StrategyParameter {
+    definition
+        .parameters
+        .iter_mut()
+        .find(|parameter| parameter.id == id)
+        .expect("fixture parameter exists")
+}
+
 fn definition_mutations() -> Vec<(&'static str, fn(&mut StrategyDefinition))> {
     vec![
         ("metadata.name", |d| d.metadata.name = "other name".into()),
@@ -423,24 +434,26 @@ fn definition_mutations() -> Vec<(&'static str, fn(&mut StrategyDefinition))> {
             d.metadata.tags.pop();
         }),
         ("parameters.int_value", |d| {
-            d.parameters[0].value = ParamValue::Int(21)
+            parameter_mut(d, "atr_period").value = ParamValue::Int(21)
         }),
         ("parameters.float_value", |d| {
-            d.parameters[2].value = ParamValue::Float(2.0)
+            parameter_mut(d, "risk_percent").value = ParamValue::Float(2.0)
         }),
         ("parameters.bool_value", |d| {
-            d.parameters[3].value = ParamValue::Bool(false)
+            parameter_mut(d, "allow_shorts").value = ParamValue::Bool(false)
         }),
         ("parameters.text_value", |d| {
-            d.parameters[4].value = ParamValue::Text("tokyo".into())
+            parameter_mut(d, "session_label").value = ParamValue::Text("tokyo".into())
         }),
         ("parameters.range_min", |d| {
-            d.parameters[0].range = Some(ParamRange::Int { min: 6, max: 50 })
+            parameter_mut(d, "atr_period").range = Some(ParamRange::Int { min: 6, max: 50 })
         }),
         ("parameters.range_max", |d| {
-            d.parameters[0].range = Some(ParamRange::Int { min: 5, max: 60 })
+            parameter_mut(d, "atr_period").range = Some(ParamRange::Int { min: 5, max: 60 })
         }),
-        ("parameters.range_none", |d| d.parameters[0].range = None),
+        ("parameters.range_none", |d| {
+            parameter_mut(d, "atr_period").range = None
+        }),
         ("parameters.push", |d| {
             d.parameters.push(StrategyParameter {
                 id: "extra_param".into(),
@@ -721,20 +734,20 @@ fn every_identity_bearing_binding_field_changes_the_run_id() {
     }
 }
 
-// ── Identity: order sensitivity ────────────────────────────────────
+// ── Identity: canonical ordering ───────────────────────────────────
 
 #[test]
-fn parameter_order_changes_the_strategy_id() {
+fn parameter_declaration_order_does_not_change_the_strategy_id() {
     let mut swapped = definition();
     swapped.parameters.swap(0, 1);
-    assert_ne!(strategy_id_of(&swapped), strategy_id_of(&definition()));
+    assert_eq!(strategy_id_of(&swapped), strategy_id_of(&definition()));
 }
 
 #[test]
-fn indicator_order_changes_the_strategy_id() {
+fn indicator_declaration_order_does_not_change_the_strategy_id() {
     let mut swapped = definition();
     swapped.indicators.swap(0, 1);
-    assert_ne!(strategy_id_of(&swapped), strategy_id_of(&definition()));
+    assert_eq!(strategy_id_of(&swapped), strategy_id_of(&definition()));
 }
 
 #[test]
@@ -745,27 +758,44 @@ fn indicator_input_order_changes_the_strategy_id() {
 }
 
 #[test]
-fn tag_order_changes_the_strategy_id() {
+fn tag_order_does_not_change_the_strategy_id() {
     let mut swapped = definition();
     swapped.metadata.tags.swap(0, 1);
-    assert_ne!(strategy_id_of(&swapped), strategy_id_of(&definition()));
+    assert_eq!(strategy_id_of(&swapped), strategy_id_of(&definition()));
 }
 
 #[test]
-fn role_order_changes_the_strategy_id() {
+fn role_declaration_order_does_not_change_the_strategy_id() {
     let mut swapped = definition();
     swapped.roles.swap(0, 1);
-    assert_ne!(strategy_id_of(&swapped), strategy_id_of(&definition()));
+    assert_eq!(strategy_id_of(&swapped), strategy_id_of(&definition()));
 }
 
 #[test]
-fn condition_child_order_changes_the_strategy_id() {
+fn commutative_condition_child_order_does_not_change_the_strategy_id() {
     let mut swapped = definition();
     match &mut swapped.long.entry {
         Condition::All(children) => children.swap(0, 1),
         other => panic!("fixture entry is not an All node: {other:?}"),
     }
-    assert_ne!(strategy_id_of(&swapped), strategy_id_of(&definition()));
+    assert_eq!(strategy_id_of(&swapped), strategy_id_of(&definition()));
+}
+
+#[test]
+fn build_stores_the_normalized_canonical_definition() {
+    let mut shuffled = definition();
+    shuffled.parameters.reverse();
+    shuffled.indicators.reverse();
+    shuffled.roles.reverse();
+    shuffled.metadata.tags.reverse();
+    if let Condition::All(children) = &mut shuffled.long.entry {
+        children.reverse();
+    }
+
+    let built = StrategyIr::build(&shuffled).expect("shuffled definition is valid");
+    let canonical = StrategyIr::build(&definition()).expect("fixture is valid");
+    assert_eq!(built.definition, canonical.definition);
+    assert_eq!(built.strategy_id, canonical.strategy_id);
 }
 
 #[test]
