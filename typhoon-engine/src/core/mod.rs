@@ -22,6 +22,7 @@ pub mod risk;
 pub mod screener;
 pub mod sec_filing;
 pub mod strategy_dataset;
+pub mod strategy_interpreter;
 pub mod strategy_ir;
 pub mod strategy_run;
 pub mod strategy_simulator;
