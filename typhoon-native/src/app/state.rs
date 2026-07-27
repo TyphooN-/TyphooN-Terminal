@@ -799,6 +799,16 @@ pub struct TyphooNApp {
     pub(crate) ci_contribution: String,
     pub(crate) ci_result: Vec<(f64, f64, f64)>,
     pub(crate) show_backtest: bool,
+    /// Dataset Inspector window visibility (ADR-135 §11.2).
+    pub(crate) show_dataset_inspector: bool,
+    /// Bounded view model for the Dataset Inspector — one page of bars, one
+    /// capped record list, and the current QA/manifest header. Never the whole
+    /// dataset.
+    pub(crate) dataset_inspector: crate::app::dataset_inspector_model::DatasetInspectorState,
+    /// Background worker that owns all dataset construction, QA, and store I/O.
+    /// Spawned lazily the first time the inspector opens, so a session that
+    /// never opens it pays nothing.
+    pub(crate) dataset_worker: Option<typhoon_engine::core::strategy_dataset_worker::DatasetWorker>,
     pub(crate) show_screener: bool,
     pub(crate) screener_filter: String,
     pub(crate) screener_sort_col: usize,

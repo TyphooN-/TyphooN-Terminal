@@ -2123,7 +2123,7 @@ fn run_dataset_fixture(
 ) {
     use crate::broker::alpaca::Bar;
     use crate::core::strategy_dataset::{
-        CalendarPolicy, DatasetManifest, DatasetManifestInput, DatasetProvenance,
+        CalendarPolicy, DatasetManifest, DatasetManifestInput, DatasetProvenance, DatasetQaPolicy,
     };
     let bars = vec![Bar {
         timestamp: "2024-01-02T00:00:00Z".to_string(),
@@ -2144,6 +2144,7 @@ fn run_dataset_fixture(
             },
             adjustment,
             calendar: CalendarPolicy::WeekdaysOnly,
+            qa_policy: DatasetQaPolicy::default(),
         },
         &bars,
     )

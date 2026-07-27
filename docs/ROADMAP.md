@@ -228,7 +228,7 @@ capability matrices, architecture, non-goals, and acceptance gates.
 - [x] Deterministic bounded scalar IR interpreter for the supported closed-bar/fixed-unit subset, with explicit rejection of unsupported semantics (`strategy_interpreter.rs`)
 - [x] Bounded deterministic scalar event simulator foundation with explicit costs, next-open market fills, no-look-ahead views, and a golden-ledger digest (`strategy_simulator.rs`)
 - [x] Named dataset-input bindings and verified cross-artifact run assembly (`strategy_run.rs`)
-- [ ] Finish M0 persistence/restart materialization, tabular inspection, background integration, and the complete seeded QA/calendar corpus
+- [x] **M0 gate passed** — atomic content-addressed dataset store with byte-identical restart recovery (`strategy_dataset_store.rs`), the complete seeded QA/calendar corpus under versioned calendar + QA policies (`strategy_dataset.rs`), off-render-thread build/QA/paging with bounded queues and backpressure (`strategy_dataset_worker.rs`), and the native Dataset Inspector table (`dataset_inspector_model.rs`). Remaining M0-scope polish is listed in ADR-135 §13.1: user-driven timeframe transforms, an arbitrary symbol/timeframe/range materializer, and artifact-store retention/GC
 - [ ] Finish M1 interpreter coverage plus full order/OHLC/latency/timing semantics, broker-versioned costs, hand-computed golden corpus, determinism/look-ahead canaries, and legacy zero-cost equivalence
 - [ ] Keep M2–M8 gated behind M1; no optimizer, generator, portfolio, workflow, or live-lifecycle foundation is completion evidence before those gates pass
 

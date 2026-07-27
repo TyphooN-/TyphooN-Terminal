@@ -96,3 +96,12 @@ pub fn cache_dir() -> PathBuf {
 pub fn cache_db_path() -> PathBuf {
     cache_dir().join("typhoon_cache.db")
 }
+
+/// Root of the immutable strategy-dataset artifact store (ADR-135 §5.1).
+///
+/// Lives beside the bar cache rather than in `dirs_home()`: these are bulk
+/// research artifacts, so they should follow the same NAS/large-drive redirect
+/// the cache already honours.
+pub fn strategy_dataset_dir() -> PathBuf {
+    cache_dir().join("strategy_datasets")
+}

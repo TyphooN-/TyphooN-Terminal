@@ -257,6 +257,14 @@ impl TyphooNApp {
                                 self.show_backtest = true;
                                 ui.close();
                             }
+                            if ui
+                                .button("Dataset Inspector")
+                                .on_hover_text("Browse immutable, content-addressed strategy datasets: manifest, provenance, QA flags, and a bounded bar table (ADR-135 §11.2).")
+                                .clicked()
+                            {
+                                self.show_dataset_inspector = true;
+                                ui.close();
+                            }
                             if ui.button("Screener").clicked() {
                                 self.show_screener = true;
                                 ui.close();

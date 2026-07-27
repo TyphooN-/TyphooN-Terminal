@@ -92,6 +92,7 @@ mod command_palette;
 mod command_research_windows;
 mod commands;
 mod common;
+mod dataset_inspector_model;
 mod drawing;
 mod export_nav;
 mod floating_windows;
@@ -511,6 +512,9 @@ impl TyphooNApp {
             ci_contribution: String::new(),
             ci_result: Vec::new(),
             show_backtest: false,
+            show_dataset_inspector: false,
+            dataset_inspector: dataset_inspector_model::DatasetInspectorState::new(),
+            dataset_worker: None,
             show_screener: false,
             screener_filter: String::new(),
             screener_sort_col: 3,

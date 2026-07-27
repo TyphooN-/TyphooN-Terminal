@@ -22,11 +22,18 @@ fn nth_sunday(year: i32, month: u32, nth: u32) -> Option<chrono::NaiveDate> {
     ))
 }
 
+/// The US-Eastern wall-clock instant for a UTC instant (DST-aware). Callers
+/// that need the date only should use [`us_eastern_date`]; this exists for the
+/// rules that also depend on the ET time of day (session windows).
+pub fn us_eastern_datetime(now_utc: chrono::DateTime<chrono::Utc>) -> chrono::NaiveDateTime {
+    now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc))
+}
+
 /// The US-Eastern calendar date for a UTC instant (DST-aware). Shared by the
 /// session calculators and the SSR state machine so "today" always means the
 /// same trading date.
 pub fn us_eastern_date(now_utc: chrono::DateTime<chrono::Utc>) -> chrono::NaiveDate {
-    (now_utc.naive_utc() + chrono::Duration::seconds(us_eastern_offset_seconds(now_utc))).date()
+    us_eastern_datetime(now_utc).date()
 }
 
 fn us_eastern_offset_seconds(now_utc: chrono::DateTime<chrono::Utc>) -> i64 {

@@ -18,6 +18,7 @@ fn input() -> DatasetManifestInput {
         provenance: provenance(),
         adjustment: AdjustmentPolicy::SplitAdjusted,
         calendar: CalendarPolicy::WeekdaysOnly,
+        qa_policy: DatasetQaPolicy::default(),
     }
 }
 
@@ -734,4 +735,710 @@ fn manifest_runs_qa_with_its_own_recorded_policy() {
             .iter()
             .any(|f| matches!(f.issue, DatasetQaIssue::UnexpectedWeekendBar { .. }))
     );
+}
+
+// ── QA: seeded-defect corpus (ADR-135 M0 gate) ─────────────────────
+
+/// `count` consecutive UTC-midnight daily bars starting `2024-01-01`, drifting
+/// +0.5 % a bar with a fixed intrabar range. Deliberately boring: every
+/// relative move is identical, so the robust spike band collapses onto the
+/// policy's absolute floor and any seeded defect stands out.
+fn clean_daily_bars(count: usize) -> Vec<Bar> {
+    let start = chrono::DateTime::from_timestamp(1_704_067_200, 0).expect("2024-01-01T00:00:00Z");
+    let mut close = 100.0_f64;
+    let mut bars = Vec::with_capacity(count);
+    for index in 0..count {
+        let open = close;
+        close = open * 1.005;
+        let timestamp = (start + chrono::Duration::days(index as i64))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        bars.push(bar(
+            &timestamp,
+            open,
+            close * 1.005,
+            open * 0.995,
+            close,
+            1_000.0,
+        ));
+    }
+    bars
+}
+
+fn issue_kinds(report: &DatasetQaReport) -> Vec<&DatasetQaIssue> {
+    report.findings.iter().map(|f| &f.issue).collect()
+}
+
+fn has_issue(report: &DatasetQaReport, predicate: impl Fn(&DatasetQaIssue) -> bool) -> bool {
+    report.findings.iter().any(|f| predicate(&f.issue))
+}
+
+fn crypto_input(timeframe: &str) -> DatasetManifestInput {
+    DatasetManifestInput {
+        symbol: "BTC/USD".to_string(),
+        timeframe: timeframe.to_string(),
+        provenance: DatasetProvenance {
+            source: "kraken".to_string(),
+            venue: "kraken-spot".to_string(),
+            pipeline: "cache-merge/v1".to_string(),
+        },
+        adjustment: AdjustmentPolicy::Raw,
+        calendar: CalendarPolicy::Continuous24x7,
+        qa_policy: DatasetQaPolicy::default(),
+    }
+}
+
+/// The M0 acceptance corpus: every seeded defect class must be detected, and
+/// the undamaged control must stay clean.
+#[test]
+fn qa_detects_every_seeded_defect_class() {
+    let policy = DatasetQaPolicy::default();
+    let clean = clean_daily_bars(40);
+
+    // Control: an undamaged 24x7 series produces no findings at all.
+    let control =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &clean);
+    assert!(
+        control.findings.is_empty(),
+        "clean corpus must be finding-free: {:?}",
+        issue_kinds(&control)
+    );
+
+    // 1. Gap — a whole bar removed from the middle.
+    let mut gapped = clean.clone();
+    gapped.remove(20);
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &gapped);
+    assert!(
+        has_issue(&report, |i| matches!(i, DatasetQaIssue::MissingBars { .. })),
+        "gap not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 2. Spike — a single bad tick eight times the level, reverting after.
+    let mut spiked = clean.clone();
+    spiked[20].high = spiked[20].close * 8.0;
+    spiked[20].close *= 8.0;
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &spiked);
+    assert!(
+        has_issue(&report, |i| matches!(i, DatasetQaIssue::PriceSpike { .. })),
+        "spike not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 3. Duplicate timestamp.
+    let mut duplicated = clean.clone();
+    duplicated[21].timestamp = duplicated[20].timestamp.clone();
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &duplicated);
+    assert!(
+        has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::DuplicateTimestamp { .. }
+        )),
+        "duplicate timestamp not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 4. Out-of-order timestamp.
+    let mut disordered = clean.clone();
+    disordered.swap(20, 21);
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &disordered);
+    assert!(
+        has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::TimestampOutOfOrder { .. }
+        )),
+        "out-of-order timestamp not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 5. Carry-forward bar — the Alpaca v=0 signature.
+    let mut carried = clean.clone();
+    let previous_close = carried[19].close;
+    carried[20].open = previous_close;
+    carried[20].high = previous_close;
+    carried[20].low = previous_close;
+    carried[20].close = previous_close;
+    carried[20].volume = 0.0;
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &carried);
+    assert!(
+        has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::CarryForwardBar {
+                zero_volume: true,
+                ..
+            }
+        )),
+        "carry-forward bar not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 6. OHLC violation.
+    let mut broken = clean.clone();
+    broken[20].high = broken[20].low * 0.5;
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &broken);
+    assert!(
+        has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::OhlcViolation { .. }
+        )),
+        "OHLC violation not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 7. Split-like level shift — every price halves from bar 20 onward.
+    let mut split = clean.clone();
+    for candidate in split.iter_mut().skip(20) {
+        candidate.open /= 2.0;
+        candidate.high /= 2.0;
+        candidate.low /= 2.0;
+        candidate.close /= 2.0;
+    }
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &split);
+    let shift = report
+        .findings
+        .iter()
+        .find(|f| matches!(f.issue, DatasetQaIssue::SuspiciousLevelShift { .. }))
+        .unwrap_or_else(|| panic!("level shift not detected: {:?}", issue_kinds(&report)));
+    assert_eq!(shift.bar_index, Some(20));
+    match &shift.issue {
+        DatasetQaIssue::SuspiciousLevelShift {
+            ratio_numerator,
+            ratio_denominator,
+            ..
+        } => assert_eq!((*ratio_numerator, *ratio_denominator), (1, 2)),
+        other => panic!("unexpected issue {other:?}"),
+    }
+
+    // 8. Unexpected weekend bar under a weekday-only calendar.
+    let report = run_dataset_qa_with_policy(
+        "1Day",
+        CalendarPolicy::WeekdaysOnly,
+        &policy,
+        &[bar("2024-01-06T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0)],
+    );
+    assert!(
+        has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::UnexpectedWeekendBar { .. }
+        )),
+        "weekend bar not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 9. Unexpected US-market holiday bar.
+    let report = run_dataset_qa_with_policy(
+        "1Day",
+        CalendarPolicy::UsEquityRegular,
+        &policy,
+        &[bar("2024-07-04T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0)],
+    );
+    assert!(
+        has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::UnexpectedHolidayBar { .. }
+        )),
+        "holiday bar not detected: {:?}",
+        issue_kinds(&report)
+    );
+
+    // 10. Unexpected out-of-session bar on a 24x5 xStock venue.
+    let report = run_dataset_qa_with_policy(
+        "1Hour",
+        CalendarPolicy::XStock24x5,
+        &policy,
+        &[bar("2024-01-06T12:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0)],
+    );
+    assert!(
+        has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::UnexpectedSessionBar { .. }
+        )),
+        "out-of-session xStock bar not detected: {:?}",
+        issue_kinds(&report)
+    );
+}
+
+#[test]
+fn qa_does_not_flag_ordinary_volatility_as_a_spike() {
+    // ±3 % alternating moves: real volatility, well under the policy floor.
+    let start = chrono::DateTime::from_timestamp(1_704_067_200, 0).expect("epoch");
+    let mut bars = Vec::new();
+    let mut close = 100.0_f64;
+    for index in 0..40 {
+        let open = close;
+        close = if index % 2 == 0 {
+            open * 1.03
+        } else {
+            open / 1.03
+        };
+        let timestamp = (start + chrono::Duration::days(index))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        bars.push(bar(
+            &timestamp,
+            open,
+            open.max(close),
+            open.min(close),
+            close,
+            1_000.0,
+        ));
+    }
+
+    let report = run_dataset_qa("1Day", CalendarPolicy::Continuous24x7, &bars);
+    assert!(
+        !has_issue(&report, |i| matches!(i, DatasetQaIssue::PriceSpike { .. })),
+        "ordinary volatility must not be a spike: {:?}",
+        issue_kinds(&report)
+    );
+    assert!(
+        !has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::SuspiciousLevelShift { .. }
+        )),
+        "ordinary volatility must not be a level shift: {:?}",
+        issue_kinds(&report)
+    );
+}
+
+#[test]
+fn qa_separates_a_reverting_spike_from_a_sustained_level_shift() {
+    let policy = DatasetQaPolicy::default();
+
+    // A spike reverts on the next bar — it is not a level shift.
+    let mut spiked = clean_daily_bars(40);
+    spiked[20].high *= 8.0;
+    spiked[20].close *= 8.0;
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &spiked);
+    let spike_indices: Vec<usize> = report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.issue, DatasetQaIssue::PriceSpike { .. }))
+        .filter_map(|f| f.bar_index)
+        .collect();
+    assert!(spike_indices.contains(&20), "{spike_indices:?}");
+    assert!(
+        !has_issue(&report, |i| matches!(
+            i,
+            DatasetQaIssue::SuspiciousLevelShift { .. }
+        )),
+        "a reverting spike is not a level shift: {:?}",
+        issue_kinds(&report)
+    );
+
+    // A sustained halving is a level shift and is *not* double-reported as a spike.
+    let mut split = clean_daily_bars(40);
+    for candidate in split.iter_mut().skip(20) {
+        candidate.open /= 2.0;
+        candidate.high /= 2.0;
+        candidate.low /= 2.0;
+        candidate.close /= 2.0;
+    }
+    let report =
+        run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &split);
+    let spikes_at_shift = report
+        .findings
+        .iter()
+        .any(|f| f.bar_index == Some(20) && matches!(f.issue, DatasetQaIssue::PriceSpike { .. }));
+    assert!(
+        !spikes_at_shift,
+        "level shift must not also report a spike: {:?}",
+        issue_kinds(&report)
+    );
+}
+
+#[test]
+fn qa_reports_carry_forward_volume_evidence() {
+    let mut bars = clean_daily_bars(10);
+    let previous_close = bars[4].close;
+    for index in [5usize, 6] {
+        bars[index].open = previous_close;
+        bars[index].high = previous_close;
+        bars[index].low = previous_close;
+        bars[index].close = previous_close;
+    }
+    bars[5].volume = 0.0;
+    bars[6].volume = 42.0;
+
+    let report = run_dataset_qa("1Day", CalendarPolicy::Continuous24x7, &bars);
+    let carried: Vec<(usize, bool)> = report
+        .findings
+        .iter()
+        .filter_map(|f| match &f.issue {
+            DatasetQaIssue::CarryForwardBar { zero_volume, .. } => {
+                Some((f.bar_index.expect("located"), *zero_volume))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(carried, vec![(5, true), (6, false)]);
+}
+
+#[test]
+fn qa_spike_detection_reports_insufficient_samples_instead_of_guessing() {
+    let report = run_dataset_qa("1Day", CalendarPolicy::Continuous24x7, &weekday_bars());
+    assert!(
+        matches!(
+            report.spike_detection,
+            SpikeDetectionStatus::InsufficientSamples { .. }
+        ),
+        "{:?}",
+        report.spike_detection
+    );
+    assert!(!has_issue(&report, |i| matches!(
+        i,
+        DatasetQaIssue::PriceSpike { .. }
+    )));
+
+    let report = run_dataset_qa(
+        "1Day",
+        CalendarPolicy::Continuous24x7,
+        &clean_daily_bars(40),
+    );
+    assert!(
+        matches!(report.spike_detection, SpikeDetectionStatus::Enabled { .. }),
+        "{:?}",
+        report.spike_detection
+    );
+}
+
+// ── QA: calendar policies ──────────────────────────────────────────
+
+#[test]
+fn calendar_policy_ids_are_unique_and_versioned() {
+    let policies = [
+        CalendarPolicy::Continuous24x7,
+        CalendarPolicy::WeekdaysOnly,
+        CalendarPolicy::UsEquityRegular,
+        CalendarPolicy::XStock24x5,
+    ];
+    let ids: BTreeSet<&str> = policies.iter().map(|p| p.policy_id()).collect();
+    assert_eq!(ids.len(), policies.len(), "{ids:?}");
+    assert!(ids.iter().all(|id| id.ends_with(".v1")), "{ids:?}");
+}
+
+#[test]
+fn crypto_weekend_bars_stay_valid_under_the_continuous_calendar() {
+    let bars = vec![
+        bar("2024-01-05T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0), // Friday
+        bar("2024-01-06T00:00:00Z", 10.5, 11.0, 10.0, 10.6, 100.0), // Saturday
+        bar("2024-01-07T00:00:00Z", 10.6, 11.0, 10.2, 10.7, 100.0), // Sunday
+        bar("2024-01-08T00:00:00Z", 10.7, 11.0, 10.3, 10.8, 100.0), // Monday
+    ];
+    let manifest = DatasetManifest::build(&crypto_input("1Day"), &bars).expect("manifest builds");
+    let report = manifest.run_qa(&bars);
+    assert!(
+        report.findings.is_empty(),
+        "crypto weekends are valid: {:?}",
+        issue_kinds(&report)
+    );
+}
+
+#[test]
+fn us_equity_calendar_separates_weekend_holiday_and_trading_days() {
+    let bars = vec![
+        bar("2024-07-03T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0), // Wed, trading
+        bar("2024-07-04T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0), // Thu, Independence Day
+        bar("2024-07-05T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0), // Fri, trading
+        bar("2024-07-06T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0), // Sat
+    ];
+    let report = run_dataset_qa("1Day", CalendarPolicy::UsEquityRegular, &bars);
+
+    let holidays: Vec<usize> = report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.issue, DatasetQaIssue::UnexpectedHolidayBar { .. }))
+        .filter_map(|f| f.bar_index)
+        .collect();
+    assert_eq!(holidays, vec![1]);
+
+    let weekends: Vec<usize> = report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.issue, DatasetQaIssue::UnexpectedWeekendBar { .. }))
+        .filter_map(|f| f.bar_index)
+        .collect();
+    assert_eq!(weekends, vec![3]);
+
+    // The holiday is not counted as a missing slot either — the calendar knows.
+    assert!(
+        !has_issue(&report, |i| matches!(i, DatasetQaIssue::MissingBars { .. })),
+        "{:?}",
+        issue_kinds(&report)
+    );
+}
+
+#[test]
+fn xstock_calendar_judges_intraday_bars_against_the_24x5_window() {
+    // Friday 21:00 ET (after the 20:00 close) and Sunday 15:00 ET (before the
+    // 20:00 open) are outside; Sunday 21:00 ET and Monday 00:00 ET are inside.
+    let cases = [
+        ("2024-01-06T02:00:00Z", false), // Fri 2024-01-05 21:00 ET
+        ("2024-01-06T12:00:00Z", false), // Sat 07:00 ET
+        ("2024-01-07T20:00:00Z", false), // Sun 15:00 ET
+        ("2024-01-08T02:00:00Z", true),  // Sun 21:00 ET — session open
+        ("2024-01-08T05:00:00Z", true),  // Mon 00:00 ET
+        ("2024-07-04T14:00:00Z", false), // Independence Day
+    ];
+    for (timestamp, expected) in cases {
+        let report = run_dataset_qa(
+            "1Hour",
+            CalendarPolicy::XStock24x5,
+            &[bar(timestamp, 10.0, 11.0, 9.5, 10.5, 100.0)],
+        );
+        let flagged = has_issue(&report, |i| {
+            matches!(
+                i,
+                DatasetQaIssue::UnexpectedSessionBar { .. }
+                    | DatasetQaIssue::UnexpectedHolidayBar { .. }
+                    | DatasetQaIssue::UnexpectedWeekendBar { .. }
+            )
+        });
+        assert_eq!(
+            !flagged,
+            expected,
+            "{timestamp} expected in-session={expected}: {:?}",
+            issue_kinds(&report)
+        );
+    }
+}
+
+#[test]
+fn xstock_daily_bars_are_judged_by_session_date_not_by_utc_clock_time() {
+    // A UTC-midnight Monday daily bar is 19:00 ET Sunday — outside the intraday
+    // window, but it is a normal daily bar for Monday's session.
+    let daily = run_dataset_qa(
+        "1Day",
+        CalendarPolicy::XStock24x5,
+        &[bar("2024-01-08T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0)],
+    );
+    assert!(
+        !has_issue(&daily, |i| matches!(
+            i,
+            DatasetQaIssue::UnexpectedSessionBar { .. }
+        )),
+        "{:?}",
+        issue_kinds(&daily)
+    );
+
+    // Saturday is still not a session date.
+    let weekend = run_dataset_qa(
+        "1Day",
+        CalendarPolicy::XStock24x5,
+        &[bar("2024-01-06T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 100.0)],
+    );
+    assert!(
+        has_issue(&weekend, |i| matches!(
+            i,
+            DatasetQaIssue::UnexpectedWeekendBar { .. }
+        )),
+        "{:?}",
+        issue_kinds(&weekend)
+    );
+}
+
+// ── QA: policy validation and bounds ───────────────────────────────
+
+#[test]
+fn qa_policy_rejects_non_finite_and_out_of_range_settings() {
+    let cases: Vec<(&str, fn(&mut DatasetQaPolicy))> = vec![
+        ("schema_version", |p| p.schema_version = 0),
+        ("spike_band_multiple", |p| p.spike_band_multiple = f64::NAN),
+        ("spike_band_multiple", |p| p.spike_band_multiple = 0.0),
+        ("spike_min_relative_move", |p| {
+            p.spike_min_relative_move = f64::INFINITY
+        }),
+        ("spike_min_relative_move", |p| {
+            p.spike_min_relative_move = -1.0
+        }),
+        ("spike_min_samples", |p| p.spike_min_samples = 1),
+        ("level_shift_tolerance", |p| p.level_shift_tolerance = 0.0),
+        ("level_shift_tolerance", |p| p.level_shift_tolerance = 0.9),
+        ("level_shift_max_ratio", |p| p.level_shift_max_ratio = 1),
+        ("max_findings", |p| p.max_findings = 0),
+    ];
+
+    for (field, mutate) in cases {
+        let mut policy = DatasetQaPolicy::default();
+        mutate(&mut policy);
+        match policy.validate() {
+            Err(DatasetError::InvalidQaPolicy { field: got, .. }) => assert_eq!(got, field),
+            other => panic!("expected InvalidQaPolicy for {field}, got {other:?}"),
+        }
+    }
+
+    DatasetQaPolicy::default()
+        .validate()
+        .expect("the default policy is valid");
+}
+
+#[test]
+fn manifest_build_rejects_an_invalid_qa_policy() {
+    let mut broken = input();
+    broken.qa_policy.max_findings = 0;
+    assert!(matches!(
+        DatasetManifest::build(&broken, &weekday_bars()),
+        Err(DatasetError::InvalidQaPolicy { .. })
+    ));
+}
+
+#[test]
+fn qa_findings_are_capped_by_the_policy_and_report_the_omission() {
+    let policy = DatasetQaPolicy {
+        max_findings: 5,
+        ..DatasetQaPolicy::default()
+    };
+
+    // 60 bars, every one of them an OHLC violation.
+    let mut bars = clean_daily_bars(60);
+    for candidate in bars.iter_mut() {
+        candidate.high = candidate.low * 0.5;
+    }
+
+    let report = run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &bars);
+    assert_eq!(report.findings.len(), 5);
+    assert!(report.findings_truncated);
+    assert!(
+        report.findings_omitted >= 55,
+        "omitted {} findings",
+        report.findings_omitted
+    );
+    // The cap must not hide the fact that the dataset is broken.
+    assert!(report.has_errors());
+}
+
+// ── QA report hash & manifest seal ─────────────────────────────────
+
+#[test]
+fn qa_report_hash_is_deterministic_and_input_sensitive() {
+    let bars = clean_daily_bars(40);
+    let policy = DatasetQaPolicy::default();
+    let base = run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &bars);
+    assert_eq!(base.report_hash(), base.report_hash());
+    assert_eq!(base.report_hash().len(), 64);
+
+    let rerun = run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &bars);
+    assert_eq!(base.report_hash(), rerun.report_hash());
+
+    let mut hashes = BTreeSet::new();
+    hashes.insert(base.report_hash());
+
+    let mut mutated = bars.clone();
+    mutated[7].high = mutated[7].low * 0.5;
+    assert!(
+        hashes.insert(
+            run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &policy, &mutated)
+                .report_hash()
+        )
+    );
+
+    assert!(
+        hashes.insert(
+            run_dataset_qa_with_policy("1Day", CalendarPolicy::WeekdaysOnly, &policy, &bars)
+                .report_hash()
+        )
+    );
+
+    let strict = DatasetQaPolicy {
+        spike_band_multiple: policy.spike_band_multiple + 1.0,
+        ..policy.clone()
+    };
+    assert!(
+        hashes.insert(
+            run_dataset_qa_with_policy("1Day", CalendarPolicy::Continuous24x7, &strict, &bars)
+                .report_hash()
+        )
+    );
+}
+
+#[test]
+fn dataset_id_addresses_data_while_manifest_id_seals_qa_state() {
+    let bars = weekday_bars();
+    let base = DatasetManifest::build(&input(), &bars).expect("manifest builds");
+
+    let mut retuned = input();
+    retuned.qa_policy.spike_band_multiple += 1.0;
+    let other = DatasetManifest::build(&retuned, &bars).expect("manifest builds");
+
+    // Same bytes, same data address...
+    assert_eq!(base.dataset_id, other.dataset_id);
+    // ...but the QA policy is identity-bearing for the sealed manifest.
+    assert_ne!(base.manifest_id, other.manifest_id);
+    assert_ne!(base.qa_policy_id, other.qa_policy_id);
+    assert_eq!(base.manifest_id.len(), 64);
+
+    // The manifest carries the QA report's hash and its headline counts.
+    let report = base.run_qa(&bars);
+    assert_eq!(base.qa_report_hash, report.report_hash());
+    assert_eq!(base.qa_error_count, report.error_count() as u64);
+    assert_eq!(base.qa_warning_count, report.warning_count() as u64);
+    assert!(!base.qa_findings_truncated);
+    base.verify_qa_report(&report).expect("report matches seal");
+}
+
+#[test]
+fn verify_detects_tampered_qa_and_seal_fields() {
+    let bars = weekday_bars();
+    let manifest = DatasetManifest::build(&input(), &bars).expect("manifest builds");
+    manifest.verify(&bars).expect("pristine manifest verifies");
+
+    let mut forged = manifest.clone();
+    forged.qa_error_count += 1;
+    match forged.verify(&bars) {
+        Err(DatasetError::ManifestFieldMismatch { field, .. }) => {
+            assert_eq!(field, "qa_error_count")
+        }
+        other => panic!("expected qa_error_count mismatch, got {other:?}"),
+    }
+
+    let mut forged = manifest.clone();
+    forged.qa_report_hash = "0".repeat(64);
+    match forged.verify(&bars) {
+        Err(DatasetError::ManifestFieldMismatch { field, .. }) => {
+            assert_eq!(field, "qa_report_hash")
+        }
+        other => panic!("expected qa_report_hash mismatch, got {other:?}"),
+    }
+
+    let mut forged = manifest.clone();
+    forged.manifest_id = "0".repeat(64);
+    assert!(matches!(
+        forged.verify(&bars),
+        Err(DatasetError::ManifestIdMismatch { .. })
+    ));
+
+    // A QA report from a different dataset must not pass the seal check.
+    let foreign = run_dataset_qa_with_policy(
+        "1Day",
+        CalendarPolicy::WeekdaysOnly,
+        &DatasetQaPolicy::default(),
+        &clean_daily_bars(10),
+    );
+    assert!(matches!(
+        manifest.verify_qa_report(&foreign),
+        Err(DatasetError::QaReportHashMismatch { .. })
+    ));
+}
+
+#[test]
+fn manifest_json_round_trip_preserves_the_seal() {
+    let bars = clean_daily_bars(30);
+    let manifest = DatasetManifest::build(&crypto_input("1Day"), &bars).expect("manifest builds");
+    let json = serde_json::to_string(&manifest).expect("serialize");
+    let loaded: DatasetManifest = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(loaded, manifest);
+    loaded
+        .verify(&bars)
+        .expect("round-tripped manifest verifies");
+
+    let report = manifest.run_qa(&bars);
+    let qa_json = serde_json::to_string(&report).expect("serialize qa");
+    let loaded_qa: DatasetQaReport = serde_json::from_str(&qa_json).expect("deserialize qa");
+    assert_eq!(loaded_qa, report);
+    assert_eq!(loaded_qa.report_hash(), report.report_hash());
 }

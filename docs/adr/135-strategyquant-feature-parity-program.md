@@ -299,11 +299,11 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Multi-source data ingest | **Current** — Kraken + Alpaca + Yahoo merge ([ADR-112](112-equities-bar-sync-demand-depth-vs-catalog-breadth.md), [ADR-113](113-cross-source-equity-bar-merge-data-integrity.md)) | — |
 | Tick data | **Missing** for history; L1/L2 live only ([ADR-129](129-l1-l2-l3-market-data-support.md)) | §11.3 (data-gated) |
 | Minute & EOD data | **Current** | — |
-| Gap / spike / bad-candle QA | **Partial** — sanity-audit + merge guards exist, not exposed as a dataset-QA workflow | §11.2, M0 |
-| Chart & table inspection of raw data | **Partial** — chart yes, tabular data browser no | §11.2, M0 |
+| Gap / spike / bad-candle QA | **Current** — deterministic dataset QA pass with a versioned policy, stored with the dataset and sealed into its manifest (§11.1, M0) | §11.2, M0 |
+| Chart & table inspection of raw data | **Current** — chart plus the Dataset Inspector's bounded, QA-flagged bar table (M0) | §11.2, M0 |
 | Timeframe transforms / resampling | **Partial** — derivation exists in sync/merge; not a user-driven dataset tool | §11.1, M0 |
 | Timezone transforms | **Missing** as a user control | §6.7, M2 |
-| Verified / integrity-checked downloads | **Partial** — merge integrity guards, no dataset-level hash manifest | §11.1, M0 |
+| Verified / integrity-checked downloads | **Partial** — materialized datasets carry a content-addressed manifest, a sealed QA report, and a digest-verified payload (M0); the upstream fetches themselves are still unverified at download time | §11.1, M0 |
 | Custom data import | **Missing** | §11.4 (deferred) |
 
 ### 4.7 Workflow & extensibility
@@ -329,7 +329,7 @@ TyphooN targets these capabilities natively; MT4-specific packaging is not the t
 | Automatic plus manual/hybrid backtesting | **Missing** — simulation cannot pause for a recorded user decision | §6.13, M2 |
 | Visual mode with entries, exits, stop updates, and indicator state | **Missing as a visual workflow** — bar-state replay data is a useful engine foundation, but no annotated replay UI is wired | §5.11, M2/M3 |
 | Repainting-indicator diagnostic | **Missing** | §11.5, M2 |
-| Weekend-candle diagnostic | **Missing as dataset QA** — weekend crypto is supported operationally, but no strategy-data diagnostic exists | §11.5, M0 |
+| Weekend-candle diagnostic | **Current** — session-aware dataset QA under a versioned per-instrument calendar policy; crypto weekend bars stay valid, equity/xStock bars are judged against their own venue rule (M0) | §11.5, M0 |
 | Open-price and tick operation models | **Missing** — the draft uses same-bar close fills; the target fidelity ladder is broader and explicit | §6.9, M1/M2/M7 |
 | Configurable decision time before candle close | **Missing** | §6.13, M2 |
 | 75+ bundled indicators and custom indicator loading | **Partial** — TyphooN has 46+ chart indicators and a transpiler direction; loading MT4 `.ex4` binaries is out-of-scope | §5.10, §14, M6 |
@@ -1039,7 +1039,30 @@ below remain authoritative; a checked foundation does **not** imply that its mil
 **Landed on `master`:**
 
 - `strategy_dataset.rs`: immutable content-addressed dataset manifests, canonical finite-float
-  identity, provenance, deterministic QA, and tamper verification.
+  identity, provenance, deterministic QA, and tamper verification. The QA pass now covers the
+  full M0 defect corpus — gaps, robust-band price spikes, duplicate/out-of-order timestamps,
+  carry-forward bars, OHLC violations, split-like level shifts, and unexpected
+  weekend/holiday/out-of-session bars — under a versioned four-variant calendar policy
+  (`Continuous24x7`, `WeekdaysOnly`, `UsEquityRegular`, `XStock24x5`, reusing the ADR-110
+  holiday rules) and a versioned, identity-bearing `DatasetQaPolicy`. Identity is split in
+  two: `dataset_id` addresses the bar data, and `manifest_id` seals it together with the
+  calendar policy, the QA policy, and the QA report hash (§11.1). Findings are capped by the
+  policy and report their own truncation.
+- `strategy_dataset_store.rs`: the filesystem storage boundary — a content-addressed record
+  (`manifest.json`, `qa.json`, `bars.bin`) published atomically by `fsync` + directory rename,
+  with a purpose-built payload format that preserves exact `f64` bit patterns and verbatim
+  timestamps, carries a trailing offset index for O(1)-ish paged reads, and is digest-verified
+  on open. Loading is bounded on every axis (bar count, artifact bytes, page size, listing
+  size, timestamp length) and dataset ids are validated before any path is built from them.
+- `strategy_dataset_worker.rs`: dataset construction, QA, storage, and paged reads on a
+  dedicated thread behind bounded job/event queues, non-blocking submission with explicit
+  backpressure, stage-granular cancellation, error delivery as events, and a bounded
+  open-record cache.
+- `typhoon-native` Dataset Inspector (`dataset_inspector_model.rs`,
+  `floating_windows/dataset_inspector.rs`): a graphical tabular browser over stored datasets
+  showing manifest, provenance, calendar/QA policy ids, QA counts, and per-bar QA flags. The
+  render path draws only the page the worker delivered, virtualized by `show_rows`; it opens
+  no store, walks no database, and aggregates nothing.
 - `strategy_ir.rs`: canonical strategy IR, semantic/type/resource validation, content-addressed
   strategy and execution identities, bounded persisted-artifact loading, and stable identity
   vectors.
@@ -1053,13 +1076,29 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   strategy, execution config, run manifest, dataset manifests, and actual bar content before a
   run can be treated as resolved.
 
-**Remaining before M0 is complete:**
+**M0 gate — passed (2026-07-27):**
 
-- Persist/materialize immutable dataset artifacts through the application storage boundary and
-  prove byte-identical restart recovery.
-- Add the tabular dataset inspector and off-render-thread build/QA workflow.
-- Complete the full seeded QA corpus, including spike, carry-bar, split-like level shift, and
-  versioned session/calendar diagnostics.
+Each clause of the M0 gate is now proven by a test rather than asserted:
+
+| Gate clause | Evidence |
+| --- | --- |
+| A dataset id reproducibly materializes byte-identical bars across restarts | `strategy_dataset_store/tests.rs::a_stored_dataset_recovers_byte_identically_across_a_restart` — stores, drops the store handle, reopens the root, and compares `f64::to_bits` per field plus the re-encoded payload bytes, on a corpus containing `-0.0`, a subnormal, `f64::MAX`, and timestamps of differing byte length |
+| QA detects every seeded synthetic defect at 100 % | `strategy_dataset/tests.rs::qa_detects_every_seeded_defect_class` — one seeded case per class (gap, spike, duplicate, out-of-order, carry bar, OHLC violation, split-like shift, weekend, holiday, out-of-session) plus an undamaged control that must stay finding-free |
+| Building a dataset never blocks the render thread | `strategy_dataset_worker/tests.rs::dataset_work_runs_off_the_submitting_thread` asserts the executing `ThreadId` differs from the submitter's; `submitting_and_polling_never_block_the_caller`, `the_job_queue_is_bounded_and_reports_backpressure`, and `each_poll_drains_at_most_one_bounded_batch` pin the non-blocking/bounded contract |
+
+**Remaining M0-scope refinements (deliverable polish, not gate blockers):**
+
+- User-driven timeframe transforms (§11.1): resampling a stored dataset to a higher timeframe
+  as a *derived* dataset carrying the source timeframe's provenance is not implemented. The
+  existing sync/merge derivation is not exposed as a dataset tool.
+- Range/symbol selection: datasets are materialized from the active chart's already-loaded
+  bars. There is no picker that streams an arbitrary (symbol, timeframe, UTC range) straight
+  out of the SQLite cache, so the dataset's range is whatever the chart holds.
+- Retention/GC for the artifact store (§5.7) is not implemented; records accumulate until
+  removed by hand. The bar-cache eviction lesson applies — any future GC must be opt-in and
+  reported, never a silent size-capped FIFO.
+- Calendar coverage stays coarse by design: no early-close/half-day handling and no per-symbol
+  xStock 24×7 tier, both of which are on ADR-110's own deferred list.
 
 **Remaining before M1 is complete:**
 
@@ -1077,9 +1116,9 @@ below remain authoritative; a checked foundation does **not** imply that its mil
 
 **M2–M8:** no milestone gate has passed. Their remaining work is exactly the delivery and gate
 text below; optimization, generation, portfolio, automation, and lifecycle work must not bypass
-the unfinished M0/M1 correctness gates.
+the unfinished M1 correctness gate.
 
-### M0 — Dataset foundation & QA
+### M0 — Dataset foundation & QA — **gate passed 2026-07-27** (see §13.1)
 **Prereqs:** none (builds on the existing cache/merge stack).
 **Delivers:** immutable content-addressed datasets + manifest + provenance (§5.1); dataset
 QA pass and report (§11.1); tabular inspector (§11.2); versioned dataset-side calendar

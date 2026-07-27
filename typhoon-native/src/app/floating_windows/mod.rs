@@ -7,6 +7,7 @@ use bookmap::*;
 mod news_filter;
 use news_filter::*;
 mod bardata;
+mod dataset_inspector;
 mod macro_windows;
 mod market_analytics_windows;
 mod market_map;
@@ -191,6 +192,14 @@ impl TyphooNApp {
         self.render_compound_calc_window(ctx);
 
         self.render_backtest_window(ctx);
+
+        // Dataset Inspector — bounded tabular browser over immutable strategy
+        // datasets (ADR-135 §11.2). Pumps its worker every frame even when the
+        // window is closed, so a late reply cannot park the worker.
+        timed_window!(
+            "dataset_inspector",
+            self.render_dataset_inspector_window(ctx)
+        );
 
         // Screener — uses cached symbol data
         timed_window!("symbol_screener", self.render_symbol_screener_window(ctx));
