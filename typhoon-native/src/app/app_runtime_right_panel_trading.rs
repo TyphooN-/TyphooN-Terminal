@@ -10,7 +10,7 @@ impl TyphooNApp {
                 .show(ui, |ui| {
                     // ── Trading Buttons Grid (exact WebKit CSS: #button-grid) ──
                     let trading_enabled = true;
-                    self.resolve_order_broker();
+                    self.resolve_order_target();
                     if !trading_enabled {
                         ui.disable();
                     }
@@ -175,36 +175,28 @@ impl TyphooNApp {
 
                     // ── Mode / Broker Controls ──────────────────────────
                     ui.separator();
-                    let wants_kraken_pro =
-                        self.kraken_connected && matches!(self.risk_mode, RiskMode::KrakenPro);
+                    // Compact market-order mode is available with every
+                    // order-capable broker — it is never gated on Kraken.
+                    let uses_compact_controls = self.risk_mode.uses_compact_market_controls();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Mode").color(AXIS_TEXT).small());
+                        let mut selected_mode = self.risk_mode;
                         egui::ComboBox::from_id_salt("risk_mode_combo")
                             .selected_text(self.risk_mode.label())
                             .width(96.0)
                             .show_ui(ui, |ui| {
-                                for mode in [
-                                    RiskMode::VaR,
-                                    RiskMode::Standard,
-                                    RiskMode::Fixed,
-                                    RiskMode::Dynamic,
-                                ] {
-                                    ui.selectable_value(&mut self.risk_mode, mode, mode.label());
-                                }
-                                if self.kraken_connected
-                                    && ui
-                                        .selectable_value(
-                                            &mut self.risk_mode,
-                                            RiskMode::KrakenPro,
-                                            RiskMode::KrakenPro.label(),
-                                        )
-                                        .clicked()
-                                {
-                                    self.order_broker = OrderBroker::Kraken;
+                                for mode in RiskMode::ALL {
+                                    ui.selectable_value(&mut selected_mode, mode, mode.label());
                                 }
                             });
+                        if selected_mode != self.risk_mode {
+                            // Every mode selection re-defaults routing to the
+                            // primary broker/account — a stale non-primary
+                            // target is never carried across a mode change.
+                            self.apply_risk_mode_selection(selected_mode);
+                        }
                     });
-                    if !wants_kraken_pro {
+                    if !uses_compact_controls {
                         match self.risk_mode {
                             RiskMode::Standard => {
                                 ui.horizontal(|ui| {
@@ -258,6 +250,8 @@ impl TyphooNApp {
                                     );
                                 });
                             }
+                            // Compact-control modes never reach this block, so
+                            // they can never fall back to VaR sizing.
                             RiskMode::VaR | RiskMode::KrakenPro => {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("VaR %").color(AXIS_TEXT).small());
@@ -322,35 +316,84 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    // Broker target selector (only show when any enabled broker can place orders)
+                    // Broker/account target selector (only shown when an enabled
+                    // broker can place orders). The account dropdown appears
+                    // only for brokers that actually have several configured
+                    // accounts — every order below routes to the id it shows.
                     if self.alpaca_order_available() || self.kraken_order_available() {
+                        let broker_has_multiple_accounts = show_order_account_dropdown(
+                            &self.order_account_options_for(self.order_broker),
+                        );
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small());
+                            ui.label(
+                                egui::RichText::new(if broker_has_multiple_accounts {
+                                    "Broker / Account"
+                                } else {
+                                    "Broker"
+                                })
+                                .color(AXIS_TEXT)
+                                .small(),
+                            );
+                            let mut selected_broker = self.order_broker;
                             egui::ComboBox::from_id_salt("order_broker_combo")
                                 .selected_text(self.order_broker.label())
                                 .width(90.0)
                                 .show_ui(ui, |ui| {
                                     if self.alpaca_order_available() {
                                         ui.selectable_value(
-                                            &mut self.order_broker,
+                                            &mut selected_broker,
                                             OrderBroker::Alpaca,
                                             "Alpaca",
                                         );
                                     }
                                     if self.kraken_order_available() {
                                         ui.selectable_value(
-                                            &mut self.order_broker,
+                                            &mut selected_broker,
                                             OrderBroker::Kraken,
                                             "Kraken",
                                         );
                                     }
                                 });
+                            if selected_broker != self.order_broker {
+                                // Switching broker resets to that broker's
+                                // primary account rather than keeping an id
+                                // that belongs to the previous broker.
+                                self.set_order_broker(selected_broker);
+                            }
                         });
+                        // Recompute after the Broker ComboBox: `set_order_broker`
+                        // may have changed both the broker and selected account
+                        // in this same frame.
+                        let account_options = self.order_account_options_for(self.order_broker);
+                        if show_order_account_dropdown(&account_options) {
+                            let selected_id = self.selected_order_account_id();
+                            let selected_label =
+                                self.account_label_for(self.order_broker, &selected_id);
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Account").color(AXIS_TEXT).small());
+                                let mut chosen = selected_id.clone();
+                                egui::ComboBox::from_id_salt("order_account_combo")
+                                    .selected_text(selected_label)
+                                    .width(150.0)
+                                    .show_ui(ui, |ui| {
+                                        for (id, label) in &account_options {
+                                            ui.selectable_value(
+                                                &mut chosen,
+                                                id.clone(),
+                                                label.as_str(),
+                                            );
+                                        }
+                                    });
+                                if chosen != selected_id {
+                                    self.order_account_id = chosen;
+                                }
+                            });
+                        }
                     }
                     ui.add_space(6.0);
 
-                    if wants_kraken_pro {
-                        self.render_kraken_spot_buy_controls(ui);
+                    if uses_compact_controls {
+                        self.render_compact_order_controls(ui);
                         ui.add_space(6.0);
                     }
 

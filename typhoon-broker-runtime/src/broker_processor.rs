@@ -151,6 +151,72 @@ pub fn spawn_broker_message_processor(
                         }
                     }
                 }
+                BrokerCmd::ForAccount { account_id, inner } => {
+                    // Explicit account routing (ADR-130): the UI aimed this
+                    // order at one account, so resolve that account's broker
+                    // instead of the pool primary. An unknown/disconnected id
+                    // is reported — never silently re-routed to the primary.
+                    match *inner {
+                        inner @ (BrokerCmd::CloseAll
+                        | BrokerCmd::ClosePosition { .. }
+                        | BrokerCmd::AlpacaClosePositionPercent { .. }
+                        | BrokerCmd::AlpacaMarketOrder { .. }
+                        | BrokerCmd::AlpacaMarketOrderNotional { .. }
+                        | BrokerCmd::AlpacaLimitOrder { .. }
+                        | BrokerCmd::AlpacaStopOrder { .. }
+                        | BrokerCmd::AlpacaStopLimitOrder { .. }
+                        | BrokerCmd::AlpacaBracketOrder { .. }
+                        | BrokerCmd::AlpacaOcoOrder { .. }
+                        | BrokerCmd::AlpacaTrailingStop { .. }
+                        | BrokerCmd::AlpacaSyncExits { .. }) => {
+                            alpaca_order_ops::handle_alpaca_order_command_for_account(
+                                inner,
+                                &account_id,
+                                &alpaca_pool,
+                                &broker_msg_tx_clone,
+                            )
+                            .await;
+                        }
+                        inner @ (BrokerCmd::KrakenPlaceOrder { .. }
+                        | BrokerCmd::KrakenPlaceOrderAdvanced { .. }
+                        | BrokerCmd::KrakenClosePosition { .. }
+                        | BrokerCmd::KrakenCloseAll
+                        | BrokerCmd::KrakenCancelAll
+                        | BrokerCmd::KrakenSyncExits { .. }) => {
+                            match kraken_pool.broker_by_id(&account_id).map(|h| &h.broker) {
+                                None => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
+                                        "Kraken order failed: account {account_id} is not connected"
+                                    )));
+                                }
+                                acct @ Some(_) => {
+                                    if matches!(inner, BrokerCmd::KrakenSyncExits { .. }) {
+                                        kraken_order_ops::handle_kraken_order_command(
+                                            inner,
+                                            acct,
+                                            &broker_msg_tx_clone,
+                                        )
+                                        .await;
+                                    } else {
+                                        kraken_order_ops::handle_kraken_account_order_command(
+                                            inner,
+                                            acct,
+                                            &broker_msg_tx_clone,
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                "Account-targeted routing is only supported for order, exit and \
+                                 close commands"
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
                 BrokerCmd::SetOrderMirroring {
                     enabled,
                     target_ids,

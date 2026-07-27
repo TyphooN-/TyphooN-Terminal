@@ -39,6 +39,79 @@ pub(crate) fn primary_after_slot_removal(
     (n >= removed_slot).then(|| format!("{prefix}1"))
 }
 
+/// Order-routing account choices for one broker: every connected roster
+/// account with its authored label. Before the roster arrives (or when nothing
+/// is connected) the configured primary id is offered alone so routing still
+/// names a concrete account instead of silently meaning "whatever is primary".
+pub(crate) fn order_account_options(
+    roster: &[AccountRosterEntry],
+    fallback_id: &str,
+    fallback_label: &str,
+) -> Vec<(String, String)> {
+    let connected: Vec<(String, String)> = roster
+        .iter()
+        .filter(|a| a.connected && a.trade_enabled)
+        .map(|a| (a.id.clone(), a.label.clone()))
+        .collect();
+    if !connected.is_empty() {
+        return connected;
+    }
+    if fallback_id.is_empty() {
+        return Vec::new();
+    }
+    vec![(fallback_id.to_string(), fallback_label.to_string())]
+}
+
+/// A separate Account dropdown is only shown when the selected broker actually
+/// has more than one enabled/configured account — a single-account broker gets
+/// no redundant control.
+pub(crate) fn show_order_account_dropdown(options: &[(String, String)]) -> bool {
+    options.len() > 1
+}
+
+/// The account id routing should use: an explicit selection that still exists,
+/// else the broker's primary, else the first available account. Never returns
+/// an id that is not in `options`, so a selector can never keep pointing at a
+/// disconnected/removed account.
+pub(crate) fn resolve_order_account_id(
+    options: &[(String, String)],
+    selected: &str,
+    primary_id: &str,
+) -> String {
+    let has = |id: &str| !id.is_empty() && options.iter().any(|(opt, _)| opt == id);
+    if has(selected) {
+        return selected.to_string();
+    }
+    if has(primary_id) {
+        return primary_id.to_string();
+    }
+    options
+        .first()
+        .map(|(id, _)| id.clone())
+        .unwrap_or_default()
+}
+
+/// Routing target a mode/broker selection defaults to: the primary broker when
+/// it can place orders, else the first order-capable broker, else nothing. A
+/// stale non-primary selection is never carried over by this function — the
+/// caller passes it nowhere.
+pub(crate) fn default_order_broker(
+    primary: OrderBroker,
+    alpaca_available: bool,
+    kraken_available: bool,
+) -> Option<OrderBroker> {
+    let available = |broker: OrderBroker| match broker {
+        OrderBroker::Alpaca => alpaca_available,
+        OrderBroker::Kraken => kraken_available,
+    };
+    if available(primary) {
+        return Some(primary);
+    }
+    [OrderBroker::Alpaca, OrderBroker::Kraken]
+        .into_iter()
+        .find(|broker| available(*broker))
+}
+
 pub(crate) fn default_alpaca_extra_accounts() -> Vec<ExtraAccountConfig> {
     (2..=MAX_BROKER_ACCOUNT_SLOTS)
         .map(|_| ExtraAccountConfig {
@@ -467,6 +540,77 @@ impl TyphooNApp {
         }
     }
 
+    /// Authored label for one account of `broker` (roster label when the
+    /// account has connected, else the raw id so the UI never shows a blank).
+    pub(crate) fn account_label_for(&self, broker: OrderBroker, account_id: &str) -> String {
+        let roster = match broker {
+            OrderBroker::Alpaca => &self.alpaca_roster_by_id,
+            OrderBroker::Kraken => &self.kraken_roster_by_id,
+        };
+        roster
+            .get(account_id)
+            .map(|a| a.label.clone())
+            .unwrap_or_else(|| account_id.to_string())
+    }
+
+    /// Account choices offered by the Trading panel's Account dropdown for
+    /// `broker`, as (id, authored label).
+    pub(crate) fn order_account_options_for(&self, broker: OrderBroker) -> Vec<(String, String)> {
+        let (roster, primary_id) = match broker {
+            OrderBroker::Alpaca => (&self.alpaca_account_roster, &self.alpaca_primary_account_id),
+            OrderBroker::Kraken => (&self.kraken_account_roster, &self.kraken_primary_account_id),
+        };
+        let fallback_label = self.account_label_for(broker, primary_id);
+        order_account_options(roster, primary_id, &fallback_label)
+    }
+
+    /// The account id order placement routes to right now — the explicit
+    /// selection when it is still valid, otherwise the broker's primary.
+    pub(crate) fn selected_order_account_id(&self) -> String {
+        let options = self.order_account_options_for(self.order_broker);
+        resolve_order_account_id(
+            &options,
+            &self.order_account_id,
+            self.primary_account_id_for(self.order_broker),
+        )
+    }
+
+    pub(crate) fn selected_order_account_label(&self) -> String {
+        self.account_label_for(self.order_broker, &self.selected_order_account_id())
+    }
+
+    /// Point routing at `broker` and reset the account target to that broker's
+    /// primary — a selection made for the previous broker never carries over.
+    pub(crate) fn set_order_broker(&mut self, broker: OrderBroker) {
+        self.order_broker = broker;
+        self.order_account_id = self.primary_account_id_for(broker).to_string();
+    }
+
+    /// Reset routing to the current primary broker/account. Used whenever the
+    /// order mode is (re)selected so a stale non-primary target can never be
+    /// silently retained across a mode change.
+    pub(crate) fn reset_order_target_to_primary(&mut self) {
+        if let Some(broker) = default_order_broker(
+            self.primary_broker,
+            self.alpaca_order_available(),
+            self.kraken_order_available(),
+        ) {
+            self.set_order_broker(broker);
+        } else {
+            // Nothing is connected yet: still drop any stale account target so
+            // the first available broker starts on its primary.
+            self.set_order_broker(self.primary_broker);
+        }
+    }
+
+    /// Apply an order-mode selection from the Mode dropdown. Every mode —
+    /// including KrakenPro — defaults routing back to the primary broker and
+    /// its primary account.
+    pub(crate) fn apply_risk_mode_selection(&mut self, mode: RiskMode) {
+        self.risk_mode = mode;
+        self.reset_order_target_to_primary();
+    }
+
     /// Apply a Primary-cycle selection: broker-level effects (order routing,
     /// merge lane) when the broker changed, plus a runtime primary-account
     /// switch when the account within that broker changed.
@@ -475,9 +619,6 @@ impl TyphooNApp {
         if broker_changed {
             self.primary_broker = broker;
             self.rebuild_chart_company_name_catalog();
-            // Routing follows the primary immediately; the per-trade Broker
-            // combo can still override.
-            self.order_broker = broker;
             // Flip the equity data-merge trusted lane too (ADR-126).
             set_chart_merge_primary_broker(broker);
         }
@@ -485,6 +626,14 @@ impl TyphooNApp {
         match broker {
             OrderBroker::Alpaca => self.alpaca_primary_account_id = account_id.to_string(),
             OrderBroker::Kraken => self.kraken_primary_account_id = account_id.to_string(),
+        }
+        // Routing follows the primary immediately; the per-trade Broker/Account
+        // combos can still override. A broker switch re-points both, an
+        // account-only switch re-points the account of the broker it applies to.
+        if broker_changed {
+            self.set_order_broker(broker);
+        } else if account_changed && self.order_broker == broker {
+            self.order_account_id = account_id.to_string();
         }
         if account_changed {
             let _ = self.broker_tx.send(BrokerCmd::SetPrimaryAccount {
@@ -795,6 +944,128 @@ impl TyphooNApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn roster_entry(
+        id: &str,
+        label: &str,
+        connected: bool,
+        is_primary: bool,
+    ) -> AccountRosterEntry {
+        AccountRosterEntry {
+            id: id.to_string(),
+            label: label.to_string(),
+            paper: true,
+            trade_enabled: true,
+            data_sync_enabled: true,
+            equity: 1_000.0,
+            is_primary,
+            connected,
+            detail: "Connected".to_string(),
+        }
+    }
+
+    #[test]
+    fn order_account_options_list_connected_accounts_with_authored_labels() {
+        let mut data_only = roster_entry("alpaca4", "Alpaca 4 (Paper)", true, false);
+        data_only.trade_enabled = false;
+        let roster = vec![
+            roster_entry("alpaca1", "Alpaca 1 (Live)", true, true),
+            roster_entry("alpaca2", "Alpaca 2 (Paper)", true, false),
+            // Offline slots are configured but cannot take an order.
+            roster_entry("alpaca3", "Alpaca 3 (Paper)", false, false),
+            // A connected data-only account is not a valid order target.
+            data_only,
+        ];
+        assert_eq!(
+            order_account_options(&roster, "alpaca1", "Alpaca 1 (Live)"),
+            vec![
+                ("alpaca1".to_string(), "Alpaca 1 (Live)".to_string()),
+                ("alpaca2".to_string(), "Alpaca 2 (Paper)".to_string()),
+            ]
+        );
+        // Before the roster arrives the configured primary stands alone …
+        assert_eq!(
+            order_account_options(&[], "kraken1", "Kraken 1 (Live)"),
+            vec![("kraken1".to_string(), "Kraken 1 (Live)".to_string())]
+        );
+        // … and with nothing configured there is nothing to offer.
+        assert!(order_account_options(&[], "", "").is_empty());
+    }
+
+    #[test]
+    fn account_dropdown_appears_only_for_multi_account_brokers() {
+        let single = order_account_options(
+            &[roster_entry("kraken1", "Kraken 1 (Live)", true, true)],
+            "kraken1",
+            "Kraken 1 (Live)",
+        );
+        assert!(
+            !show_order_account_dropdown(&single),
+            "a single-account broker must not render a redundant account dropdown"
+        );
+        let multi = order_account_options(
+            &[
+                roster_entry("alpaca1", "Alpaca 1 (Live)", true, true),
+                roster_entry("alpaca2", "Alpaca 2 (Paper)", true, false),
+            ],
+            "alpaca1",
+            "Alpaca 1 (Live)",
+        );
+        assert!(show_order_account_dropdown(&multi));
+        assert!(!show_order_account_dropdown(&[]));
+    }
+
+    #[test]
+    fn selected_order_account_keeps_valid_pick_then_falls_back_to_primary() {
+        let options = vec![
+            ("alpaca1".to_string(), "Alpaca 1 (Live)".to_string()),
+            ("alpaca2".to_string(), "Alpaca 2 (Paper)".to_string()),
+        ];
+        // An explicit, still-connected pick is what orders route to.
+        assert_eq!(
+            resolve_order_account_id(&options, "alpaca2", "alpaca1"),
+            "alpaca2"
+        );
+        // No pick / a pick that disconnected falls back to the primary …
+        assert_eq!(resolve_order_account_id(&options, "", "alpaca1"), "alpaca1");
+        assert_eq!(
+            resolve_order_account_id(&options, "alpaca9", "alpaca1"),
+            "alpaca1"
+        );
+        // … and to the first live account when even the primary is gone, so a
+        // rendered selector never routes to an id that is not on offer.
+        assert_eq!(
+            resolve_order_account_id(&options, "alpaca9", "alpaca7"),
+            "alpaca1"
+        );
+        assert!(resolve_order_account_id(&[], "alpaca2", "alpaca1").is_empty());
+    }
+
+    #[test]
+    fn mode_selection_defaults_routing_to_the_primary_broker() {
+        // The primary broker wins whenever it can place orders …
+        assert_eq!(
+            default_order_broker(OrderBroker::Kraken, true, true),
+            Some(OrderBroker::Kraken)
+        );
+        assert_eq!(
+            default_order_broker(OrderBroker::Alpaca, true, true),
+            Some(OrderBroker::Alpaca)
+        );
+        // … otherwise the first broker that can, never a stale selection.
+        assert_eq!(
+            default_order_broker(OrderBroker::Kraken, true, false),
+            Some(OrderBroker::Alpaca)
+        );
+        assert_eq!(
+            default_order_broker(OrderBroker::Alpaca, false, true),
+            Some(OrderBroker::Kraken)
+        );
+        assert_eq!(
+            default_order_broker(OrderBroker::Alpaca, false, false),
+            None
+        );
+    }
 
     #[test]
     fn slot_keyring_keys_keep_slot1_legacy_names() {

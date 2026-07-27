@@ -8,7 +8,22 @@ use crate::account_pool::AlpacaAccountPool;
 /// Order routes for one command: always the primary account, plus every other
 /// trade-enabled account when live order mirroring (TradeCopy) is on. The tag
 /// is appended to result lines so mirrored placements are attributable.
-fn order_routes<'a>(pool: &'a AlpacaAccountPool, mirror: bool) -> Vec<(String, &'a AlpacaBroker)> {
+///
+/// `target` is the explicit account the UI aimed this order at (ADR-130). An
+/// explicit **non-primary** target routes to exactly that account and never
+/// fans out: mirroring is defined as "replicate orders placed on the primary
+/// account", so it must not widen an order the user pointed at one account.
+fn order_routes<'a>(
+    pool: &'a AlpacaAccountPool,
+    mirror: bool,
+    target: Option<&str>,
+) -> Vec<(String, &'a AlpacaBroker)> {
+    if let Some(id) = target.filter(|id| Some(*id) != pool.primary_id()) {
+        return pool
+            .broker_by_id(id)
+            .map(|account| vec![(format!(" [{}]", account.spec.label), &account.broker)])
+            .unwrap_or_default();
+    }
     let mut routes: Vec<(String, &AlpacaBroker)> = Vec::new();
     if let Some(primary) = pool.primary_broker() {
         routes.push((String::new(), primary));
@@ -26,6 +41,33 @@ pub async fn handle_alpaca_order_command(
     pool: &AlpacaAccountPool,
     broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
 ) {
+    handle_alpaca_order_command_routed(cmd, pool, broker_msg_tx, None).await;
+}
+
+/// Submit an Alpaca order command against one explicit account instead of the
+/// primary. An id that is not connected fails loudly — placing the order on the
+/// primary instead would trade the wrong account.
+pub async fn handle_alpaca_order_command_for_account(
+    cmd: BrokerCmd,
+    account_id: &str,
+    pool: &AlpacaAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+) {
+    if pool.broker_by_id(account_id).is_none() {
+        let _ = broker_msg_tx.send(BrokerMsg::Error(format!(
+            "Alpaca order failed: account {account_id} is not connected"
+        )));
+        return;
+    }
+    handle_alpaca_order_command_routed(cmd, pool, broker_msg_tx, Some(account_id)).await;
+}
+
+async fn handle_alpaca_order_command_routed(
+    cmd: BrokerCmd,
+    pool: &AlpacaAccountPool,
+    broker_msg_tx: &tokio::sync::mpsc::UnboundedSender<BrokerMsg>,
+    target: Option<&str>,
+) {
     if pool.primary_broker().is_none() {
         return;
     }
@@ -33,7 +75,7 @@ pub async fn handle_alpaca_order_command(
 
     match cmd {
         BrokerCmd::CloseAll => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b.close_all_positions().await {
                     Ok(_) => {
                         let _ = broker_msg_tx
@@ -46,7 +88,7 @@ pub async fn handle_alpaca_order_command(
             }
         }
         BrokerCmd::ClosePosition { symbol, qty } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b.close_position(&symbol, qty).await {
                     Ok(r) => {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
@@ -85,7 +127,7 @@ pub async fn handle_alpaca_order_command(
             }
         }
         BrokerCmd::AlpacaClosePositionPercent { symbol, percentage } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b.close_position_percent(&symbol, percentage).await {
                     Ok(r) => {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
@@ -128,7 +170,7 @@ pub async fn handle_alpaca_order_command(
             }
         }
         BrokerCmd::AlpacaMarketOrder { symbol, qty, side } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b.market_order(&symbol, qty, &side).await {
                     Ok(r) => {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
@@ -148,7 +190,7 @@ pub async fn handle_alpaca_order_command(
             notional,
             side,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b.market_order_notional(&symbol, notional, &side).await {
                     Ok(r) => {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
@@ -169,7 +211,7 @@ pub async fn handle_alpaca_order_command(
             side,
             limit_price,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b.limit_order(&symbol, qty, &side, limit_price, "gtc").await {
                     Ok(r) => {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
@@ -190,7 +232,7 @@ pub async fn handle_alpaca_order_command(
             side,
             stop_price,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b.stop_order(&symbol, qty, &side, stop_price, "gtc").await {
                     Ok(r) => {
                         let _ = broker_msg_tx.send(BrokerMsg::OrderResult(format!(
@@ -212,7 +254,7 @@ pub async fn handle_alpaca_order_command(
             stop_loss,
             take_profit,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b
                     .bracket_order(&symbol, qty, &side, take_profit, stop_loss)
                     .await
@@ -264,7 +306,7 @@ pub async fn handle_alpaca_order_command(
             tp_price,
             sl_price,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b
                     .oco_order(&symbol, qty, &side, tp_price, sl_price, None)
                     .await
@@ -319,7 +361,7 @@ pub async fn handle_alpaca_order_command(
             side,
             trail_percent,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b
                     .trailing_stop_order(&symbol, qty, &side, None, Some(trail_percent), "gtc")
                     .await
@@ -346,7 +388,7 @@ pub async fn handle_alpaca_order_command(
             stop_price,
             limit_price,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 match b
                     .stop_limit_order(&symbol, qty, &side, stop_price, limit_price, "gtc")
                     .await
@@ -370,7 +412,7 @@ pub async fn handle_alpaca_order_command(
             tp_price,
             wait_for_qty_at_most,
         } => {
-            for (tag, b) in order_routes(pool, mirror) {
+            for (tag, b) in order_routes(pool, mirror, target) {
                 if let Some(max_qty) = wait_for_qty_at_most {
                     let mut ready = false;
                     for _ in 0..12 {
@@ -381,8 +423,13 @@ pub async fn handle_alpaca_order_command(
                                     .map(|p| (p.symbol.to_ascii_uppercase(), p.qty.abs()))
                                     .collect();
                                 let sym_upper = symbol.to_ascii_uppercase();
-                                let has_sym = pos_by_sym.get(&sym_upper).map_or(false, |&q| q > 0.0);
-                                if has_sym && pos_by_sym.get(&sym_upper).map_or(false, |&q| q <= max_qty + 1e-8) {
+                                let has_sym =
+                                    pos_by_sym.get(&sym_upper).map_or(false, |&q| q > 0.0);
+                                if has_sym
+                                    && pos_by_sym
+                                        .get(&sym_upper)
+                                        .map_or(false, |&q| q <= max_qty + 1e-8)
+                                {
                                     ready = true;
                                     break;
                                 }

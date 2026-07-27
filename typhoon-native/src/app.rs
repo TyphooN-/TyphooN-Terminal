@@ -101,10 +101,10 @@ mod market_data_sync;
 mod market_map_model;
 mod news_auto_scrape;
 mod platform;
-mod research_sort_indices;
 mod remote_image_loader;
 #[cfg(test)]
 mod remote_image_loader_tests;
+mod research_sort_indices;
 mod session_persistence;
 mod settings;
 mod ssr_scan;
@@ -2870,8 +2870,10 @@ impl TyphooNApp {
             kraken_spot_sell_available: 0.0,
             kraken_spot_sell_qty: 0.0,
             kraken_spot_sell_pct: 100.0,
-            kraken_spot_buy_pct: 25.0,
-            kraken_spot_buy_qty: 0.0,
+            kraken_spot_sell_account_id: String::new(),
+            kraken_spot_sell_account_label: String::new(),
+            compact_order_pct: 25.0,
+            compact_order_qty: 0.0,
             show_alpaca_close_dialog: false,
             alpaca_close_account_id: String::new(),
             alpaca_close_account_label: String::new(),
@@ -2952,6 +2954,9 @@ impl TyphooNApp {
             dragging_right_panel_section: None,
             risk_mode: RiskMode::VaR,
             order_broker: OrderBroker::Kraken,
+            // Routing starts on the primary account of `order_broker`; the
+            // Trading panel's Account dropdown is the only thing that sets it.
+            order_account_id: String::new(),
             // Default primary preserves legacy behavior (Kraken main, Alpaca
             // assist) until the user flips the top-bar switch; the choice is
             // then persisted. `order_broker` is re-derived from this on load.

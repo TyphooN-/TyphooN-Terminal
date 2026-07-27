@@ -203,6 +203,17 @@ pub enum BrokerCmd {
         broker: OrderBroker,
         account_id: String,
     },
+    /// Route one order/exit/close command to an explicit account instead of the
+    /// broker's primary (ADR-130). `inner` is the ordinary command; senders that
+    /// have no explicit target keep sending it bare and keep the legacy
+    /// primary-account behaviour (including TradeCopy mirroring). Alpaca inner
+    /// commands resolve `account_id` against the Alpaca pool, Kraken ones
+    /// against the Kraken pool; an unconnected id is reported, never silently
+    /// re-routed to the primary.
+    ForAccount {
+        account_id: String,
+        inner: Box<BrokerCmd>,
+    },
     /// Mirror app-placed Alpaca orders onto explicitly selected accounts
     /// (TradeCopy live mode). Strictly opt-in: `target_ids` is the checked
     /// target set from the TradeCopy window, and an empty set mirrors nothing.

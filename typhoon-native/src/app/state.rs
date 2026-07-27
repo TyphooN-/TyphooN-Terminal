@@ -366,8 +366,15 @@ pub struct TyphooNApp {
     pub(crate) kraken_spot_sell_available: f64,
     pub(crate) kraken_spot_sell_qty: f64,
     pub(crate) kraken_spot_sell_pct: f32,
-    pub(crate) kraken_spot_buy_pct: f32,
-    pub(crate) kraken_spot_buy_qty: f64,
+    /// Kraken account the spot-sell ticket submits to (the account whose
+    /// balance opened it). Empty = the Kraken primary.
+    pub(crate) kraken_spot_sell_account_id: String,
+    pub(crate) kraken_spot_sell_account_label: String,
+    /// Compact market-control sizing (KrakenPro mode). Broker-neutral: the
+    /// percentage is of Kraken spot quote cash or of Alpaca buying power
+    /// depending on the routed broker; the quantity is in base units/shares.
+    pub(crate) compact_order_pct: f32,
+    pub(crate) compact_order_qty: f64,
     // Alpaca position-close ticket (Sell to close a long / Buy to close a short),
     // a sliding-scale 1–100% close mirroring the Kraken spot-sell dialog.
     pub(crate) show_alpaca_close_dialog: bool,
@@ -3801,6 +3808,11 @@ pub struct TyphooNApp {
     /// Risk sizing mode dropdown.
     pub(crate) risk_mode: RiskMode,
     pub(crate) order_broker: OrderBroker,
+    /// Explicit order-routing account inside `order_broker` (ADR-130). Empty
+    /// means "follow that broker's primary account". Deliberately NOT
+    /// persisted: like the mode/broker defaults, routing starts each session
+    /// — and each mode change — on the current primary account.
+    pub(crate) order_account_id: String,
     /// Primary broker (top-bar switch). The primary broker is the order-routing
     /// default and the trusted/reference lane for the equity data merge; every
     /// other enabled broker acts as a sync **assist** lane. Persisted.

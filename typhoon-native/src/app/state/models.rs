@@ -247,7 +247,7 @@ impl RightPanelSectionId {
 pub(crate) const KRAKEN_TRADE_HISTORY_CAP: usize = 20_000;
 
 /// Risk sizing mode (old app had dropdown).
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum RiskMode {
     VaR,
     Standard,
@@ -257,6 +257,24 @@ pub(crate) enum RiskMode {
 }
 
 impl RiskMode {
+    /// Every selectable mode, in dropdown order. Mode availability never
+    /// depends on which broker is connected: `KrakenPro` is the compact
+    /// market-order mode and works against any order-capable broker, so it is
+    /// listed unconditionally like the sizing modes.
+    pub(crate) const ALL: [RiskMode; 5] = [
+        RiskMode::VaR,
+        RiskMode::Standard,
+        RiskMode::Fixed,
+        RiskMode::Dynamic,
+        RiskMode::KrakenPro,
+    ];
+
+    /// True when this mode sizes from the compact market controls instead of
+    /// the SL/TP risk plan (no VaR/risk-% sizing is involved).
+    pub(crate) fn uses_compact_market_controls(self) -> bool {
+        matches!(self, RiskMode::KrakenPro)
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             RiskMode::VaR => "VaR",

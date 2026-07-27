@@ -29,6 +29,27 @@ fn kraken_equity_quote_meta_candidates(symbol: &str) -> Vec<String> {
     candidates
 }
 
+/// Address one order/exit/close command at an explicit account (ADR-130). An
+/// empty `account_id` leaves the command primary-routed exactly as before, so
+/// callers with no account target keep the legacy behaviour.
+pub(super) fn order_cmd_for_account(account_id: &str, inner: BrokerCmd) -> BrokerCmd {
+    if account_id.is_empty() {
+        return inner;
+    }
+    BrokerCmd::ForAccount {
+        account_id: account_id.to_string(),
+        inner: Box::new(inner),
+    }
+}
+
+/// Whether the compact market controls (KrakenPro mode) can be rendered for the
+/// routed broker. Broker-neutral by construction: it asks only whether that
+/// broker can place orders and whether the chart has a usable price — never
+/// whether Kraken specifically is connected.
+pub(super) fn compact_order_controls_available(order_available: bool, last_price: f64) -> bool {
+    order_available && last_price.is_finite() && last_price > 0.0
+}
+
 pub(super) fn obsolete_nonspot_low_timeframe(broker: &str, timeframe: &str) -> bool {
     matches!(
         normalize_sync_timeframe_key(timeframe),
@@ -1040,11 +1061,12 @@ impl TyphooNApp {
         // Use cached list when populated (central rebuild in app_runtime) to avoid
         // repeated O(n) construction from charts/positions/orders/watchlist on every
         // news scrape or filter call.
-        let mut set: std::collections::HashSet<String> = if !self.cached_active_symbols_set.is_empty() {
-            self.cached_active_symbols_set.clone()
-        } else {
-            self.active_symbols().into_iter().collect()
-        };
+        let mut set: std::collections::HashSet<String> =
+            if !self.cached_active_symbols_set.is_empty() {
+                self.cached_active_symbols_set.clone()
+            } else {
+                self.active_symbols().into_iter().collect()
+            };
 
         // Open orders: live exposure that may not have a filled position yet.
         for o in &self.live_orders {
@@ -1303,6 +1325,15 @@ impl TyphooNApp {
     }
 
     pub(super) fn build_trade_risk_config(&self) -> Result<risk::RiskConfig, String> {
+        if self.risk_mode.uses_compact_market_controls() {
+            // This mode has no SL/TP risk plan at all. Mapping it onto VaR here
+            // (as an earlier version did) silently sized orders by a VaR % the
+            // user could not see in this mode.
+            return Err(format!(
+                "Open Trade: {} sizes from the compact market controls, not from SL/TP risk",
+                self.risk_mode.label()
+            ));
+        }
         let mut cfg = risk::RiskConfig::default();
         cfg.order_mode = match self.risk_mode {
             RiskMode::Standard => risk::OrderMode::Standard,
@@ -1607,27 +1638,98 @@ impl TyphooNApp {
             .collect()
     }
 
-    pub(super) fn resolve_order_broker(&mut self) {
-        // Normalize the order-routing target ONLY when the current selection is
-        // unavailable (broker disabled/disconnected). An explicit, available
-        // selection from the Broker combo is always respected.
-        //
-        // This runs every frame and again at submit, so the previous version —
-        // which force-routed a paper-mode Alpaca selection to live Kraken — made
-        // an explicit Alpaca pick snap straight back to Kraken (and would have
-        // silently re-routed at order submit). Primary/assist routing is now a
-        // user choice: prefer the primary broker on fallback, never override a
-        // valid selection.
-        if self.order_broker_available(self.order_broker) {
-            return;
+    /// Normalize the order-routing target (broker + account).
+    ///
+    /// The broker is re-pointed ONLY when the current selection is unavailable
+    /// (broker disabled/disconnected). An explicit, available selection from
+    /// the Broker combo is always respected.
+    ///
+    /// This runs every frame and again at submit, so an earlier version —
+    /// which force-routed a paper-mode Alpaca selection to live Kraken — made
+    /// an explicit Alpaca pick snap straight back to Kraken (and would have
+    /// silently re-routed at order submit). Primary/assist routing is a user
+    /// choice: prefer the primary broker on fallback, never override a valid
+    /// selection.
+    ///
+    /// The account is then pinned to a real account of the routed broker, so
+    /// the id orders are submitted with always matches the one the Account
+    /// dropdown is showing.
+    pub(super) fn resolve_order_target(&mut self) {
+        if !self.order_broker_available(self.order_broker) {
+            if self.order_broker_available(self.primary_broker) {
+                self.set_order_broker(self.primary_broker);
+            } else if self.kraken_order_available() {
+                self.set_order_broker(OrderBroker::Kraken);
+            } else if self.alpaca_order_available() {
+                self.set_order_broker(OrderBroker::Alpaca);
+            }
         }
-        if self.order_broker_available(self.primary_broker) {
-            self.order_broker = self.primary_broker;
-        } else if self.kraken_order_available() {
-            self.order_broker = OrderBroker::Kraken;
-        } else if self.alpaca_order_available() {
-            self.order_broker = OrderBroker::Alpaca;
+        self.order_account_id = self.selected_order_account_id();
+    }
+
+    /// Wrap an order/exit/close command for the account the Trading panel is
+    /// pointed at. An empty target keeps the legacy primary-account routing.
+    pub(super) fn send_order_for_selected_account(&self, inner: BrokerCmd) {
+        let _ = self.broker_tx.send(order_cmd_for_account(
+            &self.selected_order_account_id(),
+            inner,
+        ));
+    }
+
+    /// Buying-power basis the compact market controls size from on `broker`.
+    /// Kraken uses spot quote cash (what a spot buy can actually spend);
+    /// Alpaca uses the primary account's live buying power, or the roster
+    /// equity for any other account (under-sizes rather than over-sizes, since
+    /// only the primary reports live margin figures).
+    pub(super) fn compact_order_cash_basis(&self, broker: OrderBroker, account_id: &str) -> f64 {
+        match broker {
+            // Kraken balance snapshots are currently emitted only for the pool
+            // primary. Never size an explicitly selected secondary account
+            // from the primary account's cash; its compact control falls back
+            // to a manual quantity that the venue validates at submission.
+            OrderBroker::Kraken if account_id == self.kraken_primary_account_id => {
+                self.kraken_quote_balance().max(0.0)
+            }
+            OrderBroker::Kraken => 0.0,
+            OrderBroker::Alpaca => {
+                if account_id == self.alpaca_primary_account_id {
+                    if let Some(acct) = self.live_account.as_ref() {
+                        let bp = if acct.buying_power > 0.0 {
+                            acct.buying_power
+                        } else {
+                            acct.equity
+                        };
+                        return bp.max(0.0);
+                    }
+                }
+                self.alpaca_roster_by_id
+                    .get(account_id)
+                    .map(|a| a.equity.max(0.0))
+                    .unwrap_or(0.0)
+            }
         }
+    }
+
+    /// Quantity held on `account_id` for `symbol` — the cap for the compact
+    /// Sell control, so it disposes of inventory instead of opening a short.
+    pub(super) fn alpaca_account_long_qty(&self, account_id: &str, symbol: &str) -> f64 {
+        let key = bare_symbol_from_key(symbol)
+            .replace('/', "")
+            .trim_end_matches(".EQ")
+            .trim_end_matches(".eq")
+            .to_ascii_uppercase();
+        self.alpaca_account_positions_by_id
+            .get(account_id)
+            .map(|acct| {
+                acct.positions
+                    .iter()
+                    .filter(|p| {
+                        p.side.eq_ignore_ascii_case("long") && p.symbol.to_ascii_uppercase() == key
+                    })
+                    .map(|p| p.qty.abs())
+                    .sum::<f64>()
+            })
+            .unwrap_or(0.0)
     }
 
     pub(super) fn selected_live_broker_targets(&self) -> (bool, bool) {
@@ -1639,16 +1741,39 @@ impl TyphooNApp {
     }
 
     pub(super) fn alpaca_trade_account_snapshot(&self) -> Option<TradeAccountSnapshot> {
-        self.live_account.as_ref().map(|acct| TradeAccountSnapshot {
-            broker: "Alpaca",
-            // Alpaca `last_equity` is yesterday's equity, not a current trade
-            // balance. Use current equity as the risk basis; cash and margin are
-            // displayed separately in the Risk & Account panel.
-            balance: Self::alpaca_current_risk_balance(acct),
-            equity: acct.equity,
-            buying_power: acct.buying_power,
-            margin_used: acct.initial_margin,
-        })
+        let account_id = if self.order_broker == OrderBroker::Alpaca {
+            self.selected_order_account_id()
+        } else {
+            self.alpaca_primary_account_id.clone()
+        };
+        if account_id == self.alpaca_primary_account_id {
+            return self.live_account.as_ref().map(|acct| TradeAccountSnapshot {
+                broker: "Alpaca",
+                // Alpaca `last_equity` is yesterday's equity, not a current trade
+                // balance. Use current equity as the risk basis; cash and margin are
+                // displayed separately in the Risk & Account panel.
+                balance: Self::alpaca_current_risk_balance(acct),
+                equity: acct.equity,
+                buying_power: acct.buying_power,
+                margin_used: acct.initial_margin,
+            });
+        }
+        self.alpaca_roster_by_id
+            .get(&account_id)
+            .and_then(|account| {
+                (account.connected && account.equity.is_finite() && account.equity > 0.0).then_some(
+                    TradeAccountSnapshot {
+                        broker: "Alpaca",
+                        balance: account.equity,
+                        equity: account.equity,
+                        // Per-account buying power is not in the roster. Equity is
+                        // the conservative sizing ceiling; Alpaca remains the final
+                        // buying-power authority at submission.
+                        buying_power: account.equity,
+                        margin_used: 0.0,
+                    },
+                )
+            })
     }
 
     pub(super) fn alpaca_current_risk_balance(acct: &AccountInfo) -> f64 {
@@ -2198,53 +2323,100 @@ impl TyphooNApp {
         self.kraken_cost_basis = by_base;
     }
 
-    pub(super) fn render_kraken_spot_buy_controls(&mut self, ui: &mut egui::Ui) {
-        let Some((pair, last_price)) = self.active_trade_symbol_and_price() else {
-            return;
-        };
-        if !self.kraken_connected || last_price <= 0.0 {
+    /// Compact percentage-of-cash market controls (KrakenPro mode). The mode is
+    /// broker-neutral: it always sizes from the routed account's spendable cash
+    /// and submits a plain market order — it never falls back to VaR/risk-%
+    /// sizing. Only the cash basis and the venue call differ per broker.
+    pub(super) fn render_compact_order_controls(&mut self, ui: &mut egui::Ui) {
+        let symbol_price = self.active_trade_symbol_and_price();
+        let last_price = symbol_price.as_ref().map(|(_, p)| *p).unwrap_or(0.0);
+        if !compact_order_controls_available(
+            self.order_broker_available(self.order_broker),
+            last_price,
+        ) {
+            // Say why instead of silently rendering nothing — the mode has no
+            // risk-plan fallback to quietly size with.
+            ui.separator();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} needs a connected {} account and a loaded chart price.",
+                    RiskMode::KrakenPro.label(),
+                    self.order_broker.label()
+                ))
+                .color(AXIS_TEXT)
+                .small(),
+            );
             return;
         }
+        let Some((symbol, last_price)) = symbol_price else {
+            return;
+        };
+        match self.order_broker {
+            OrderBroker::Kraken => self.render_kraken_spot_buy_controls(ui, symbol, last_price),
+            OrderBroker::Alpaca => self.render_alpaca_market_controls(ui, symbol, last_price),
+        }
+    }
 
-        let quote_balance = self.kraken_quote_balance().max(0.0);
-        let max_qty = Self::floor_to_step(quote_balance / last_price, 0.00000001);
-        let base_asset = Self::kraken_base_asset_for_pair(&pair);
-
+    /// Header line shared by both brokers' compact controls: mode, routed
+    /// broker/account, and the cash the percentage is a percentage of.
+    fn compact_order_header(&self, ui: &mut egui::Ui, cash_basis: f64, cash_label: &str) {
         ui.separator();
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Mode").color(AXIS_TEXT).small());
-            ui.label(egui::RichText::new("KrakenPro").color(UP).small().strong());
             ui.label(
-                egui::RichText::new(format!("${quote_balance:.2}"))
+                egui::RichText::new(RiskMode::KrakenPro.label())
+                    .color(UP)
+                    .small()
+                    .strong(),
+            );
+            ui.label(
+                egui::RichText::new(self.selected_order_account_label())
+                    .color(AXIS_TEXT)
+                    .small(),
+            );
+            ui.label(
+                egui::RichText::new(format!("{cash_label} ${cash_basis:.2}"))
                     .color(AXIS_TEXT)
                     .small(),
             );
         });
+    }
 
-        let pct_before = self.kraken_spot_buy_pct;
+    /// Percentage slider + quantity drag + preset buttons, shared by both
+    /// brokers. `step` is the venue's volume increment (1 share on Alpaca,
+    /// 1e-8 on Kraken spot).
+    fn compact_order_size_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        max_qty: f64,
+        step: f64,
+        unit: &str,
+        pct_label: &str,
+    ) {
+        let pct_before = self.compact_order_pct;
         ui.add(
-            egui::Slider::new(&mut self.kraken_spot_buy_pct, 0.0..=100.0)
-                .text("% cash")
+            egui::Slider::new(&mut self.compact_order_pct, 0.0..=100.0)
+                .text(pct_label)
                 .suffix("%"),
         );
-        if (self.kraken_spot_buy_pct - pct_before).abs() > f32::EPSILON {
-            self.kraken_spot_buy_qty = max_qty * (self.kraken_spot_buy_pct as f64 / 100.0);
+        if (self.compact_order_pct - pct_before).abs() > f32::EPSILON {
+            self.compact_order_qty = max_qty * (self.compact_order_pct as f64 / 100.0);
         }
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Qty").color(AXIS_TEXT).small());
-            let qty_before = self.kraken_spot_buy_qty;
+            let qty_before = self.compact_order_qty;
             let qty_resp = ui.add(
-                egui::DragValue::new(&mut self.kraken_spot_buy_qty)
+                egui::DragValue::new(&mut self.compact_order_qty)
                     .range(0.0..=max_qty)
-                    .speed((max_qty / 200.0).max(0.00000001))
-                    .max_decimals(8),
+                    .speed((max_qty / 200.0).max(step))
+                    .max_decimals(if step >= 1.0 { 0 } else { 8 }),
             );
-            ui.label(egui::RichText::new(&base_asset).monospace().small());
-            if qty_resp.changed() || (self.kraken_spot_buy_qty - qty_before).abs() > f64::EPSILON {
-                self.kraken_spot_buy_qty = self.kraken_spot_buy_qty.clamp(0.0, max_qty);
-                self.kraken_spot_buy_pct = if max_qty > 0.0 {
-                    ((self.kraken_spot_buy_qty / max_qty) * 100.0) as f32
+            ui.label(egui::RichText::new(unit).monospace().small());
+            if qty_resp.changed() || (self.compact_order_qty - qty_before).abs() > f64::EPSILON {
+                self.compact_order_qty = self.compact_order_qty.clamp(0.0, max_qty);
+                self.compact_order_pct = if max_qty > 0.0 {
+                    ((self.compact_order_qty / max_qty) * 100.0) as f32
                 } else {
                     0.0
                 };
@@ -2254,15 +2426,64 @@ impl TyphooNApp {
         ui.horizontal(|ui| {
             for pct in [25.0_f32, 50.0, 75.0, 100.0] {
                 if ui.small_button(format!("{pct:.0}%")).clicked() {
-                    self.kraken_spot_buy_pct = pct;
-                    self.kraken_spot_buy_qty = max_qty * (pct as f64 / 100.0);
+                    self.compact_order_pct = pct;
+                    self.compact_order_qty = max_qty * (pct as f64 / 100.0);
                 }
             }
         });
+    }
 
-        let qty = Self::floor_to_step(self.kraken_spot_buy_qty, 0.00000001);
+    fn render_kraken_spot_buy_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        pair: String,
+        last_price: f64,
+    ) {
+        let account_id = self.selected_order_account_id();
+        let quote_balance = self.compact_order_cash_basis(OrderBroker::Kraken, &account_id);
+        let balance_is_known = account_id == self.kraken_primary_account_id;
+        let max_qty = Self::floor_to_step(quote_balance / last_price, 0.00000001);
+        let base_asset = Self::kraken_base_asset_for_pair(&pair);
+
+        if balance_is_known {
+            self.compact_order_header(ui, quote_balance, "cash");
+            self.compact_order_size_controls(ui, max_qty, 0.00000001, &base_asset, "% cash");
+        } else {
+            ui.separator();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} — balance unavailable; enter quantity (Kraken validates funds)",
+                    self.selected_order_account_label()
+                ))
+                .color(AXIS_TEXT)
+                .small(),
+            );
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Qty").color(AXIS_TEXT).small());
+                ui.add(
+                    egui::DragValue::new(&mut self.compact_order_qty)
+                        .range(0.0..=1_000_000.0)
+                        .speed(0.00000001)
+                        .max_decimals(8),
+                );
+                ui.label(egui::RichText::new(&base_asset).monospace().small());
+            });
+            self.compact_order_pct = 0.0;
+        }
+
+        let qty = Self::floor_to_step(self.compact_order_qty, 0.00000001);
         let notional = qty * last_price;
-        let can_submit = qty > 0.0 && quote_balance > 0.0 && notional <= quote_balance;
+        let can_submit = qty > 0.0
+            && notional.is_finite()
+            && (!balance_is_known || (quote_balance > 0.0 && notional <= quote_balance));
+        // Spot inventory is what a sell can dispose of — the compact Sell opens
+        // the existing spot ticket for it rather than shorting. Balances are
+        // only snapshotted for the primary Kraken account, so the ticket is
+        // offered exactly where its quantity is known to be that account's.
+        let sell_account_id = account_id.clone();
+        let spot_balance = (sell_account_id == self.kraken_primary_account_id)
+            .then(|| self.kraken_spot_balance_for_pair(&pair))
+            .flatten();
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
@@ -2271,7 +2492,7 @@ impl TyphooNApp {
                 )
                 .clicked()
             {
-                let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder {
+                self.send_order_for_selected_account(BrokerCmd::KrakenPlaceOrder {
                     pair: pair.clone(),
                     side: "buy".to_string(),
                     order_type: "market".to_string(),
@@ -2280,8 +2501,107 @@ impl TyphooNApp {
                     leverage: None,
                 });
                 self.log.push_back(LogEntry::info(format!(
-                    "KrakenPro: queued market buy {:.8} {} ({})",
-                    qty, base_asset, pair
+                    "{}: queued market buy {:.8} {} ({}) on {}",
+                    RiskMode::KrakenPro.label(),
+                    qty,
+                    base_asset,
+                    pair,
+                    self.selected_order_account_label()
+                )));
+            }
+            if ui
+                .add_enabled(
+                    spot_balance.is_some(),
+                    egui::Button::new(format!("Sell {base_asset}")).fill(BTN_RED),
+                )
+                .on_hover_text(
+                    "Open the spot sell ticket for the held balance (balance snapshots cover \
+                     the primary Kraken account)",
+                )
+                .clicked()
+            {
+                if let Some((asset, available)) = spot_balance.clone() {
+                    self.open_kraken_spot_sell_dialog_for_account(
+                        sell_account_id.clone(),
+                        asset,
+                        available,
+                    );
+                }
+            }
+            ui.label(
+                egui::RichText::new(format!("≈ ${notional:.2}"))
+                    .color(AXIS_TEXT)
+                    .small(),
+            );
+        });
+    }
+
+    /// Alpaca's equivalent compact controls: percentage of the routed account's
+    /// buying power → whole shares → account-targeted market order. Sell is
+    /// capped at the shares that account actually holds, so the strip disposes
+    /// of inventory instead of opening a short.
+    fn render_alpaca_market_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        symbol: String,
+        last_price: f64,
+    ) {
+        let account_id = self.selected_order_account_id();
+        let buying_power = self.compact_order_cash_basis(OrderBroker::Alpaca, &account_id);
+        // Alpaca fractional support is per-asset; whole shares always submit.
+        let max_qty = Self::floor_to_step(buying_power / last_price, 1.0);
+        let held_qty = Self::floor_to_step(self.alpaca_account_long_qty(&account_id, &symbol), 1.0);
+
+        self.compact_order_header(ui, buying_power, "buying power");
+        self.compact_order_size_controls(ui, max_qty, 1.0, "shares", "% buying power");
+
+        let qty = Self::floor_to_step(self.compact_order_qty, 1.0);
+        let notional = qty * last_price;
+        let can_buy = qty > 0.0 && notional <= buying_power;
+        let sell_qty = qty.min(held_qty);
+        let can_sell = sell_qty > 0.0;
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    can_buy,
+                    egui::Button::new(format!("Buy {symbol}")).fill(BTN_GREEN),
+                )
+                .clicked()
+            {
+                self.send_order_for_selected_account(BrokerCmd::AlpacaMarketOrder {
+                    symbol: symbol.clone(),
+                    qty,
+                    side: "buy".to_string(),
+                });
+                self.log.push_back(LogEntry::info(format!(
+                    "{}: queued market buy {} {} on {}",
+                    RiskMode::KrakenPro.label(),
+                    qty,
+                    symbol,
+                    self.selected_order_account_label()
+                )));
+            }
+            if ui
+                .add_enabled(
+                    can_sell,
+                    egui::Button::new(format!("Sell {symbol}")).fill(BTN_RED),
+                )
+                .on_hover_text(format!(
+                    "Market sell, capped at the {held_qty} share(s) this account holds"
+                ))
+                .clicked()
+            {
+                self.send_order_for_selected_account(BrokerCmd::AlpacaMarketOrder {
+                    symbol: symbol.clone(),
+                    qty: sell_qty,
+                    side: "sell".to_string(),
+                });
+                self.log.push_back(LogEntry::info(format!(
+                    "{}: queued market sell {} {} on {}",
+                    RiskMode::KrakenPro.label(),
+                    sell_qty,
+                    symbol,
+                    self.selected_order_account_label()
                 )));
             }
             ui.label(
@@ -2292,7 +2612,21 @@ impl TyphooNApp {
         });
     }
 
+    /// Open the spot sell ticket for a Kraken **primary-account** balance (the
+    /// balances list is the primary account's inventory).
     pub(super) fn open_kraken_spot_sell_dialog(&mut self, asset: String, available: f64) {
+        let account_id = self.kraken_primary_account_id.clone();
+        self.open_kraken_spot_sell_dialog_for_account(account_id, asset, available);
+    }
+
+    /// Open the spot sell ticket against an explicit Kraken account, so the
+    /// ticket submits where the balance actually lives (ADR-130).
+    pub(super) fn open_kraken_spot_sell_dialog_for_account(
+        &mut self,
+        account_id: String,
+        asset: String,
+        available: f64,
+    ) {
         // Order pair, not the bare-ticker market-data key. Resolve against the live
         // AssetPairs catalog (authoritative for what AddOrder accepts), falling back
         // to the `{TICKER}x/USD` xStock form. A bare `WOK` — and the earlier
@@ -2302,6 +2636,9 @@ impl TyphooNApp {
         self.kraken_spot_sell_available = available.max(0.0);
         self.kraken_spot_sell_qty = self.kraken_spot_sell_available;
         self.kraken_spot_sell_pct = 100.0;
+        self.kraken_spot_sell_account_label =
+            self.account_label_for(OrderBroker::Kraken, &account_id);
+        self.kraken_spot_sell_account_id = account_id;
         self.show_kraken_spot_sell_dialog = true;
     }
 
@@ -2331,6 +2668,18 @@ impl TyphooNApp {
                             .monospace()
                             .strong(),
                     );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Account:");
+                    ui.label(
+                        egui::RichText::new(&self.kraken_spot_sell_account_label)
+                            .monospace()
+                            .strong(),
+                    )
+                    .on_hover_text(format!(
+                        "Kraken account id: {}",
+                        self.kraken_spot_sell_account_id
+                    ));
                 });
                 ui.horizontal(|ui| {
                     ui.label("Available balance:");
@@ -2410,17 +2759,22 @@ impl TyphooNApp {
                         let pair = self.kraken_spot_sell_pair.clone();
                         let qty = self.kraken_spot_sell_qty;
                         let asset = self.kraken_spot_sell_asset.clone();
-                        let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder {
-                            pair: pair.clone(),
-                            side: "sell".to_string(),
-                            order_type: "market".to_string(),
-                            volume: qty,
-                            price: None,
-                            leverage: None,
-                        });
+                        // Sell where the balance is: the ticket carries the
+                        // account whose inventory opened it (ADR-130).
+                        let _ = self.broker_tx.send(order_cmd_for_account(
+                            &self.kraken_spot_sell_account_id,
+                            BrokerCmd::KrakenPlaceOrder {
+                                pair: pair.clone(),
+                                side: "sell".to_string(),
+                                order_type: "market".to_string(),
+                                volume: qty,
+                                price: None,
+                                leverage: None,
+                            },
+                        ));
                         self.log.push_back(LogEntry::info(format!(
-                            "Kraken: queued market sell {:.8} {} ({})",
-                            qty, asset, pair
+                            "Kraken {}: queued market sell {:.8} {} ({})",
+                            self.kraken_spot_sell_account_label, qty, asset, pair
                         )));
                         close_after_submit = true;
                     }
@@ -2621,6 +2975,18 @@ impl TyphooNApp {
     }
 
     pub(super) fn kraken_trade_account_snapshot(&self) -> Option<TradeAccountSnapshot> {
+        let account_id = if self.order_broker == OrderBroker::Kraken {
+            self.selected_order_account_id()
+        } else {
+            self.kraken_primary_account_id.clone()
+        };
+        // Kraken's roster currently has no per-account valuation snapshot.
+        // Refuse risk-based sizing for a secondary account rather than sizing
+        // it from the primary account's balance. Fixed and compact manual-qty
+        // modes still route correctly through `ForAccount`.
+        if account_id != self.kraken_primary_account_id {
+            return None;
+        }
         let usd_like = self.kraken_usd_equivalent_balance();
         if usd_like <= 0.0 {
             None
@@ -2757,7 +3123,7 @@ impl TyphooNApp {
     }
 
     pub(super) fn close_all_selected_brokers(&mut self) {
-        self.resolve_order_broker();
+        self.resolve_order_target();
         let (send_alpaca, send_kraken) = self.selected_live_broker_targets();
         if !send_alpaca && !send_kraken {
             self.log.push_back(LogEntry::warn(
@@ -2777,7 +3143,7 @@ impl TyphooNApp {
             .trim_end_matches(".eq")
             .to_ascii_uppercase();
         if send_alpaca && self.live_positions_by_symbol.contains_key(&key) {
-            let _ = self.broker_tx.send(BrokerCmd::ClosePosition {
+            self.send_order_for_selected_account(BrokerCmd::ClosePosition {
                 symbol: symbol.clone(),
                 qty: None,
             });
@@ -2785,25 +3151,42 @@ impl TyphooNApp {
         }
         if send_kraken {
             if self.kr_positions_by_symbol.contains_key(&key) {
-                let _ = self.broker_tx.send(BrokerCmd::KrakenClosePosition {
+                self.send_order_for_selected_account(BrokerCmd::KrakenClosePosition {
                     pair: symbol.clone(),
                     volume: None,
                 });
                 any = true;
             } else if let Some((asset, available)) = self.kraken_spot_balance_for_pair(&symbol) {
-                self.open_kraken_spot_sell_dialog(asset.clone(), available);
-                self.log.push_back(LogEntry::info(format!(
-                    "Close All: {} is Kraken spot inventory — opened Sell ticket for {}",
-                    symbol,
-                    Self::kraken_display_asset(&asset)
-                )));
-                any = true;
+                // The balance snapshot is the primary account's inventory, so
+                // the ticket it fills in is only correct for that account.
+                let account_id = self.selected_order_account_id();
+                if account_id == self.kraken_primary_account_id {
+                    self.open_kraken_spot_sell_dialog_for_account(
+                        account_id,
+                        asset.clone(),
+                        available,
+                    );
+                    self.log.push_back(LogEntry::info(format!(
+                        "Close All: {} is Kraken spot inventory — opened Sell ticket for {}",
+                        symbol,
+                        Self::kraken_display_asset(&asset)
+                    )));
+                    any = true;
+                } else {
+                    self.log.push_back(LogEntry::warn(format!(
+                        "Close All: {} is Kraken spot inventory on the primary account — switch \
+                         the order account back to it to sell (routed to {})",
+                        symbol,
+                        self.selected_order_account_label()
+                    )));
+                }
             }
         }
         if any {
             self.log.push_back(LogEntry::info(format!(
-                "Close All: submitted for {} on selected broker target(s)",
-                symbol
+                "Close All: submitted for {} on {}",
+                symbol,
+                self.selected_order_account_label()
             )));
         } else {
             self.log.push_back(LogEntry::warn(format!(
@@ -2814,10 +3197,14 @@ impl TyphooNApp {
     }
 
     pub(super) fn submit_quick_trade(&mut self) {
-        self.resolve_order_broker();
-        if matches!(self.risk_mode, RiskMode::KrakenPro) {
-            self.log
-                .push_back(LogEntry::warn("KrakenPro selected: use Buy/Sell controls."));
+        self.resolve_order_target();
+        if self.risk_mode.uses_compact_market_controls() {
+            // No silent fallback to VaR sizing: this mode sizes only from the
+            // compact market controls, on whichever broker is routed.
+            self.log.push_back(LogEntry::warn(format!(
+                "{} selected: use the compact Buy/Sell controls.",
+                self.risk_mode.label()
+            )));
             return;
         }
         let plan = match self.quick_trade_plan() {
@@ -2853,7 +3240,7 @@ impl TyphooNApp {
                     plan.qty, plan.symbol
                 )));
             } else {
-                let _ = self.broker_tx.send(BrokerCmd::AlpacaBracketOrder {
+                self.send_order_for_selected_account(BrokerCmd::AlpacaBracketOrder {
                     symbol: plan.symbol.clone(),
                     qty: alpaca_qty,
                     side: side_str.clone(),
@@ -2861,14 +3248,15 @@ impl TyphooNApp {
                     take_profit: plan.tp,
                 });
                 self.log.push_back(LogEntry::info(format!(
-                    "Open Trade: market {} {} {} @ {} sl={} tp={} [{}]",
+                    "Open Trade: market {} {} {} @ {} sl={} tp={} [{}] on {}",
                     side_label,
                     alpaca_qty,
                     plan.symbol,
                     format_price(plan.last_price),
                     format_price(plan.sl),
                     format_price(plan.tp),
-                    self.risk_mode.label()
+                    self.risk_mode.label(),
+                    self.selected_order_account_label()
                 )));
             }
         }
@@ -2878,7 +3266,7 @@ impl TyphooNApp {
             // then `{TICKER}x/USD` fallback); crypto passes through unchanged. A bare
             // equity ticker (e.g. `WOK`) is an unknown Spot pair and Kraken rejects it.
             let kraken_pair = self.kraken_order_pair_for_symbol(&plan.symbol);
-            let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder {
+            self.send_order_for_selected_account(BrokerCmd::KrakenPlaceOrder {
                 pair: kraken_pair.clone(),
                 side: side_str,
                 order_type: "market".to_string(),
@@ -2887,10 +3275,13 @@ impl TyphooNApp {
                 leverage: None,
             });
             self.log.push_back(LogEntry::info(format!(
-                "Open Trade: Kraken market {} {} {}",
-                side_label, plan.qty, kraken_pair
+                "Open Trade: Kraken market {} {} {} on {}",
+                side_label,
+                plan.qty,
+                kraken_pair,
+                self.selected_order_account_label()
             )));
-            let _ = self.broker_tx.send(BrokerCmd::KrakenSyncExits {
+            self.send_order_for_selected_account(BrokerCmd::KrakenSyncExits {
                 pair: kraken_pair.clone(),
                 sl_price: Some(plan.sl),
                 tp_price: Some(plan.tp),
@@ -2935,7 +3326,7 @@ impl TyphooNApp {
         }
 
         if send_alpaca {
-            let _ = self.broker_tx.send(BrokerCmd::AlpacaSyncExits {
+            self.send_order_for_selected_account(BrokerCmd::AlpacaSyncExits {
                 symbol: symbol.clone(),
                 sl_price: sl,
                 tp_price: tp,
@@ -2943,7 +3334,7 @@ impl TyphooNApp {
             });
         }
         if send_kraken {
-            let _ = self.broker_tx.send(BrokerCmd::KrakenSyncExits {
+            self.send_order_for_selected_account(BrokerCmd::KrakenSyncExits {
                 pair: symbol.clone(),
                 sl_price: sl,
                 tp_price: tp,
@@ -2955,8 +3346,11 @@ impl TyphooNApp {
         let sl_text = sl.map(format_price).unwrap_or_else(|| "OFF".to_string());
         let tp_text = tp.map(format_price).unwrap_or_else(|| "OFF".to_string());
         self.log.push_back(LogEntry::info(format!(
-            "{reason}: syncing exits for {} (sl={} tp={})",
-            symbol, sl_text, tp_text
+            "{reason}: syncing exits for {} on {} (sl={} tp={})",
+            symbol,
+            self.selected_order_account_label(),
+            sl_text,
+            tp_text
         )));
     }
 
@@ -2984,10 +3378,91 @@ impl TyphooNApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        kraken_equity_quote_meta_candidates, obsolete_nonspot_low_timeframe,
-        stale_provider_no_data_mark,
+        compact_order_controls_available, kraken_equity_quote_meta_candidates,
+        obsolete_nonspot_low_timeframe, order_cmd_for_account, stale_provider_no_data_mark,
     };
     use crate::app::UnresolvablePair;
+    use typhoon_engine::broker::protocol::{BrokerCmd, OrderBroker};
+
+    #[test]
+    fn selected_account_routing_wraps_orders_for_that_account() {
+        let market_order = || BrokerCmd::AlpacaMarketOrder {
+            symbol: "AAPL".to_string(),
+            qty: 3.0,
+            side: "buy".to_string(),
+        };
+        // An explicit target travels with the order, so the runtime submits it
+        // on that account instead of the pool primary.
+        match order_cmd_for_account("alpaca2", market_order()) {
+            BrokerCmd::ForAccount { account_id, inner } => {
+                assert_eq!(account_id, "alpaca2");
+                assert!(matches!(*inner, BrokerCmd::AlpacaMarketOrder { .. }));
+            }
+            _ => panic!("an explicit account target must produce a ForAccount command"),
+        }
+        // Kraken commands wrap identically — routing is broker-neutral.
+        match order_cmd_for_account(
+            "kraken2",
+            BrokerCmd::KrakenPlaceOrder {
+                pair: "XBT/USD".to_string(),
+                side: "buy".to_string(),
+                order_type: "market".to_string(),
+                volume: 0.5,
+                price: None,
+                leverage: None,
+            },
+        ) {
+            BrokerCmd::ForAccount { account_id, inner } => {
+                assert_eq!(account_id, "kraken2");
+                assert!(matches!(*inner, BrokerCmd::KrakenPlaceOrder { .. }));
+            }
+            _ => panic!("an explicit account target must produce a ForAccount command"),
+        }
+        // Callers with no target keep the legacy primary-account behaviour.
+        assert!(matches!(
+            order_cmd_for_account("", market_order()),
+            BrokerCmd::AlpacaMarketOrder { .. }
+        ));
+    }
+
+    #[test]
+    fn compact_market_controls_are_available_on_every_order_capable_broker() {
+        for broker in [OrderBroker::Alpaca, OrderBroker::Kraken] {
+            assert!(
+                compact_order_controls_available(true, 12.5),
+                "{} must offer the compact controls when it can place orders",
+                broker.label()
+            );
+            // Gated on the routed broker being usable, never on Kraken.
+            assert!(!compact_order_controls_available(false, 12.5));
+        }
+        // A chart with no usable price cannot size a percentage order.
+        assert!(!compact_order_controls_available(true, 0.0));
+        assert!(!compact_order_controls_available(true, f64::NAN));
+    }
+
+    #[test]
+    fn krakenpro_is_offered_in_every_mode_list_and_never_sizes_by_var() {
+        use crate::app::RiskMode;
+        assert!(
+            RiskMode::ALL.contains(&RiskMode::KrakenPro),
+            "KrakenPro must be selectable regardless of broker connectivity"
+        );
+        assert_eq!(RiskMode::ALL.len(), 5);
+        assert!(RiskMode::KrakenPro.uses_compact_market_controls());
+        for mode in [
+            RiskMode::VaR,
+            RiskMode::Standard,
+            RiskMode::Fixed,
+            RiskMode::Dynamic,
+        ] {
+            assert!(
+                !mode.uses_compact_market_controls(),
+                "{} sizes from the SL/TP risk plan",
+                mode.label()
+            );
+        }
+    }
 
     #[test]
     fn kraken_equity_quote_meta_candidates_normalize_wrappers_and_pairs() {
