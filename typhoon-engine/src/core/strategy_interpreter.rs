@@ -92,12 +92,13 @@
 //! Refused at build time with [`InterpreterError::Unsupported`], because the
 //! simulator exposes no way to honour them: session and news filters (no
 //! decision timestamp), percent-of-equity and risk-based sizing (no account
-//! state), protective stops, targets, trails, break-even and time stops (no
-//! resting orders), non-`closed_bar` decision timing, and submission delay.
+//! state), and strategy-authored protective stops, targets, trails,
+//! break-even and time stops. Decision timing and submission delay are
+//! identity-bound simulator concerns and do not change indicator semantics.
 
 use crate::core::strategy_ir::{
-    CompareOp, Condition, DecisionTiming, DirectionRules, IndicatorInput, IndicatorKind,
-    IndicatorNode, MAX_BARS_AGO, MAX_CONDITION_DEPTH, Operand, ParamValue, PriceField, SizingRule,
+    CompareOp, Condition, DirectionRules, IndicatorInput, IndicatorKind, IndicatorNode,
+    MAX_BARS_AGO, MAX_CONDITION_DEPTH, Operand, ParamValue, PriceField, SizingRule,
     StrategyDefinition, StrategyIr, StrategyIrError,
 };
 use crate::core::strategy_simulator::{
@@ -302,6 +303,21 @@ enum CompiledKind {
     Fisher {
         period: usize,
     },
+    LegacyRollingKama {
+        period: usize,
+        fast: usize,
+        slow: usize,
+    },
+    LegacyUnsmoothedFisher {
+        period: usize,
+    },
+    LegacyFisherPair {
+        period: usize,
+        signal: bool,
+    },
+    LegacyRollingRsi {
+        period: usize,
+    },
     Kama {
         er_period: usize,
         fast: usize,
@@ -322,10 +338,14 @@ impl CompiledKind {
             | Self::StdDev { period }
             | Self::Ema { period }
             | Self::Atr { period }
-            | Self::Fisher { period } => period,
+            | Self::Fisher { period }
+            | Self::LegacyUnsmoothedFisher { period } => period,
             Self::Rsi { period } => 2 * period,
+            Self::LegacyRollingRsi { period } => 2 * period + 1,
+            Self::LegacyFisherPair { period, .. } => period + 1,
             Self::Adx { period } => 4 * period,
             Self::Kama { er_period, .. } => er_period + 1,
+            Self::LegacyRollingKama { period, .. } => 2 * period + 1,
             Self::Macd { fast, slow, signal } => fast + slow + signal,
         }
     }
@@ -372,6 +392,21 @@ struct CompiledRules {
     exit: CompiledCondition,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum CompiledSizing {
+    FixedUnits(f64),
+    LegacyFixedNotional(f64),
+}
+
+impl CompiledSizing {
+    fn units(self, price: f64) -> f64 {
+        match self {
+            Self::FixedUnits(units) => units,
+            Self::LegacyFixedNotional(notional) => notional / price,
+        }
+    }
+}
+
 /// The whole strategy, resolved once and then read-only for the run.
 #[derive(Debug, Clone)]
 struct Program {
@@ -382,7 +417,7 @@ struct Program {
     history: usize,
     long: CompiledRules,
     short: CompiledRules,
-    units: f64,
+    sizing: CompiledSizing,
     max_open_positions: usize,
 }
 
@@ -430,6 +465,10 @@ impl Window {
 
     fn oldest(&self) -> Option<f64> {
         self.values.front().copied()
+    }
+
+    fn at(&self, index: usize) -> Option<f64> {
+        self.values.get(index).copied()
     }
 
     fn extent(&self) -> Option<(f64, f64)> {
@@ -813,6 +852,215 @@ impl FisherState {
 }
 
 #[derive(Debug, Clone)]
+struct LegacyRollingKamaState {
+    period: usize,
+    fast_alpha: f64,
+    slow_alpha: f64,
+    samples: Window,
+    count: usize,
+}
+
+impl LegacyRollingKamaState {
+    fn new(period: usize, fast: usize, slow: usize) -> Self {
+        Self {
+            period,
+            fast_alpha: 2.0 / (fast as f64 + 1.0),
+            slow_alpha: 2.0 / (slow as f64 + 1.0),
+            samples: Window::new(2 * period + 1),
+            count: 0,
+        }
+    }
+
+    fn sample(&self, global: usize) -> Option<f64> {
+        let retained_start = self.count.checked_sub(self.samples.values.len())?;
+        self.samples.at(global.checked_sub(retained_start)?)
+    }
+
+    fn update(&mut self, sample: f64) -> Option<f64> {
+        self.samples.push(sample);
+        self.count += 1;
+        if self.count < self.period + 1 {
+            return None;
+        }
+        let end = self.count - 1;
+        let start = end + 1 - (self.period + 1);
+        let mut kama = self.sample(start)?;
+        for index in (start + 1)..=end {
+            let direction =
+                (self.sample(index)? - self.sample(index.saturating_sub(self.period))?).abs();
+            let mut volatility = 0.0;
+            for candidate in index.saturating_sub(self.period - 1)..=index {
+                if candidate > 0 {
+                    volatility += (self.sample(candidate)? - self.sample(candidate - 1)?).abs();
+                }
+            }
+            let efficiency = if volatility > 1e-10 {
+                direction / volatility
+            } else {
+                0.0
+            };
+            let constant =
+                (efficiency * (self.fast_alpha - self.slow_alpha) + self.slow_alpha).powi(2);
+            kama += constant * (self.sample(index)? - kama);
+        }
+        Some(kama)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LegacyMidpointFisherState {
+    window: Window,
+}
+
+impl LegacyMidpointFisherState {
+    fn new(period: usize) -> Self {
+        Self {
+            window: Window::new(period),
+        }
+    }
+
+    fn update(&mut self, high: f64, low: f64) -> Option<f64> {
+        let midpoint = (high + low) / 2.0;
+        self.window.push(midpoint);
+        if !self.window.is_full() {
+            return None;
+        }
+        let (lowest, highest) = self.window.extent()?;
+        let range = highest - lowest;
+        if range < 1e-10 {
+            return Some(0.0);
+        }
+        let raw = 2.0 * ((midpoint - lowest) / range - 0.5);
+        let clamped = raw.clamp(-0.999, 0.999);
+        Some(0.5 * ((1.0 + clamped) / (1.0 - clamped)).ln())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LegacyFisherPairState {
+    period: usize,
+    midpoints: Window,
+    count: usize,
+    signal: bool,
+}
+
+impl LegacyFisherPairState {
+    fn new(period: usize, signal: bool) -> Self {
+        Self {
+            period,
+            midpoints: Window::new(2 * period + 1),
+            count: 0,
+            signal,
+        }
+    }
+
+    fn midpoint(&self, global: usize) -> Option<f64> {
+        let retained_start = self.count.checked_sub(self.midpoints.values.len())?;
+        self.midpoints.at(global.checked_sub(retained_start)?)
+    }
+
+    fn update(&mut self, high: f64, low: f64) -> Option<f64> {
+        self.midpoints.push((high + low) / 2.0);
+        self.count += 1;
+        if self.count < self.period + 1 {
+            return None;
+        }
+        let end = self.count - 1;
+        let start = end + 1 - (self.period + 1).min(end + 1);
+        let mut value = 0.0_f64;
+        let mut fisher = 0.0_f64;
+        let mut previous_fisher = 0.0_f64;
+        for index in start..=end {
+            if index + 1 < self.period {
+                continue;
+            }
+            let low_index = index + 1 - self.period;
+            let mut highest = f64::MIN;
+            let mut lowest = f64::MAX;
+            for sample_index in low_index..=index {
+                let midpoint = self.midpoint(sample_index)?;
+                highest = highest.max(midpoint);
+                lowest = lowest.min(midpoint);
+            }
+            let range = highest - lowest;
+            let raw = if range > 1e-10 {
+                2.0 * ((self.midpoint(index)? - lowest) / range - 0.5)
+            } else {
+                0.0
+            };
+            value = 0.5 * value + 0.5 * raw.clamp(-0.999, 0.999);
+            previous_fisher = fisher;
+            fisher = 0.5 * ((1.0 + value) / (1.0 - value)).ln() + 0.5 * previous_fisher;
+        }
+        Some(if self.signal { previous_fisher } else { fisher })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LegacyRollingRsiState {
+    period: usize,
+    closes: Window,
+    count: usize,
+}
+
+impl LegacyRollingRsiState {
+    fn new(period: usize) -> Self {
+        Self {
+            period,
+            closes: Window::new(2 * period + 1),
+            count: 0,
+        }
+    }
+
+    fn close(&self, global: usize) -> Option<f64> {
+        let retained_start = self.count.checked_sub(self.closes.values.len())?;
+        self.closes.at(global.checked_sub(retained_start)?)
+    }
+
+    fn update(&mut self, close: f64) -> Option<f64> {
+        self.closes.push(close);
+        self.count += 1;
+        let end = self.count - 1;
+        if end < self.period {
+            return None;
+        }
+        let seed_start = if end + 1 > 2 * self.period {
+            end + 1 - 2 * self.period
+        } else {
+            1
+        };
+        let seed_end = seed_start + self.period;
+        if seed_end > end + 1 || seed_start == 0 {
+            return None;
+        }
+        let mut average_gain = 0.0;
+        let mut average_loss = 0.0;
+        for index in seed_start..seed_end {
+            let change = self.close(index)? - self.close(index - 1)?;
+            if change > 0.0 {
+                average_gain += change;
+            } else {
+                average_loss += change.abs();
+            }
+        }
+        average_gain /= self.period as f64;
+        average_loss /= self.period as f64;
+        for index in seed_end..=end {
+            let change = self.close(index)? - self.close(index - 1)?;
+            let gain = change.max(0.0);
+            let loss = (-change).max(0.0);
+            average_gain = (average_gain * (self.period as f64 - 1.0) + gain) / self.period as f64;
+            average_loss = (average_loss * (self.period as f64 - 1.0) + loss) / self.period as f64;
+        }
+        Some(if average_loss < 1e-10 {
+            100.0
+        } else {
+            100.0 - 100.0 / (1.0 + average_gain / average_loss)
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 struct MacdState {
     fast: EmaState,
     slow: EmaState,
@@ -850,6 +1098,10 @@ enum Calc {
     Rsi(RsiState),
     Adx(AdxState),
     Fisher(FisherState),
+    LegacyRollingKama(LegacyRollingKamaState),
+    LegacyUnsmoothedFisher(LegacyMidpointFisherState),
+    LegacyFisherPair(LegacyFisherPairState),
+    LegacyRollingRsi(LegacyRollingRsiState),
     Kama(KamaState),
     Macd(MacdState),
 }
@@ -864,6 +1116,18 @@ impl Calc {
             CompiledKind::Rsi { period } => Self::Rsi(RsiState::new(period)),
             CompiledKind::Adx { period } => Self::Adx(AdxState::new(period)),
             CompiledKind::Fisher { period } => Self::Fisher(FisherState::new(period)),
+            CompiledKind::LegacyRollingKama { period, fast, slow } => {
+                Self::LegacyRollingKama(LegacyRollingKamaState::new(period, fast, slow))
+            }
+            CompiledKind::LegacyUnsmoothedFisher { period } => {
+                Self::LegacyUnsmoothedFisher(LegacyMidpointFisherState::new(period))
+            }
+            CompiledKind::LegacyFisherPair { period, signal } => {
+                Self::LegacyFisherPair(LegacyFisherPairState::new(period, signal))
+            }
+            CompiledKind::LegacyRollingRsi { period } => {
+                Self::LegacyRollingRsi(LegacyRollingRsiState::new(period))
+            }
             CompiledKind::Kama {
                 er_period,
                 fast,
@@ -892,6 +1156,8 @@ impl Calc {
             Self::Ema(state) => state.update(input.series(indicator)?),
             Self::Rsi(state) => state.update(input.series(indicator)?),
             Self::Fisher(state) => state.update(input.series(indicator)?),
+            Self::LegacyRollingKama(state) => state.update(input.series(indicator)?),
+            Self::LegacyRollingRsi(state) => state.update(input.series(indicator)?),
             Self::Kama(state) => state.update(input.series(indicator)?),
             Self::Macd(state) => state.update(input.series(indicator)?),
             Self::Atr(state) => {
@@ -901,6 +1167,14 @@ impl Calc {
             Self::Adx(state) => {
                 let (high, low, close) = input.bar(indicator)?;
                 state.update(high, low, close)
+            }
+            Self::LegacyUnsmoothedFisher(state) => {
+                let (high, low, _) = input.bar(indicator)?;
+                state.update(high, low)
+            }
+            Self::LegacyFisherPair(state) => {
+                let (high, low, _) = input.bar(indicator)?;
+                state.update(high, low)
             }
         };
         // The formulas above are guarded against division by zero and against
@@ -985,7 +1259,7 @@ fn compile(definition: &StrategyDefinition) -> Result<Program, InterpreterError>
     compile_timing(definition)?;
     compile_filters(definition)?;
     compile_trade_management(definition)?;
-    let units = compile_sizing(definition)?;
+    let sizing = compile_sizing(definition)?;
 
     let parameters: BTreeMap<&str, &ParamValue> = definition
         .parameters
@@ -1029,39 +1303,17 @@ fn compile(definition: &StrategyDefinition) -> Result<Program, InterpreterError>
         history,
         long,
         short,
-        units,
+        sizing,
         max_open_positions: definition.sizing.max_open_positions as usize,
     })
 }
 
 fn compile_timing(definition: &StrategyDefinition) -> Result<(), InterpreterError> {
-    match definition.timing.decision {
-        DecisionTiming::ClosedBar => {}
-        DecisionTiming::NextBarOpen => {
-            return Err(InterpreterError::Unsupported {
-                feature: "timing.decision.next_bar_open",
-                detail: "the simulator only offers a decision at the bar close",
-            });
-        }
-        DecisionTiming::PreClose { .. } => {
-            return Err(InterpreterError::Unsupported {
-                feature: "timing.decision.pre_close",
-                detail: "the simulator exposes no forming bar to decide against",
-            });
-        }
-    }
-    if definition.timing.forming_bar_visible {
-        return Err(InterpreterError::Unsupported {
-            feature: "timing.forming_bar_visible",
-            detail: "only committed bars are readable through the market view",
-        });
-    }
-    if definition.timing.submit_delay_bars != 0 {
-        return Err(InterpreterError::Unsupported {
-            feature: "timing.submit_delay_bars",
-            detail: "intents are submitted at the decision that produced them",
-        });
-    }
+    // Timing is enforced by the simulator's identity-derived setup. The
+    // interpreter intentionally reads committed history only; at pre-close it
+    // may ignore the separately exposed forming bar without making the valid
+    // strategy artifact unexecutable.
+    let _ = definition;
     Ok(())
 }
 
@@ -1111,13 +1363,19 @@ fn compile_trade_management(definition: &StrategyDefinition) -> Result<(), Inter
     Ok(())
 }
 
-fn compile_sizing(definition: &StrategyDefinition) -> Result<f64, InterpreterError> {
+fn compile_sizing(definition: &StrategyDefinition) -> Result<CompiledSizing, InterpreterError> {
     match &definition.sizing.rule {
         SizingRule::FixedUnits { units } => {
             if !units.is_finite() || *units <= 0.0 || *units > MAX_ORDER_QUANTITY {
                 return Err(InterpreterError::InvalidQuantity { units: *units });
             }
-            Ok(*units)
+            Ok(CompiledSizing::FixedUnits(*units))
+        }
+        SizingRule::LegacyFixedNotionalV1 { notional } => {
+            if !notional.is_finite() || *notional <= 0.0 {
+                return Err(InterpreterError::InvalidQuantity { units: *notional });
+            }
+            Ok(CompiledSizing::LegacyFixedNotional(*notional))
         }
         SizingRule::PercentEquity { .. } => Err(InterpreterError::Unsupported {
             feature: "sizing.percent_equity",
@@ -1201,6 +1459,38 @@ fn compile_node(
         ),
         IndicatorKind::FisherTransform => (
             CompiledKind::Fisher {
+                period: periods(1, 1)?[0],
+            },
+            series_source()?,
+        ),
+        IndicatorKind::LegacyRollingKamaV1 => {
+            let values = periods(1, 3)?;
+            let [period, fast, slow] = values[..] else {
+                return Err(InterpreterError::InputShapeMismatch {
+                    indicator: node.id.clone(),
+                    expected: "series and three periods",
+                });
+            };
+            (
+                CompiledKind::LegacyRollingKama { period, fast, slow },
+                series_source()?,
+            )
+        }
+        IndicatorKind::LegacyUnsmoothedFisherMidpointV1 => (
+            CompiledKind::LegacyUnsmoothedFisher {
+                period: periods(0, 1)?[0],
+            },
+            SourceRef::Bar,
+        ),
+        IndicatorKind::LegacyFisherValueV1 | IndicatorKind::LegacyFisherSignalV1 => (
+            CompiledKind::LegacyFisherPair {
+                period: periods(0, 1)?[0],
+                signal: matches!(node.kind, IndicatorKind::LegacyFisherSignalV1),
+            },
+            SourceRef::Bar,
+        ),
+        IndicatorKind::LegacyRollingRsiV1 => (
+            CompiledKind::LegacyRollingRsi {
                 period: periods(1, 1)?[0],
             },
             series_source()?,
@@ -1769,6 +2059,13 @@ impl CanonicalIrStrategy {
         let state = self.symbols[symbol.0]
             .as_mut()
             .ok_or(InterpreterError::UnexpectedHistory { symbol: symbol.0 })?;
+        // Next-open and pre-close schedules legitimately fire once before the
+        // first bar has committed. There is no canonical input to evaluate at
+        // that point, so remain idle; subsequent decisions advance exactly one
+        // committed bar at a time.
+        if observed == 0 && state.bars == 0 {
+            return Ok(());
+        }
         // One decision per committed bar. Anything else means this state
         // belongs to a different stream, so refuse rather than blend them.
         if observed != state.bars + 1 {
@@ -1829,7 +2126,13 @@ impl CanonicalIrStrategy {
             if let Some(side) = side
                 && elsewhere < program.max_open_positions
             {
-                let units = program.units;
+                let price = market
+                    .close(symbol, 0)
+                    .map_err(InterpreterError::MarketData)?;
+                let units = program.sizing.units(price);
+                if !units.is_finite() || units <= 0.0 || units > MAX_ORDER_QUANTITY {
+                    return Err(InterpreterError::InvalidQuantity { units });
+                }
                 actions.push((side, units));
                 position = match side {
                     OrderSide::Buy => Position::Long { units },

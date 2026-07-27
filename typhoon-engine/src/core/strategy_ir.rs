@@ -77,6 +77,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Fee-schedule types are re-exported here because an execution config binds
+/// one by value: a caller assembling settings should not have to reach into a
+/// second module to name the venue it is charging.
+pub use crate::core::strategy_fees::{
+    FeeProvenance, FeeSchedule, FeeScheduleBinding, FeeScheduleError, FeeScheduleShape, FeeSide,
+    FeeVenue, LiquidityAssumption, VolumeTier,
+};
+
 // ── Versions and bounds ────────────────────────────────────────────
 
 /// Wire-format version of [`StrategyIr`]. Bump on any change to the hashed
@@ -84,7 +92,11 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 
 /// Wire-format version of [`StrategyExecutionConfig`].
-pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 1;
+///
+/// v2 added the execution-realism fields of ADR-135 §6.3–§6.5 and §6.9:
+/// fidelity level, latency model, margin policy, price tick, warm-up boundary,
+/// the legacy-compatibility switch, and venue fee-schedule commissions.
+pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 2;
 
 /// Wire-format version of [`StrategyRunManifest`].
 pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 2;
@@ -154,6 +166,14 @@ pub const MAX_PRE_CLOSE_OFFSET_SECONDS: u32 = 86_400;
 
 /// Largest decision→submit delay, in bars.
 pub const MAX_SUBMIT_DELAY_BARS: u32 = 16;
+
+/// Largest single latency leg, in nanoseconds — one hour. A backtest that
+/// assumes a longer delay than that is describing an outage, not execution.
+pub const MAX_LATENCY_NS: i64 = 3_600_000_000_000;
+
+/// Largest execution-side warm-up, in bars. Sized to match [`MAX_BARS_AGO`],
+/// which bounds how far a strategy may look back in the first place.
+pub const MAX_WARMUP_BARS: u32 = MAX_BARS_AGO;
 
 /// Minutes in a day. Session windows are expressed in UTC minutes from
 /// midnight and may run to, but not past, this bound.
@@ -365,6 +385,12 @@ pub enum StrategyIrError {
     NoEnabledDirection,
     /// The decision-timing fields contradict each other.
     InconsistentTiming { detail: &'static str },
+    /// The execution settings contradict each other — most often a
+    /// compatibility deviation dressed up as a realistic model.
+    InconsistentExecution { detail: &'static str },
+    /// A nested venue schedule was malformed, including when serde populated
+    /// private fields without going through its checked constructor.
+    InvalidFeeSchedule(FeeScheduleError),
     /// A field that must hold a content-addressed id (64 lowercase hex
     /// characters) does not.
     MalformedDigestId { field: String, value: String },
@@ -442,6 +468,10 @@ impl std::fmt::Display for StrategyIrError {
             Self::InconsistentTiming { detail } => {
                 write!(f, "execution timing is invalid: {detail}")
             }
+            Self::InconsistentExecution { detail } => {
+                write!(f, "execution settings are inconsistent: {detail}")
+            }
+            Self::InvalidFeeSchedule(error) => write!(f, "fee schedule is invalid: {error}"),
             Self::MalformedDigestId { field, value } => write!(
                 f,
                 "field `{field}` must be 64 lowercase hex characters, got `{value}`"
@@ -641,6 +671,13 @@ pub enum IndicatorKind {
     Kama,
     Rsi,
     FisherTransform,
+    /// Exact formulas used by the pre-ADR-135 backtester. These versioned
+    /// variants exist only for the migration/equivalence bridge.
+    LegacyRollingKamaV1,
+    LegacyUnsmoothedFisherMidpointV1,
+    LegacyFisherValueV1,
+    LegacyFisherSignalV1,
+    LegacyRollingRsiV1,
     Macd,
     Adx,
     StdDev,
@@ -659,6 +696,11 @@ impl IndicatorKind {
             Self::Kama => "kama",
             Self::Rsi => "rsi",
             Self::FisherTransform => "fisher_transform",
+            Self::LegacyRollingKamaV1 => "legacy_rolling_kama_v1",
+            Self::LegacyUnsmoothedFisherMidpointV1 => "legacy_unsmoothed_fisher_midpoint_v1",
+            Self::LegacyFisherValueV1 => "legacy_fisher_value_v1",
+            Self::LegacyFisherSignalV1 => "legacy_fisher_signal_v1",
+            Self::LegacyRollingRsiV1 => "legacy_rolling_rsi_v1",
             Self::Macd => "macd",
             Self::Adx => "adx",
             Self::StdDev => "std_dev",
@@ -670,10 +712,18 @@ impl IndicatorKind {
         use IndicatorInputShape::{Scalar, Series};
         match self {
             Self::Atr | Self::Adx => Some(&[Scalar]),
-            Self::Sma | Self::Ema | Self::Rsi | Self::FisherTransform | Self::StdDev => {
-                Some(&[Series, Scalar])
+            Self::Sma
+            | Self::Ema
+            | Self::Rsi
+            | Self::FisherTransform
+            | Self::StdDev
+            | Self::LegacyRollingRsiV1 => Some(&[Series, Scalar]),
+            Self::Kama | Self::Macd | Self::LegacyRollingKamaV1 => {
+                Some(&[Series, Scalar, Scalar, Scalar])
             }
-            Self::Kama | Self::Macd => Some(&[Series, Scalar, Scalar, Scalar]),
+            Self::LegacyUnsmoothedFisherMidpointV1
+            | Self::LegacyFisherValueV1
+            | Self::LegacyFisherSignalV1 => Some(&[Scalar]),
             Self::Custom { .. } => None,
         }
     }
@@ -929,6 +979,11 @@ pub enum SizingRule {
     FixedUnits {
         units: f64,
     },
+    /// Legacy `run_backtest` sizing: original fixed notional divided by each
+    /// entry close, without equity compounding.
+    LegacyFixedNotionalV1 {
+        notional: f64,
+    },
     PercentEquity {
         percent: f64,
     },
@@ -946,6 +1001,7 @@ impl SizingRule {
     fn wire_tag(&self) -> &'static str {
         match self {
             Self::FixedUnits { .. } => "fixed_units",
+            Self::LegacyFixedNotionalV1 { .. } => "legacy_fixed_notional_v1",
             Self::PercentEquity { .. } => "percent_equity",
             Self::RiskPercentAtr { .. } => "risk_percent_atr",
         }
@@ -1166,6 +1222,11 @@ pub enum CommissionModel {
     PerOrder {
         amount: f64,
     },
+    /// Fees derived from a versioned venue schedule (§6.3). The venue,
+    /// schedule version, effective date, tier, liquidity assumption and
+    /// provenance note are all part of the config identity, so a historical
+    /// run keeps charging what it charged when it was run.
+    VenueSchedule(FeeScheduleBinding),
 }
 
 impl CommissionModel {
@@ -1175,6 +1236,114 @@ impl CommissionModel {
             Self::PerShare { .. } => "per_share",
             Self::PercentOfNotional { .. } => "percent_of_notional",
             Self::PerOrder { .. } => "per_order",
+            Self::VenueSchedule(_) => "venue_schedule",
+        }
+    }
+}
+
+/// How much of the intrabar path the simulator claims to know (§6.9). Levels
+/// beyond `BarOhlc` need data TyphooN does not store yet (§11.3), so they are
+/// not representable rather than silently approximated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FidelityLevel {
+    /// Level 1 — only bar opens and closes are execution prices. A resting
+    /// order is tested against closes; nothing is resolved inside a bar.
+    #[default]
+    BarClose,
+    /// Level 2 — resting orders resolve against the bar's OHLC under the
+    /// [`OhlcAmbiguityPolicy`], and a gapped trigger fills at the open.
+    BarOhlc,
+}
+
+impl FidelityLevel {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::BarClose => "bar_close",
+            Self::BarOhlc => "bar_ohlc",
+        }
+    }
+}
+
+/// Decision→submit and submit→exchange delay (§6.4). Every random draw comes
+/// from the run's seeded stream; `thread_rng` is never used in simulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LatencyModel {
+    /// Zero delay. Valid, and stamped on the run — an order still cannot fill
+    /// at a price its own decision already saw.
+    #[default]
+    None,
+    Fixed {
+        decision_to_submit_ns: i64,
+        submit_to_exchange_ns: i64,
+    },
+    /// Inclusive uniform draws from the run's seeded stream.
+    SeededUniform {
+        decision_to_submit_min_ns: i64,
+        decision_to_submit_max_ns: i64,
+        submit_to_exchange_min_ns: i64,
+        submit_to_exchange_max_ns: i64,
+    },
+}
+
+impl LatencyModel {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Fixed { .. } => "fixed",
+            Self::SeededUniform { .. } => "seeded_uniform",
+        }
+    }
+}
+
+/// Whether a fill may consume buying power the account does not have (§6.5's
+/// insufficient-margin rejection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarginPolicy {
+    /// No buying-power constraint, so an insufficient-funds rejection can
+    /// never occur. Explicit and stamped: leverage is unbounded.
+    #[default]
+    Unconstrained,
+    /// Cash account: a fill may not drive cash negative, and a position may
+    /// not go short. Borrow cost and real margin are §6.3/M2 work; refusing
+    /// the short is honest, silently shorting for free is not.
+    CashOnly,
+}
+
+impl MarginPolicy {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Unconstrained => "unconstrained",
+            Self::CashOnly => "cash_only",
+        }
+    }
+}
+
+/// Deliberate deviations from the engine's own execution model.
+///
+/// The default model never lets a fill happen at a price the decision could
+/// already see. Reproducing the legacy `run_backtest` numbers requires exactly
+/// that, so it is available — as a named, validated, hashed choice that shows
+/// up in every report, and never as a default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionCompatibility {
+    /// The engine's own model.
+    #[default]
+    None,
+    /// Legacy bridge: a market order fills at the close of the bar that
+    /// decided it. Physically unrealizable, permitted only to prove the new
+    /// engine reproduces the old numbers (§13 M1 gate clause 4).
+    LegacySameBarClose,
+}
+
+impl ExecutionCompatibility {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::LegacySameBarClose => "legacy_same_bar_close",
         }
     }
 }
@@ -1283,8 +1452,45 @@ pub struct ExecutionSettings {
     pub commission: CommissionModel,
     pub slippage: SlippageModel,
     pub spread: SpreadModel,
+    /// Which of a bar's reachable stop and target is assumed to fill first.
+    /// Only consulted at [`FidelityLevel::BarOhlc`] and above, and recorded
+    /// either way so a report never has to guess what was assumed.
     pub ambiguity: OhlcAmbiguityPolicy,
     pub tie_break: TieBreakPolicy,
+    pub fidelity: FidelityLevel,
+    pub latency: LatencyModel,
+    pub margin: MarginPolicy,
+    /// Price lattice every limit/stop price must sit on. `None` means no tick
+    /// constraint — honest for M1, which has no per-instrument spec registry.
+    pub price_tick: Option<f64>,
+    /// Bars a symbol must have closed before it may submit an order. Orders
+    /// before the boundary are *rejected and reported*, never dropped.
+    pub warmup_bars: u32,
+    pub compatibility: ExecutionCompatibility,
+}
+
+impl ExecutionSettings {
+    /// The conservative baseline of §6: closed-bar fidelity, pessimistic
+    /// stop-first ambiguity, no compatibility deviation, no unbounded
+    /// warm-up assumption. Costs still have to be chosen deliberately —
+    /// there is no "reasonable default" fee.
+    pub fn conservative_defaults() -> Self {
+        Self {
+            initial_capital: 100_000.0,
+            account_currency: "USD".to_string(),
+            commission: CommissionModel::None,
+            slippage: SlippageModel::None,
+            spread: SpreadModel::None,
+            ambiguity: OhlcAmbiguityPolicy::StopFirst,
+            tie_break: TieBreakPolicy::TimestampPrioritySequence,
+            fidelity: FidelityLevel::BarClose,
+            latency: LatencyModel::None,
+            margin: MarginPolicy::Unconstrained,
+            price_tick: None,
+            warmup_bars: 0,
+            compatibility: ExecutionCompatibility::None,
+        }
+    }
 }
 
 /// Validated execution settings and their content-addressed id.
@@ -1826,7 +2032,7 @@ fn normalize_condition(condition: &mut Condition) {
             for child in children.iter_mut() {
                 normalize_condition(child);
             }
-            children.sort_by_cached_key(|child| condition_sort_key(child));
+            children.sort_by_cached_key(condition_sort_key);
         }
         Condition::Always
         | Condition::Never
@@ -2308,6 +2514,12 @@ fn validate_sizing(
         SizingRule::FixedUnits { units } => {
             check_finite_in("sizing.units", *units, *units > 0.0, "a positive quantity")
         }
+        SizingRule::LegacyFixedNotionalV1 { notional } => check_finite_in(
+            "sizing.notional",
+            *notional,
+            *notional > 0.0,
+            "a positive notional",
+        ),
         SizingRule::PercentEquity { percent } => check_finite_in(
             "sizing.percent",
             *percent,
@@ -2392,14 +2604,14 @@ fn validate_trade_management(
     if let Some(break_even) = &management.break_even_after {
         validate_stop_rule(break_even, "trade_management.break_even_after", declared)?;
     }
-    if let Some(max_bars) = management.max_bars_in_trade {
-        if max_bars == 0 || max_bars > MAX_BARS_IN_TRADE {
-            return Err(out_of_range(
-                "trade_management.max_bars_in_trade",
-                max_bars,
-                "between 1 and MAX_BARS_IN_TRADE, or no limit at all",
-            ));
-        }
+    if let Some(max_bars) = management.max_bars_in_trade
+        && (max_bars == 0 || max_bars > MAX_BARS_IN_TRADE)
+    {
+        return Err(out_of_range(
+            "trade_management.max_bars_in_trade",
+            max_bars,
+            "between 1 and the configured maximum",
+        ));
     }
     Ok(())
 }
@@ -2618,6 +2830,7 @@ fn hash_sizing(digest: &mut CanonicalDigest, sizing: &PositionSizing) {
     digest.tagged_text("sizing.rule", sizing.rule.wire_tag());
     match &sizing.rule {
         SizingRule::FixedUnits { units } => digest.tagged_f64("units", *units),
+        SizingRule::LegacyFixedNotionalV1 { notional } => digest.tagged_f64("notional", *notional),
         SizingRule::PercentEquity { percent } => digest.tagged_f64("percent", *percent),
         SizingRule::RiskPercentAtr {
             risk_percent,
@@ -2714,6 +2927,7 @@ pub fn compute_config_id(settings: &ExecutionSettings) -> Result<String, Strateg
             digest.tagged_f64("minimum", *minimum);
         }
         CommissionModel::PerOrder { amount } => digest.tagged_f64("amount", *amount),
+        CommissionModel::VenueSchedule(binding) => digest_fee_binding(&mut digest, binding),
     }
 
     digest.tagged_text("slippage", settings.slippage.wire_tag());
@@ -2735,7 +2949,86 @@ pub fn compute_config_id(settings: &ExecutionSettings) -> Result<String, Strateg
 
     digest.tagged_text("ambiguity", settings.ambiguity.wire_tag());
     digest.tagged_text("tie_break", settings.tie_break.wire_tag());
+
+    digest.tagged_text("fidelity", settings.fidelity.wire_tag());
+    digest.tagged_text("latency", settings.latency.wire_tag());
+    match settings.latency {
+        LatencyModel::None => {}
+        LatencyModel::Fixed {
+            decision_to_submit_ns,
+            submit_to_exchange_ns,
+        } => {
+            digest.tagged_i64("decision_to_submit_ns", decision_to_submit_ns);
+            digest.tagged_i64("submit_to_exchange_ns", submit_to_exchange_ns);
+        }
+        LatencyModel::SeededUniform {
+            decision_to_submit_min_ns,
+            decision_to_submit_max_ns,
+            submit_to_exchange_min_ns,
+            submit_to_exchange_max_ns,
+        } => {
+            digest.tagged_i64("decision_to_submit_min_ns", decision_to_submit_min_ns);
+            digest.tagged_i64("decision_to_submit_max_ns", decision_to_submit_max_ns);
+            digest.tagged_i64("submit_to_exchange_min_ns", submit_to_exchange_min_ns);
+            digest.tagged_i64("submit_to_exchange_max_ns", submit_to_exchange_max_ns);
+        }
+    }
+    digest.tagged_text("margin", settings.margin.wire_tag());
+    digest.begin_option("price_tick", settings.price_tick.is_some());
+    if let Some(tick) = settings.price_tick {
+        digest.tagged_f64("price_tick.value", tick);
+    }
+    digest.tagged_u32("warmup_bars", settings.warmup_bars);
+    digest.tagged_text("compatibility", settings.compatibility.wire_tag());
     Ok(digest.finish_hex())
+}
+
+/// Canonically encode a bound fee schedule. Every field an operator chose —
+/// venue, version, effective date, provenance, each rate, the tier, and the
+/// maker/taker assumption — is framed, so no two assumptions share an id.
+fn digest_fee_binding(digest: &mut CanonicalDigest, binding: &FeeScheduleBinding) {
+    let schedule = binding.schedule();
+    digest.tagged_u32("fee.schema_version", schedule.schema_version());
+    digest.tagged_text("fee.venue", schedule.venue().wire_id());
+    digest.tagged_u32("fee.schedule_version", schedule.schedule_version());
+    digest.tagged_text("fee.effective_date", schedule.effective_date());
+    digest.tagged_text("fee.provenance", schedule.provenance().wire_tag());
+    match schedule.provenance() {
+        FeeProvenance::OperatorAssumption { note } => digest.tagged_text("fee.note", note),
+        FeeProvenance::VendorPublished {
+            source,
+            retrieved_date,
+        } => {
+            digest.tagged_text("fee.source", source);
+            digest.tagged_text("fee.retrieved_date", retrieved_date);
+        }
+    }
+    digest.tagged_text("fee.shape", schedule.shape().wire_tag());
+    match schedule.shape() {
+        FeeScheduleShape::KrakenSpot { tiers } => {
+            digest.begin_seq("fee.tiers", tiers.len());
+            for tier in tiers {
+                digest.tagged_f64("fee.tier.min_volume", tier.min_volume);
+                digest.tagged_f64("fee.tier.maker_percent", tier.maker_percent);
+                digest.tagged_f64("fee.tier.taker_percent", tier.taker_percent);
+            }
+        }
+        FeeScheduleShape::AlpacaUsEquity {
+            per_share,
+            minimum,
+            sell_notional_percent,
+            sell_per_share,
+            sell_per_order_cap,
+        } => {
+            digest.tagged_f64("fee.per_share", *per_share);
+            digest.tagged_f64("fee.minimum", *minimum);
+            digest.tagged_f64("fee.sell_notional_percent", *sell_notional_percent);
+            digest.tagged_f64("fee.sell_per_share", *sell_per_share);
+            digest.tagged_f64("fee.sell_per_order_cap", *sell_per_order_cap);
+        }
+    }
+    digest.tagged_u64("fee.tier_index", binding.tier_index() as u64);
+    digest.tagged_text("fee.liquidity", binding.liquidity().wire_id());
 }
 
 fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError> {
@@ -2790,6 +3083,11 @@ fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError
             *amount >= 0.0,
             non_negative,
         )?,
+        CommissionModel::VenueSchedule(binding) => {
+            binding
+                .validate()
+                .map_err(StrategyIrError::InvalidFeeSchedule)?;
+        }
     }
 
     match &settings.slippage {
@@ -2829,7 +3127,106 @@ fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError
             "a percentage in [0, 100]",
         )?,
     }
+
+    validate_latency(&settings.latency)?;
+    if let Some(tick) = settings.price_tick {
+        check_finite_in(
+            "settings.price_tick",
+            tick,
+            tick > 0.0,
+            "a positive price increment",
+        )?;
+    }
+    if settings.warmup_bars > MAX_WARMUP_BARS {
+        return Err(StrategyIrError::OutOfRange {
+            field: "settings.warmup_bars".to_string(),
+            value: settings.warmup_bars.to_string(),
+            expected: "a warm-up within MAX_WARMUP_BARS",
+        });
+    }
+    // The legacy bridge fills at a price its own decision saw. That is only
+    // defensible as an isolated comparison, so it may not be combined with
+    // anything that would make it look like a realistic model.
+    if settings.compatibility == ExecutionCompatibility::LegacySameBarClose {
+        if settings.fidelity != FidelityLevel::BarClose {
+            return Err(StrategyIrError::InconsistentExecution {
+                detail: "legacy same-bar-close compatibility requires bar-close fidelity",
+            });
+        }
+        if settings.latency != LatencyModel::None {
+            return Err(StrategyIrError::InconsistentExecution {
+                detail: "legacy same-bar-close compatibility requires zero latency",
+            });
+        }
+    }
     Ok(())
+}
+
+fn validate_latency(latency: &LatencyModel) -> Result<(), StrategyIrError> {
+    let leg = |field: &'static str, value: i64| -> Result<(), StrategyIrError> {
+        if (0..=MAX_LATENCY_NS).contains(&value) {
+            return Ok(());
+        }
+        Err(StrategyIrError::OutOfRange {
+            field: field.to_string(),
+            value: value.to_string(),
+            expected: "a delay in [0, MAX_LATENCY_NS] nanoseconds",
+        })
+    };
+    match *latency {
+        LatencyModel::None => Ok(()),
+        LatencyModel::Fixed {
+            decision_to_submit_ns,
+            submit_to_exchange_ns,
+        } => {
+            leg(
+                "settings.latency.decision_to_submit_ns",
+                decision_to_submit_ns,
+            )?;
+            leg(
+                "settings.latency.submit_to_exchange_ns",
+                submit_to_exchange_ns,
+            )
+        }
+        LatencyModel::SeededUniform {
+            decision_to_submit_min_ns,
+            decision_to_submit_max_ns,
+            submit_to_exchange_min_ns,
+            submit_to_exchange_max_ns,
+        } => {
+            leg(
+                "settings.latency.decision_to_submit_min_ns",
+                decision_to_submit_min_ns,
+            )?;
+            leg(
+                "settings.latency.decision_to_submit_max_ns",
+                decision_to_submit_max_ns,
+            )?;
+            leg(
+                "settings.latency.submit_to_exchange_min_ns",
+                submit_to_exchange_min_ns,
+            )?;
+            leg(
+                "settings.latency.submit_to_exchange_max_ns",
+                submit_to_exchange_max_ns,
+            )?;
+            if decision_to_submit_max_ns < decision_to_submit_min_ns {
+                return Err(StrategyIrError::OutOfRange {
+                    field: "settings.latency.decision_to_submit_max_ns".to_string(),
+                    value: decision_to_submit_max_ns.to_string(),
+                    expected: "a maximum at or above the minimum",
+                });
+            }
+            if submit_to_exchange_max_ns < submit_to_exchange_min_ns {
+                return Err(StrategyIrError::OutOfRange {
+                    field: "settings.latency.submit_to_exchange_max_ns".to_string(),
+                    value: submit_to_exchange_max_ns.to_string(),
+                    expected: "a maximum at or above the minimum",
+                });
+            }
+            Ok(())
+        }
+    }
 }
 
 // ── Run identity ───────────────────────────────────────────────────

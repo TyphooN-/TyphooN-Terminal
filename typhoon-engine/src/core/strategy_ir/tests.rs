@@ -241,6 +241,7 @@ fn settings() -> ExecutionSettings {
         spread: SpreadModel::Constant { price_units: 0.01 },
         ambiguity: OhlcAmbiguityPolicy::StopFirst,
         tie_break: TieBreakPolicy::TimestampPrioritySequence,
+        ..ExecutionSettings::conservative_defaults()
     }
 }
 
@@ -360,7 +361,7 @@ fn current_schema_identity_vectors_are_stable() {
     );
     assert_eq!(
         config_id_of(&settings()),
-        "21ce437c53d19aecf05ef856142a029edda4dcba2180634fa0f3e203733706ce"
+        "35390ff4ec2d2ab66f39cff6e5e3da397a6b6637c66944db147a79194236d7fc"
     );
     assert_eq!(
         run_id_of(&binding()),
@@ -2156,8 +2157,34 @@ fn run_dataset_fixture(
 fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
     use crate::core::strategy_dataset::AdjustmentPolicy;
     use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
+    use crate::core::strategy_simulator::{
+        DecisionPoint, SimulationSetup, run_verified_simulation,
+    };
 
-    let strategy = ir();
+    let mut executable_definition = ir().definition().clone();
+    executable_definition.session.enabled = false;
+    executable_definition.news.enabled = false;
+    for indicator in &mut executable_definition.indicators {
+        if matches!(indicator.kind, IndicatorKind::Custom { .. }) {
+            indicator.kind = IndicatorKind::Sma;
+            indicator.inputs = vec![
+                IndicatorInput::Price(PriceField::Close),
+                IndicatorInput::Constant(1.0),
+            ];
+        }
+    }
+    executable_definition.trade_management = TradeManagement {
+        legs: vec![TradeLeg {
+            fraction_bps: 10_000,
+            stop: None,
+            target: None,
+            trailing: None,
+        }],
+        break_even_after: None,
+        max_bars_in_trade: None,
+    };
+    executable_definition.sizing.rule = SizingRule::FixedUnits { units: 1.0 };
+    let strategy = StrategyIr::build(&executable_definition).expect("executable strategy builds");
     let config = StrategyExecutionConfig::build(&settings()).expect("config builds");
     let (bars, dataset) = run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::Raw);
     let manifest = StrategyRunManifest::build(&RunBinding {
@@ -2188,6 +2215,60 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
     assert_eq!(verified.run_id(), manifest.run_id());
     assert_eq!(verified.datasets().len(), 1);
     assert_eq!(verified.datasets()[0].input_id(), "primary");
+    assert_eq!(
+        SimulationSetup::from_verified_run(&verified),
+        SimulationSetup {
+            seed: 7,
+            decision_point: DecisionPoint::ClosedBar,
+            submit_delay_bars: strategy.definition().timing.submit_delay_bars,
+        },
+        "identified simulation inputs derive only from the sealed strategy and manifest"
+    );
+    let report = run_verified_simulation(&verified)
+        .expect("verified execution materializes only its identity-bound dataset bars");
+    assert_eq!(report.symbols, vec![dataset.symbol.clone()]);
+
+    for timing in [
+        ExecutionTiming {
+            decision: DecisionTiming::NextBarOpen,
+            forming_bar_visible: false,
+            submit_delay_bars: 0,
+        },
+        ExecutionTiming {
+            decision: DecisionTiming::PreClose { offset_seconds: 30 },
+            forming_bar_visible: true,
+            submit_delay_bars: 1,
+        },
+    ] {
+        let mut timed_definition = executable_definition.clone();
+        timed_definition.timing = timing;
+        let timed_strategy = StrategyIr::build(&timed_definition).expect("timed strategy builds");
+        let timed_manifest = StrategyRunManifest::build(&RunBinding {
+            datasets: vec![DatasetBinding {
+                input_id: "primary".to_string(),
+                dataset_id: dataset.dataset_id.clone(),
+            }],
+            strategy_id: timed_strategy.strategy_id().to_string(),
+            config_id: config.config_id().to_string(),
+            seed: 7,
+            engine_version: "0.1.0-test".to_string(),
+            intervention_log_id: None,
+        })
+        .expect("timed manifest builds");
+        let timed_run = assemble_verified_run(
+            &timed_strategy,
+            &config,
+            &timed_manifest,
+            &[RunDatasetInput {
+                input_id: "primary",
+                manifest: &dataset,
+                bars: &bars,
+            }],
+        )
+        .expect("timed run assembles");
+        run_verified_simulation(&timed_run)
+            .unwrap_or_else(|error| panic!("identity timing {timing:?} must execute: {error}"));
+    }
 }
 
 #[test]
@@ -2447,6 +2528,292 @@ fn sealed_artifact_loading_rejects_oversized_json_before_decoding() {
         Err(ArtifactLoadError::TooLarge { limit, found })
             if limit == MAX_SEALED_ARTIFACT_JSON_BYTES && found == oversized.len()
     ));
+}
+
+// ── Execution realism surface (§6.3–§6.5, §6.9) ────────────────────
+
+fn kraken_binding() -> FeeScheduleBinding {
+    let schedule = FeeSchedule::build(
+        FeeVenue::KrakenSpot,
+        1,
+        "2026-07-27",
+        FeeProvenance::OperatorAssumption {
+            note: "M1 identity fixture".to_string(),
+        },
+        FeeScheduleShape::KrakenSpot {
+            tiers: vec![VolumeTier {
+                min_volume: 0.0,
+                maker_percent: 0.25,
+                taker_percent: 0.40,
+            }],
+        },
+    )
+    .expect("shape is valid");
+    FeeScheduleBinding::build(schedule, 0, LiquidityAssumption::Taker).expect("tier 0 exists")
+}
+
+#[test]
+fn the_default_execution_model_is_the_conservative_one() {
+    let settings = ExecutionSettings::conservative_defaults();
+    assert_eq!(settings.fidelity, FidelityLevel::BarClose);
+    assert_eq!(settings.latency, LatencyModel::None);
+    assert_eq!(settings.compatibility, ExecutionCompatibility::None);
+    assert_eq!(settings.ambiguity, OhlcAmbiguityPolicy::StopFirst);
+    assert_eq!(settings.margin, MarginPolicy::Unconstrained);
+    assert_eq!(settings.warmup_bars, 0);
+    assert_eq!(settings.price_tick, None);
+    StrategyExecutionConfig::build(&settings).expect("the defaults are a valid config");
+}
+
+#[test]
+fn a_venue_fee_schedule_can_be_bound_to_a_config() {
+    let mut bound = settings();
+    bound.commission = CommissionModel::VenueSchedule(kraken_binding());
+    let config = StrategyExecutionConfig::build(&bound).expect("a bound schedule is valid");
+    let CommissionModel::VenueSchedule(binding) = &config.settings().commission else {
+        panic!("the schedule did not survive the round trip");
+    };
+    assert_eq!(binding.schedule().venue(), FeeVenue::KrakenSpot);
+    assert_eq!(binding.schedule().effective_date(), "2026-07-27");
+    assert_eq!(binding.liquidity(), LiquidityAssumption::Taker);
+}
+
+#[test]
+fn a_deserialized_fee_schedule_is_revalidated_before_it_is_sealed() {
+    let mut bound = settings();
+    bound.commission = CommissionModel::VenueSchedule(kraken_binding());
+    let mut wire = serde_json::to_value(&bound).expect("settings serialize");
+    wire["commission"]["venue_schedule"]["schedule"]["shape"]["kraken_spot"]["tiers"] =
+        serde_json::json!([]);
+
+    let malformed: ExecutionSettings =
+        serde_json::from_value(wire).expect("serde alone does not validate private fields");
+    assert!(
+        StrategyExecutionConfig::build(&malformed).is_err(),
+        "a malformed nested schedule must not become an identity-bearing config"
+    );
+}
+
+#[test]
+fn latency_bounds_are_enforced_in_both_directions() {
+    let over = ExecutionSettings {
+        latency: LatencyModel::Fixed {
+            decision_to_submit_ns: MAX_LATENCY_NS + 1,
+            submit_to_exchange_ns: 0,
+        },
+        ..settings()
+    };
+    assert!(matches!(
+        StrategyExecutionConfig::build(&over),
+        Err(StrategyIrError::OutOfRange { ref field, .. })
+            if field == "settings.latency.decision_to_submit_ns"
+    ));
+
+    let negative = ExecutionSettings {
+        latency: LatencyModel::Fixed {
+            decision_to_submit_ns: 0,
+            submit_to_exchange_ns: -1,
+        },
+        ..settings()
+    };
+    assert!(matches!(
+        StrategyExecutionConfig::build(&negative),
+        Err(StrategyIrError::OutOfRange { ref field, .. })
+            if field == "settings.latency.submit_to_exchange_ns"
+    ));
+
+    let inverted = ExecutionSettings {
+        latency: LatencyModel::SeededUniform {
+            decision_to_submit_min_ns: 10,
+            decision_to_submit_max_ns: 5,
+            submit_to_exchange_min_ns: 0,
+            submit_to_exchange_max_ns: 0,
+        },
+        ..settings()
+    };
+    assert!(matches!(
+        StrategyExecutionConfig::build(&inverted),
+        Err(StrategyIrError::OutOfRange { ref field, .. })
+            if field == "settings.latency.decision_to_submit_max_ns"
+    ));
+
+    let ok = ExecutionSettings {
+        latency: LatencyModel::SeededUniform {
+            decision_to_submit_min_ns: 5,
+            decision_to_submit_max_ns: 10,
+            submit_to_exchange_min_ns: 1,
+            submit_to_exchange_max_ns: 1,
+        },
+        ..settings()
+    };
+    StrategyExecutionConfig::build(&ok).expect("an ordered draw range is valid");
+}
+
+#[test]
+fn a_non_positive_price_tick_is_refused() {
+    for tick in [0.0, -0.01, f64::NAN] {
+        let settings = ExecutionSettings {
+            price_tick: Some(tick),
+            ..settings()
+        };
+        assert!(
+            StrategyExecutionConfig::build(&settings).is_err(),
+            "tick {tick} must not build a config"
+        );
+    }
+    StrategyExecutionConfig::build(&ExecutionSettings {
+        price_tick: Some(0.01),
+        ..settings()
+    })
+    .expect("a positive tick is valid");
+}
+
+#[test]
+fn the_warmup_boundary_is_bounded() {
+    let over = ExecutionSettings {
+        warmup_bars: MAX_WARMUP_BARS + 1,
+        ..settings()
+    };
+    assert!(matches!(
+        StrategyExecutionConfig::build(&over),
+        Err(StrategyIrError::OutOfRange { ref field, .. }) if field == "settings.warmup_bars"
+    ));
+    StrategyExecutionConfig::build(&ExecutionSettings {
+        warmup_bars: MAX_WARMUP_BARS,
+        ..settings()
+    })
+    .expect("the cap itself is valid");
+}
+
+#[test]
+fn legacy_same_close_compatibility_cannot_hide_inside_a_realistic_config() {
+    let with_latency = ExecutionSettings {
+        compatibility: ExecutionCompatibility::LegacySameBarClose,
+        fidelity: FidelityLevel::BarClose,
+        latency: LatencyModel::Fixed {
+            decision_to_submit_ns: 1,
+            submit_to_exchange_ns: 0,
+        },
+        ..settings()
+    };
+    assert!(matches!(
+        StrategyExecutionConfig::build(&with_latency),
+        Err(StrategyIrError::InconsistentExecution { .. })
+    ));
+
+    let with_intrabar = ExecutionSettings {
+        compatibility: ExecutionCompatibility::LegacySameBarClose,
+        fidelity: FidelityLevel::BarOhlc,
+        latency: LatencyModel::None,
+        ..settings()
+    };
+    assert!(matches!(
+        StrategyExecutionConfig::build(&with_intrabar),
+        Err(StrategyIrError::InconsistentExecution { .. })
+    ));
+
+    StrategyExecutionConfig::build(&ExecutionSettings {
+        compatibility: ExecutionCompatibility::LegacySameBarClose,
+        fidelity: FidelityLevel::BarClose,
+        latency: LatencyModel::None,
+        ..settings()
+    })
+    .expect("the declared compatibility combination is valid");
+}
+
+#[test]
+fn every_new_execution_field_changes_the_config_id() {
+    let baseline = config_id_of(&settings());
+    let mut seen = BTreeSet::from([baseline.clone()]);
+    let mutations: Vec<(&'static str, fn(&mut ExecutionSettings))> = vec![
+        ("fidelity", |s| s.fidelity = FidelityLevel::BarOhlc),
+        ("latency.fixed", |s| {
+            s.latency = LatencyModel::Fixed {
+                decision_to_submit_ns: 1,
+                submit_to_exchange_ns: 2,
+            }
+        }),
+        ("latency.seeded", |s| {
+            s.latency = LatencyModel::SeededUniform {
+                decision_to_submit_min_ns: 1,
+                decision_to_submit_max_ns: 2,
+                submit_to_exchange_min_ns: 3,
+                submit_to_exchange_max_ns: 4,
+            }
+        }),
+        ("compatibility", |s| {
+            s.compatibility = ExecutionCompatibility::LegacySameBarClose;
+            s.fidelity = FidelityLevel::BarClose;
+            s.latency = LatencyModel::None;
+        }),
+        ("margin", |s| s.margin = MarginPolicy::CashOnly),
+        ("price_tick", |s| s.price_tick = Some(0.01)),
+        ("warmup_bars", |s| s.warmup_bars = 7),
+        ("commission.venue_schedule", |s| {
+            s.commission = CommissionModel::VenueSchedule(kraken_binding())
+        }),
+    ];
+    for (label, mutate) in mutations {
+        let mut mutated = settings();
+        mutate(&mut mutated);
+        let id = StrategyExecutionConfig::build(&mutated)
+            .unwrap_or_else(|e| panic!("mutation `{label}` produced invalid settings: {e}"))
+            .config_id;
+        assert_ne!(id, baseline, "mutation `{label}` did not change the id");
+        assert!(
+            seen.insert(id),
+            "mutation `{label}` collided with another mutation's id"
+        );
+    }
+}
+
+#[test]
+fn every_fee_schedule_choice_changes_the_config_id() {
+    let mut seen = BTreeSet::new();
+    let schedule = |version: u32, date: &str, note: &str, taker: f64| {
+        FeeSchedule::build(
+            FeeVenue::KrakenSpot,
+            version,
+            date,
+            FeeProvenance::OperatorAssumption {
+                note: note.to_string(),
+            },
+            FeeScheduleShape::KrakenSpot {
+                tiers: vec![VolumeTier {
+                    min_volume: 0.0,
+                    maker_percent: 0.25,
+                    taker_percent: taker,
+                }],
+            },
+        )
+        .expect("valid")
+    };
+    let cases = [
+        ("baseline", schedule(1, "2026-07-27", "note", 0.40)),
+        ("version", schedule(2, "2026-07-27", "note", 0.40)),
+        ("effective_date", schedule(1, "2026-07-28", "note", 0.40)),
+        ("provenance", schedule(1, "2026-07-27", "other note", 0.40)),
+        ("rate", schedule(1, "2026-07-27", "note", 0.41)),
+    ];
+    for (label, schedule) in cases {
+        let binding = FeeScheduleBinding::build(schedule, 0, LiquidityAssumption::Taker)
+            .expect("tier 0 exists");
+        let settings = ExecutionSettings {
+            commission: CommissionModel::VenueSchedule(binding),
+            ..settings()
+        };
+        let id = config_id_of(&settings);
+        assert!(seen.insert(id), "`{label}` collided with another schedule");
+    }
+    assert_eq!(seen.len(), 5);
+}
+
+#[test]
+fn the_execution_config_schema_version_records_the_realism_fields() {
+    assert_eq!(
+        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, 2,
+        "adding execution-realism fields is a schema change, not a silent reinterpretation"
+    );
 }
 
 // ── Error surface ──────────────────────────────────────────────────

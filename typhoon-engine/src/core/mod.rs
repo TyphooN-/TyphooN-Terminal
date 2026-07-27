@@ -24,6 +24,7 @@ pub mod sec_filing;
 pub mod strategy_dataset;
 pub mod strategy_dataset_store;
 pub mod strategy_dataset_worker;
+pub mod strategy_fees;
 pub mod strategy_interpreter;
 pub mod strategy_ir;
 pub mod strategy_run;

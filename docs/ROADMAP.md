@@ -225,16 +225,16 @@ capability matrices, architecture, non-goals, and acceptance gates.
 **Implementation checkpoint (2026-07-27; foundations are not milestone completion)**
 - [x] Content-addressed dataset-manifest and deterministic QA core (`strategy_dataset.rs`)
 - [x] Canonical typed strategy IR, sealed execution/run artifacts, stable identities, and bounded validated loading (`strategy_ir.rs`)
-- [x] Deterministic bounded scalar IR interpreter for the supported closed-bar/fixed-unit subset, with explicit rejection of unsupported semantics (`strategy_interpreter.rs`)
-- [x] Bounded deterministic scalar event simulator foundation with explicit costs, next-open market fills, no-look-ahead views, and a golden-ledger digest (`strategy_simulator.rs`)
+- [x] Deterministic bounded scalar IR interpreter with SMA/KAMA/Fisher/RSI and supporting built-ins, fixed-unit and compatibility fixed-notional position/reversal handling, and explicit rejection of unsupported semantics (`strategy_interpreter.rs`)
+- [x] Bounded deterministic event simulator with explicit order lifecycles, OHLC/gap policy, decision timing, latency, warm-up, no-look-ahead views, versioned venue costs, and a golden-ledger digest (`strategy_simulator.rs`, `strategy_fees.rs`)
 - [x] Named dataset-input bindings and verified cross-artifact run assembly (`strategy_run.rs`)
 - [x] **M0 gate passed** — atomic content-addressed dataset store with byte-identical restart recovery (`strategy_dataset_store.rs`), the complete seeded QA/calendar corpus under versioned calendar + QA policies (`strategy_dataset.rs`), off-render-thread build/QA/paging with bounded queues and backpressure (`strategy_dataset_worker.rs`), and the native Dataset Inspector table (`dataset_inspector_model.rs`). Remaining M0-scope polish is listed in ADR-135 §13.1: user-driven timeframe transforms, an arbitrary symbol/timeframe/range materializer, and artifact-store retention/GC
-- [ ] Finish M1 interpreter coverage plus full order/OHLC/latency/timing semantics, broker-versioned costs, hand-computed golden corpus, determinism/look-ahead canaries, and legacy zero-cost equivalence
-- [ ] Keep M2–M8 gated behind M1; no optimizer, generator, portfolio, workflow, or live-lifecycle foundation is completion evidence before those gates pass
+- [x] **M1 gate passed** — hand-computed execution corpus, concurrent bit-determinism, look-ahead canaries, true canonical-IR five-strategy zero-cost equivalence, explicit same-close compatibility, execution derived from identity-bound datasets/strategy/config/seed/timing, and ordered cost sensitivity (ADR-135 §13.1)
+- [ ] Execute M2–M8 in prerequisite order; later foundations are not milestone completion until each written gate passes
 
 **Simulation correctness and reproducibility (first prerequisite)**
-- [ ] Versioned strategy IR/AST and run manifest shared by GUI, CPU reference engine, persistence, and later accelerators
-- [ ] Deterministic event-driven simulator with golden trade-ledger fixtures, no-look-ahead checks, explicit OHLC ambiguity policy, and reproducible seeds
+- [x] Versioned strategy IR/AST and run manifest shared by persistence and the CPU reference engine; GUI authoring and later accelerators consume the same identity-bearing artifacts in their gated milestones
+- [x] Deterministic event-driven simulator with golden trade-ledger fixtures, no-look-ahead checks, explicit OHLC ambiguity policy, and reproducible seeds
 - [ ] Pluggable execution models for bar-close, intrabar/tick replay, bid/ask spread, fees/commissions/funding/borrow, slippage/latency, sessions, order types, partial fills, and liquidity constraints
 - [ ] Multi-symbol/multi-timeframe clock synchronization, warm-up semantics, missing-data policy, corporate-action handling, and source-provenance controls
 - [ ] CPU/GPU equivalence gates before any strategy class uses GPU optimization results

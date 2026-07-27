@@ -528,8 +528,10 @@ Native egui, consistent with existing conventions:
 
 ## 6. Execution realism requirements (normative)
 
-These are **MUST** requirements for the L3 simulator. Each ships with golden tests (§13,
-M1). Where a policy is configurable, the **default must be the conservative one**.
+These are **MUST** requirements for the completed L3 simulator. Each ships with golden tests in
+the milestone assigned by §13: M1 gates core order/fill, per-trade cost, latency and OHLC
+correctness; M2 adds the explicitly deferred richer-execution semantics. Where a policy is
+configurable, the **default must be the conservative one**.
 
 ### 6.1 OHLC ambiguity policy
 Within a bar, the true path is unknown. The simulator must adopt an explicit, recorded
@@ -1100,23 +1102,26 @@ Each clause of the M0 gate is now proven by a test rather than asserted:
 - Calendar coverage stays coarse by design: no early-close/half-day handling and no per-symbol
   xStock 24×7 tier, both of which are on ADR-110's own deferred list.
 
-**Remaining before M1 is complete:**
+**M1 gate — passed (2026-07-27):**
 
-- Extend canonical-IR interpretation beyond its current closed-bar/fixed-unit subset. Session and
-  news filters, account/equity-based sizing, custom executable indicators, protective orders,
-  non-closed-bar timing, and submission delay are deliberately rejected rather than approximated.
-- Implement stop/target same-bar ambiguity policy, gap-through-stop behavior, limit/stop order
-  lifecycles, latency, warm-up semantics, pre-close/forming-bar decisions, and synchronized
-  multi-timeframe visibility.
-- Bind reviewed Kraken and Alpaca fee schedules to versioned execution configurations rather than
-  relying only on generic cost models.
-- Expand the hand-computed golden corpus, add multi-thread determinism and cheating-strategy
-  canaries, prove zero-cost equivalence for all five legacy strategies, and assert ordered
-  0×/1×/2× cost sensitivity.
+| Gate clause | Evidence |
+| --- | --- |
+| Hand-computed golden corpus | `strategy_simulator/tests/golden.rs` pins commission/spread, stop-and-target ambiguity under all policies, stop gaps, never-filled limits, reversal costs, latency and warm-up boundaries |
+| Bit-identical determinism | `strategy_simulator/tests/determinism.rs` compares serialized ledgers across repeats, concurrent threads, interleaved runs and seeded-latency streams; `reference_ledger_v1_golden_digest_is_stable` pins the canonical ledger digest |
+| Look-ahead canaries | `strategy_simulator/tests/lookahead.rs` proves closed-bar, pre-close/forming-bar, future-index, whole-series and higher-timeframe access cannot reveal uncommitted values |
+| Five-strategy zero-cost equivalence | `strategy_simulator/tests/legacy_equivalence.rs::canonical_ir_matches_all_five_legacy_strategies_end_to_end` builds and seals canonical IR, executes `CanonicalIrStrategy`, and compares exact entry/exit prices, realized PnL and final equity against fresh legacy SMA Cross, NNFX, KAMA Cross, Fisher Cross and RSI Mean Reversion runs under the explicit `LegacySameBarClose` bridge |
+| Visible cost sensitivity | `strategy_simulator/tests/golden.rs::golden_cost_sensitivity_is_ordered_and_material` pins correctly ordered 0×/1×/2× outcomes |
 
-**M2–M8:** no milestone gate has passed. Their remaining work is exactly the delivery and gate
-text below; optimization, generation, portfolio, automation, and lifecycle work must not bypass
-the unfinished M1 correctness gate.
+The compatibility bridge is named and isolated: realistic configurations cannot silently opt into
+same-close execution. Venue schedules are identity-bearing operator/vendor artifacts; built-in
+tests use explicit assumptions rather than claiming that checkout-time constants are current.
+Identity-bearing execution goes through `run_verified_simulation`: seed, decision point and
+submission delay are derived from the verified manifest and strategy IR, so no mutable setup can
+silently disagree with the published run id. The raw simulator entry point remains available only
+as an explicitly non-identity-bearing kernel API for tests and exploratory callers.
+
+**M2–M8:** no later milestone gate has passed. Their remaining work is exactly the delivery and
+gate text below; they may now build on the completed M1 correctness foundation.
 
 ### M0 — Dataset foundation & QA — **gate passed 2026-07-27** (see §13.1)
 **Prereqs:** none (builds on the existing cache/merge stack).
@@ -1128,12 +1133,15 @@ detects seeded synthetic defects (gap, spike, duplicate timestamp, carry bar, OH
 violation, split-like level shift, unexpected weekend/session bar) at 100 % on the test
 corpus; building a dataset never blocks the render thread.
 
-### M1 — Simulation correctness (**the hard gate**)
+### M1 — Simulation correctness (**gate passed 2026-07-27; the hard gate**)
 **Prereqs:** M0.
 **Delivers:** strategy IR v1 + reference interpreter (§5.2); event-driven simulator (§5.3);
-execution realism §6.1–§6.5 and deterministic synchronization/no-look-ahead semantics
+the M1 order, fill, per-trade cost, latency and OHLC mechanics from §6.1–§6.5, plus deterministic synchronization/no-look-ahead semantics
 §6.10–§6.12; core closed-bar/next-open/pre-close decision timing and forming-bar visibility
 from §6.13; cost models for Kraken + Alpaca; run manifests.
+Time-accrued financing, borrow, crypto funding and currency conversion, plus strategy-authored
+protective-management templates, are explicitly assigned to M2's richer-execution/two-leg slice;
+they are not silently treated as zero-cost M1 behavior.
 **Gate — all of the following, or M1 is not done:**
 1. **Golden tests**: a corpus of hand-computed scenarios (single long trade with commission
    and spread; stop-and-target-in-the-same-bar under each OHLC policy; gap through a stop;

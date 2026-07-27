@@ -1,12 +1,13 @@
 use super::*;
 use crate::core::strategy_ir::{
-    CommissionModel, ExecutionSettings, ExecutionTiming, IndicatorRole, NewsFilter, NewsImpact,
-    OhlcAmbiguityPolicy, PositionSizing, RoleAssignment, SessionFilter, SessionWindow,
+    CommissionModel, DecisionTiming, ExecutionSettings, ExecutionTiming, IndicatorRole, NewsFilter,
+    NewsImpact, OhlcAmbiguityPolicy, PositionSizing, RoleAssignment, SessionFilter, SessionWindow,
     SlippageModel, SpreadModel, StopRule, StrategyExecutionConfig, StrategyMetadata,
     StrategyParameter, TieBreakPolicy, TradeLeg, TradeManagement, TrailingStop,
 };
 use crate::core::strategy_simulator::{
-    FillRecord, SimBar, SimulationError, SimulationReport, SymbolStream, run_simulation,
+    FillRecord, SimBar, SimulationError, SimulationReport, SimulationSetup, SymbolStream,
+    run_simulation,
 };
 
 const MINUTE_NS: i64 = 60_000_000_000;
@@ -52,6 +53,7 @@ fn settings() -> ExecutionSettings {
         spread: SpreadModel::None,
         ambiguity: OhlcAmbiguityPolicy::StopFirst,
         tie_break: TieBreakPolicy::TimestampPrioritySequence,
+        ..ExecutionSettings::conservative_defaults()
     }
 }
 
@@ -174,7 +176,13 @@ fn build_error(definition: &StrategyDefinition) -> InterpreterError {
 
 fn run(definition: &StrategyDefinition, streams: &[SymbolStream]) -> SimulationReport {
     let mut interpreter = strategy(definition);
-    run_simulation(&config(), streams, &mut interpreter).expect("simulation succeeds")
+    run_simulation(
+        &config(),
+        &SimulationSetup::default(),
+        streams,
+        &mut interpreter,
+    )
+    .expect("simulation succeeds")
 }
 
 fn rejection(error: &SimulationError) -> String {
@@ -968,7 +976,7 @@ fn equity_based_sizing_is_refused() {
 }
 
 #[test]
-fn non_closed_bar_timing_is_refused() {
+fn all_identity_bearing_timing_modes_compile_for_the_simulator() {
     for timing in [
         ExecutionTiming {
             decision: DecisionTiming::NextBarOpen,
@@ -992,13 +1000,9 @@ fn non_closed_bar_timing_is_refused() {
             idle(),
         );
         definition.timing = timing;
-        assert!(
-            matches!(
-                build_error(&definition),
-                InterpreterError::Unsupported { .. }
-            ),
-            "timing {timing:?} is not expressible"
-        );
+        let ir = StrategyIr::build(&definition).expect("timing-valid strategy seals");
+        CanonicalIrStrategy::new(&ir)
+            .unwrap_or_else(|error| panic!("timing {timing:?} must compile: {error}"));
     }
 }
 
@@ -1234,8 +1238,13 @@ fn an_indicator_slot_past_the_table_is_reported_not_panicked() {
         op: CompareOp::Greater,
         right: CompiledOperand::Constant(0.0),
     };
-    let error = run_simulation(&config(), &[stream("AAA", &[10.0, 11.0])], &mut interpreter)
-        .expect_err("a bad slot must fail the run");
+    let error = run_simulation(
+        &config(),
+        &SimulationSetup::default(),
+        &[stream("AAA", &[10.0, 11.0])],
+        &mut interpreter,
+    )
+    .expect_err("a bad slot must fail the run");
     assert!(
         rejection(&error).contains("indicator slot 7"),
         "unexpected rejection: {}",
@@ -1275,8 +1284,13 @@ fn a_lookback_past_the_retained_state_is_reported() {
         op: CompareOp::Greater,
         right: CompiledOperand::Constant(0.0),
     };
-    let error = run_simulation(&config(), &[stream("AAA", &ramp(4))], &mut interpreter)
-        .expect_err("an oversized lookback must fail the run");
+    let error = run_simulation(
+        &config(),
+        &SimulationSetup::default(),
+        &[stream("AAA", &ramp(4))],
+        &mut interpreter,
+    )
+    .expect_err("an oversized lookback must fail the run");
     assert!(
         rejection(&error).contains("lookback 64"),
         "unexpected rejection: {}",
@@ -1318,10 +1332,21 @@ fn replaying_without_a_reset_is_refused() {
     let definition = entry_only(Condition::Never);
     let mut interpreter = strategy(&definition);
     let streams = [stream("AAA", &ramp(4))];
-    run_simulation(&config(), &streams, &mut interpreter).expect("first run succeeds");
+    run_simulation(
+        &config(),
+        &SimulationSetup::default(),
+        &streams,
+        &mut interpreter,
+    )
+    .expect("first run succeeds");
 
-    let error = run_simulation(&config(), &streams, &mut interpreter)
-        .expect_err("stale state must not be reused");
+    let error = run_simulation(
+        &config(),
+        &SimulationSetup::default(),
+        &streams,
+        &mut interpreter,
+    )
+    .expect_err("stale state must not be reused");
     assert!(
         rejection(&error).contains("interpreter expected"),
         "unexpected rejection: {}",
@@ -1334,9 +1359,21 @@ fn reset_restores_a_reusable_interpreter() {
     let definition = definition(Vec::new(), rules(true, above(20.0), below(15.0)), idle());
     let streams = [stream("AAA", &[10.0, 30.0, 31.0, 10.0, 11.0])];
     let mut interpreter = strategy(&definition);
-    let first = run_simulation(&config(), &streams, &mut interpreter).expect("first run");
+    let first = run_simulation(
+        &config(),
+        &SimulationSetup::default(),
+        &streams,
+        &mut interpreter,
+    )
+    .expect("first run");
     interpreter.reset();
-    let second = run_simulation(&config(), &streams, &mut interpreter).expect("second run");
+    let second = run_simulation(
+        &config(),
+        &SimulationSetup::default(),
+        &streams,
+        &mut interpreter,
+    )
+    .expect("second run");
     assert_eq!(first, second, "a reset interpreter replays identically");
 }
 
