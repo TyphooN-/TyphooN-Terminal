@@ -10,8 +10,10 @@ use crate::broker::alpaca::Bar;
 use crate::core::strategy_dataset::{AdjustmentPolicy, DatasetError, DatasetManifest};
 use crate::core::strategy_intervention::InterventionLog;
 use crate::core::strategy_ir::{
-    StrategyExecutionConfig, StrategyIr, StrategyIrError, StrategyRunManifest,
+    RepaintAcknowledgement, StrategyExecutionConfig, StrategyIr, StrategyIrError,
+    StrategyRunManifest,
 };
+use crate::core::strategy_repaint::{RepaintQaArtifact, RepaintQaArtifactError};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +64,30 @@ pub enum RunAssemblyError {
     InterventionLogIdMismatch {
         expected: String,
         actual: String,
+    },
+    DuplicateRepaintQaArtifact {
+        indicator_id: String,
+    },
+    MissingRepaintQaArtifact {
+        indicator_id: String,
+    },
+    UnexpectedRepaintQaArtifact {
+        indicator_id: String,
+    },
+    RepaintQaArtifactIdMismatch {
+        indicator_id: String,
+        expected: String,
+        actual: String,
+    },
+    InvalidRepaintQaArtifact {
+        indicator_id: String,
+        source: RepaintQaArtifactError,
+    },
+    RepaintQaDatasetMismatch {
+        indicator_id: String,
+    },
+    RepaintQaAcknowledgementMismatch {
+        indicator_id: String,
     },
 }
 
@@ -121,6 +147,47 @@ impl std::fmt::Display for RunAssemblyError {
                 formatter,
                 "run manifest intervention log id mismatch: expected {expected}, got {actual}"
             ),
+            Self::DuplicateRepaintQaArtifact { indicator_id } => {
+                write!(
+                    formatter,
+                    "duplicate repaint QA artifact for indicator `{indicator_id}`"
+                )
+            }
+            Self::MissingRepaintQaArtifact { indicator_id } => {
+                write!(
+                    formatter,
+                    "missing repaint QA artifact for indicator `{indicator_id}`"
+                )
+            }
+            Self::UnexpectedRepaintQaArtifact { indicator_id } => {
+                write!(
+                    formatter,
+                    "unexpected repaint QA artifact for indicator `{indicator_id}`"
+                )
+            }
+            Self::RepaintQaArtifactIdMismatch {
+                indicator_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "repaint QA artifact for indicator `{indicator_id}` id mismatch: expected {expected}, got {actual}"
+            ),
+            Self::InvalidRepaintQaArtifact {
+                indicator_id,
+                source,
+            } => write!(
+                formatter,
+                "repaint QA artifact for indicator `{indicator_id}` is invalid: {source}"
+            ),
+            Self::RepaintQaDatasetMismatch { indicator_id } => write!(
+                formatter,
+                "repaint QA artifact for indicator `{indicator_id}` does not bind a run dataset"
+            ),
+            Self::RepaintQaAcknowledgementMismatch { indicator_id } => write!(
+                formatter,
+                "repaint QA acknowledgement for indicator `{indicator_id}` contradicts its report"
+            ),
         }
     }
 }
@@ -136,6 +203,7 @@ pub struct VerifiedRun<'a> {
     manifest: &'a StrategyRunManifest,
     datasets: Vec<RunDatasetInput<'a>>,
     intervention_log: Option<&'a InterventionLog>,
+    repaint_qa_artifacts: Vec<&'a RepaintQaArtifact>,
 }
 
 impl<'a> VerifiedRun<'a> {
@@ -162,6 +230,10 @@ impl<'a> VerifiedRun<'a> {
     pub fn intervention_log(&self) -> Option<&'a InterventionLog> {
         self.intervention_log
     }
+
+    pub fn repaint_qa_artifacts(&self) -> &[&'a RepaintQaArtifact] {
+        &self.repaint_qa_artifacts
+    }
 }
 
 impl RunDatasetInput<'_> {
@@ -176,7 +248,7 @@ pub fn assemble_verified_run<'a>(
     manifest: &'a StrategyRunManifest,
     datasets: &[RunDatasetInput<'a>],
 ) -> Result<VerifiedRun<'a>, RunAssemblyError> {
-    assemble_verified_run_with_intervention(strategy, config, manifest, datasets, None)
+    assemble_verified_run_with_artifacts(strategy, config, manifest, datasets, None, &[])
 }
 
 /// Resolves a run and, for a hybrid manifest, proves that the supplied sealed
@@ -187,6 +259,25 @@ pub fn assemble_verified_run_with_intervention<'a>(
     manifest: &'a StrategyRunManifest,
     datasets: &[RunDatasetInput<'a>],
     intervention_log: Option<&'a InterventionLog>,
+) -> Result<VerifiedRun<'a>, RunAssemblyError> {
+    assemble_verified_run_with_artifacts(
+        strategy,
+        config,
+        manifest,
+        datasets,
+        intervention_log,
+        &[],
+    )
+}
+
+/// Resolves every optional identity-bearing artifact required by a run.
+pub fn assemble_verified_run_with_artifacts<'a>(
+    strategy: &'a StrategyIr,
+    config: &'a StrategyExecutionConfig,
+    manifest: &'a StrategyRunManifest,
+    datasets: &[RunDatasetInput<'a>],
+    intervention_log: Option<&'a InterventionLog>,
+    repaint_qa_artifacts: &[&'a RepaintQaArtifact],
 ) -> Result<VerifiedRun<'a>, RunAssemblyError> {
     strategy
         .verify()
@@ -219,6 +310,60 @@ pub fn assemble_verified_run_with_intervention<'a>(
             });
         }
         _ => {}
+    }
+
+    let mut supplied_qa = BTreeMap::new();
+    for artifact in repaint_qa_artifacts {
+        let indicator_id = artifact.indicator_id();
+        if supplied_qa.insert(indicator_id, *artifact).is_some() {
+            return Err(RunAssemblyError::DuplicateRepaintQaArtifact {
+                indicator_id: indicator_id.to_string(),
+            });
+        }
+    }
+    let mut resolved_qa = Vec::with_capacity(binding.repaint_qa.len());
+    for expected in &binding.repaint_qa {
+        let Some(artifact) = supplied_qa.remove(expected.indicator_id.as_str()) else {
+            return Err(RunAssemblyError::MissingRepaintQaArtifact {
+                indicator_id: expected.indicator_id.clone(),
+            });
+        };
+        artifact
+            .verify()
+            .map_err(|source| RunAssemblyError::InvalidRepaintQaArtifact {
+                indicator_id: expected.indicator_id.clone(),
+                source,
+            })?;
+        if expected.artifact_id != artifact.artifact_id() {
+            return Err(RunAssemblyError::RepaintQaArtifactIdMismatch {
+                indicator_id: expected.indicator_id.clone(),
+                expected: expected.artifact_id.clone(),
+                actual: artifact.artifact_id().to_string(),
+            });
+        }
+        if !binding.datasets.iter().any(|dataset| {
+            dataset.input_id == artifact.dataset_input_id()
+                && dataset.dataset_id == artifact.dataset_id()
+        }) {
+            return Err(RunAssemblyError::RepaintQaDatasetMismatch {
+                indicator_id: expected.indicator_id.clone(),
+            });
+        }
+        let acknowledgement_matches = match &expected.acknowledgement {
+            RepaintAcknowledgement::Clean => artifact.report().is_clean(),
+            RepaintAcknowledgement::WarningAcknowledged { .. } => !artifact.report().is_clean(),
+        };
+        if !acknowledgement_matches {
+            return Err(RunAssemblyError::RepaintQaAcknowledgementMismatch {
+                indicator_id: expected.indicator_id.clone(),
+            });
+        }
+        resolved_qa.push(artifact);
+    }
+    if let Some((indicator_id, _)) = supplied_qa.into_iter().next() {
+        return Err(RunAssemblyError::UnexpectedRepaintQaArtifact {
+            indicator_id: indicator_id.to_string(),
+        });
     }
 
     let mut supplied = BTreeMap::new();
@@ -277,5 +422,6 @@ pub fn assemble_verified_run_with_intervention<'a>(
         manifest,
         datasets: resolved,
         intervention_log,
+        repaint_qa_artifacts: resolved_qa,
     })
 }

@@ -99,9 +99,10 @@ pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 /// the legacy-compatibility switch, and venue fee-schedule commissions.
 pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 2;
 
-/// Wire-format version of [`StrategyRunManifest`]. v3 binds the metrics
-/// schema into run identity; v2 manifests are intentionally not migrated.
-pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 3;
+/// Wire-format version of [`StrategyRunManifest`]. v4 binds acknowledged
+/// repaint QA artifacts into run identity; older manifests are intentionally
+/// not migrated.
+pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 4;
 
 /// Maximum encoded JSON size accepted by the sealed-artifact loading APIs.
 /// Structural limits are then enforced while sealing the decoded DTO.
@@ -115,7 +116,7 @@ const STRATEGY_ID_DOMAIN: &str = "typhoon.strategy_ir.strategy_id.v1";
 const CONFIG_ID_DOMAIN: &str = "typhoon.strategy_ir.config_id.v1";
 
 /// Domain-separation prefix for the run-id hash.
-const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v3";
+const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v4";
 
 /// Longest root-to-leaf path allowed in one [`Condition`] tree, counting the
 /// leaf. Bounds both validation recursion and the future interpreter's.
@@ -1589,6 +1590,7 @@ impl StrategyExecutionConfig {
 /// characters — and binds them by semantic input id; it does not resolve them, so a
 /// manifest can be verified without loading the artifacts it names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatasetBinding {
     /// Stable semantic input slot, such as `primary` or `confirmation_h4`.
     pub input_id: String,
@@ -1596,7 +1598,26 @@ pub struct DatasetBinding {
     pub dataset_id: String,
 }
 
+/// The operator disposition for one repaint QA artifact. The disposition and
+/// warning note are sealed into the run id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RepaintAcknowledgement {
+    Clean,
+    WarningAcknowledged { note: String },
+}
+
+/// One repaint QA artifact required to resolve a verified run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepaintQaBinding {
+    pub indicator_id: String,
+    pub artifact_id: String,
+    pub acknowledgement: RepaintAcknowledgement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunBinding {
     /// Named dataset inputs. Declaration order is canonicalized by `input_id`.
     /// The same immutable dataset may intentionally serve more than one role.
@@ -1610,6 +1631,8 @@ pub struct RunBinding {
     pub metrics_version: String,
     /// Present only for hybrid runs that recorded operator interventions.
     pub intervention_log_id: Option<String>,
+    /// Repaint evidence, canonicalized by indicator id.
+    pub repaint_qa: Vec<RepaintQaBinding>,
 }
 
 /// A validated run binding and its content-addressed id.
@@ -3257,6 +3280,9 @@ fn normalize_binding(binding: &RunBinding) -> Result<RunBinding, StrategyIrError
     normalized
         .datasets
         .sort_by(|left, right| left.input_id.cmp(&right.input_id));
+    normalized
+        .repaint_qa
+        .sort_by(|left, right| left.indicator_id.cmp(&right.indicator_id));
     Ok(normalized)
 }
 
@@ -3276,6 +3302,20 @@ fn compute_validated_run_id(binding: &RunBinding) -> String {
     digest.begin_option("intervention_log_id", binding.intervention_log_id.is_some());
     if let Some(intervention_log_id) = &binding.intervention_log_id {
         digest.tagged_text("intervention_log_id", intervention_log_id);
+    }
+    digest.begin_seq("repaint_qa", binding.repaint_qa.len());
+    for qa in &binding.repaint_qa {
+        digest.tagged_text("indicator_id", &qa.indicator_id);
+        digest.tagged_text("artifact_id", &qa.artifact_id);
+        match &qa.acknowledgement {
+            RepaintAcknowledgement::Clean => {
+                digest.tagged_text("acknowledgement", "clean");
+            }
+            RepaintAcknowledgement::WarningAcknowledged { note } => {
+                digest.tagged_text("acknowledgement", "warning_acknowledged");
+                digest.tagged_text("acknowledgement_note", note);
+            }
+        }
     }
     digest.finish_hex()
 }
@@ -3316,6 +3356,35 @@ fn validate_binding(binding: &RunBinding) -> Result<(), StrategyIrError> {
     check_digest_id("binding.config_id", &binding.config_id)?;
     if let Some(intervention_log_id) = &binding.intervention_log_id {
         check_digest_id("binding.intervention_log_id", intervention_log_id)?;
+    }
+    check_size(
+        "binding.repaint_qa",
+        binding.repaint_qa.len(),
+        MAX_INDICATORS,
+    )?;
+    let mut seen_indicators = BTreeSet::new();
+    for (index, qa) in binding.repaint_qa.iter().enumerate() {
+        check_digest_id(
+            &format!("binding.repaint_qa[{index}].indicator_id"),
+            &qa.indicator_id,
+        )?;
+        check_digest_id(
+            &format!("binding.repaint_qa[{index}].artifact_id"),
+            &qa.artifact_id,
+        )?;
+        if !seen_indicators.insert(qa.indicator_id.as_str()) {
+            return Err(StrategyIrError::DuplicateId {
+                kind: RefKind::Indicator,
+                id: qa.indicator_id.clone(),
+            });
+        }
+        if let RepaintAcknowledgement::WarningAcknowledged { note } = &qa.acknowledgement {
+            check_text(
+                &format!("binding.repaint_qa[{index}].acknowledgement.note"),
+                note,
+                MAX_TEXT_LEN,
+            )?;
+        }
     }
     check_text(
         "binding.engine_version",

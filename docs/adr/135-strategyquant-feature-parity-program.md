@@ -1033,7 +1033,7 @@ Milestones are **gated by acceptance criteria and prerequisites, not by dates**.
 is not "done" until its gate passes; later milestones do not begin early on the assumption
 that an earlier gate will pass.
 
-### 13.1 Implementation ledger (2026-07-27)
+### 13.1 Implementation ledger (2026-07-28)
 
 This ledger distinguishes landed foundations from milestone completion. The acceptance gates
 below remain authoritative; a checked foundation does **not** imply that its milestone is done.
@@ -1085,9 +1085,12 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   next-open market fills, explicit spread/slippage/commission accounting, no-look-ahead market
   views, deterministic event/ledger JSON, and a stable golden-ledger digest.
 - `strategy_run.rs`: named dataset-input bindings and cross-artifact assembly that verifies the
-  strategy, execution config, run manifest, dataset manifests, and actual bar content before a
-  run can be treated as resolved.
-- `strategy_metrics.rs` (M2, partial): a versioned 43-metric registry where every entry carries
+  strategy, execution config, run manifest, dataset manifests, actual bar content, optional
+  intervention log, and every manifest-bound repaint QA artifact before a run can be treated as
+  resolved. Repaint artifacts are resolved in canonical indicator-id order and missing,
+  duplicate, unexpected, tampered, foreign-dataset, or acknowledgement-inconsistent evidence is
+  rejected fail-closed.
+- `strategy_metrics.rs` (M2, partial): a versioned 46-metric registry where every entry carries
   an id, written formula, units, periodicity, annualization rule and degenerate-case contract
   (§9.1). Values are a typed `Defined`/`Undefined { reason }` pair — there is no `999.0`-style
   sentinel and no NaN or infinity, because a non-finite result is converted to
@@ -1097,7 +1100,9 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   VaR/CVaR, tail ratio), stability concentration, real calendar resampling to daily/weekly ISO/
   monthly/annual series, and a ledger cost/rejection diagnostic block. Uncertainty is typed
   rather than omitted: the mean-trade standard error is reported and Monte-Carlo confidence
-  intervals are an explicit `UnavailableUntilM4` value instead of a silent absence.
+  intervals are an explicit `UnavailableUntilM4` value instead of a silent absence. Compact
+  hand-derived ledgers now assert an exact numeric value or exact typed undefined reason for every
+  registry id; a set-equality test prevents a registry addition from escaping that golden corpus.
 - `strategy_protective.rs` + `strategy_interpreter.rs` (M2, partial): canonical IR
   `TradeManagement` now lowers into the NNFX two-leg order lifecycle (§10.3), resolving fixed,
   percent-of-entry, and ATR-multiple rules from deterministic interpreter state. The lifecycle
@@ -1133,14 +1138,19 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   undeclared revision window is zero, and a window narrower than the indicator's true
   look-ahead still fails. A value that disappears counts as a repaint, findings are capped
   with the omission reported, the scan is bounded before it runs, and a misshapen indicator is
-  rejected rather than compared. Not yet wired into the run manifest as a stored, acknowledgeable
-  QA artifact, which §11.5 also asks for.
+  rejected rather than compared. The exact report is now sealed into a domain-separated,
+  content-addressed, byte-bounded persisted QA artifact with strict nested decoding, structural
+  bounds, deterministic finding order, and typed undefined values. Run-manifest v4 binds each
+  artifact id plus a `Clean` or noted `WarningAcknowledged` disposition into `run_id`; verified
+  assembly proves that disposition agrees with the resolved report.
 - `strategy_report.rs` (M2, partial): the sealed report artifact. `report_id` is domain-separated
   over the schema version, verified run id, metrics version, and separate digests of the
   simulator report and its event stream, with the analysis sealed in its exact JSON-wire
   interpretation so a freshly built artifact still verifies after round-trip. Loading is byte-
   bounded before decode, structurally validated against the registry, and fails closed on a
-  tampered body, an unsealed id, a foreign run, or a replay whose ledger digest differs.
+  tampered body, an unsealed id, a foreign run, or a replay whose ledger digest differs. Because
+  it inherits the verified manifest's `run_id`, repaint artifact identity and acknowledgement
+  changes propagate into report identity.
 
 **M0 gate — passed (2026-07-27):**
 
@@ -1189,14 +1199,14 @@ have test evidence:
 
 | M2 gate clause | Status | Evidence |
 | --- | --- | --- |
-| Every metric has a written definition | **Met** | `strategy_metrics.rs::REGISTRY` gives all 43 metrics an id/formula/units/periodicity/annualization/degenerate-case contract; `registry_defines_every_metric_contract_without_duplicate_ids` rejects blank fields and duplicate ids, and `registry_definitions_are_pinned_to_the_metrics_schema_version` digests the whole registry so a definition edit cannot ship without a `METRICS_SCHEMA_VERSION` bump |
-| …and a hand-verified golden test | **Partial** | `distribution_and_exposure_metrics_match_a_hand_computed_symmetric_ledger`, `tail_and_drawdown_metrics_match_hand_computed_exact_binary_returns`, `a_straight_line_equity_curve_fits_perfectly`, `hand_ledger_reconciles_profit_drawdown_underwater_and_calendar_closes` and `diagnostics_report_the_ledger_cost_breakdown_verbatim` pin hand-derived values on ledgers chosen so the arithmetic is binary-exact. Not every one of the 43 ids is individually hand-pinned yet |
+| Every metric has a written definition | **Met** | `strategy_metrics.rs::REGISTRY` gives all 46 metrics an id/formula/units/periodicity/annualization/degenerate-case contract; `registry_defines_every_metric_contract_without_duplicate_ids` rejects blank fields and duplicate ids, and `registry_definitions_are_pinned_to_the_metrics_schema_version` digests the whole registry so a definition edit cannot ship without a `METRICS_SCHEMA_VERSION` bump |
+| …and a hand-verified golden test | **Met** | The compact corpora in `strategy_metrics.rs::tests` assert a hand-derived numeric value or exact typed `UndefinedReason` for every registry id, including trade/distribution/exposure, tails/drawdown, straight-line regression, exact one-year CAGR, and MAE/MFE ledgers. `hand_verified_metric_corpus_covers_every_registry_id_exactly_once` compares the 46 covered ids with the live registry, so an unpinned registry addition fails the gate |
 | No metric returns a magic sentinel | **Met** | `MetricValue` is a typed `Defined`/`Undefined { reason }` pair and `MetricValue::defined` converts any non-finite result to `Undefined { ArithmeticOverflow }`; `a_flat_curve_reports_typed_undefined_rather_than_a_fabricated_ratio` asserts the specific reason for nine degenerate ids and that no `-0.0` reaches the wire; `every_registered_metric_is_computed_rather_than_silently_defaulted` proves the id set is exactly the registry, so a typo cannot masquerade as "not enough data" |
 | Calendar equity reconciles exactly with the trade list | **Met** | `calendar_equity_reconciles_exactly_with_the_closed_trade_list` asserts summed daily changes equal summed closed-trade PnL equal `net_profit`; `every_calendar_granularity_reconciles_with_the_overall_equity_change` extends the identity to the weekly/monthly/annual series |
 | MAE/MFE verified against hand-computed excursions | **Met** | `long_and_short_mae_mfe_exclude_pre_entry_and_post_exit_bars` pins both directions and the capture ratio, and proves bars outside the holding window are excluded |
 | Reports round-trip through JSON without loss | **Met** | `report_artifact_round_trips_detects_tampering_and_rejects_replay_mismatch` round-trips, re-verifies, and rejects both a mutated metric value and a divergent replay ledger; `report_loader_is_byte_bounded_before_decode` and `an_unsealed_report_id_never_passes_verification` pin the fail-closed loader |
 | Replaying a recorded hybrid run reproduces its ledger bit-for-bit | **Met** | `strategy_intervention/tests.rs::replaying_a_recorded_hybrid_run_reproduces_its_ledger_bit_for_bit` records a session where an automated strategy and an operator both act under costs, intrabar resolution and seeded latency, then replays the sealed log and compares the serialized ledgers byte for byte. `a_hybrid_run_replays_identically_from_a_round_tripped_log` proves the same through a persisted log, and `the_operator_actions_are_what_make_the_two_ledgers_match` is the control: replaying with an empty log must *not* reproduce the session, so the equality above is not vacuous |
-| A synthetic repainting indicator is identified at the exact mutated bar/output | **Met** | `strategy_repaint/tests.rs::a_synthetic_repaint_is_identified_at_the_exact_bar_and_output` asserts the exact output name and index, the mutated bar, the prefix length that mutated it, how far back it was, and both the previous and new value. `a_centred_average_repaints_every_bar_inside_its_look_ahead` catches the classic look-ahead shape and pins the precise set of bars from the window arithmetic; `a_trailing_indicator_is_clean` is the negative control; `a_value_that_disappears_counts_as_a_repaint` covers a level being withdrawn rather than moved; `a_declared_revision_window_makes_provisional_output_honest` shows a declared window clears an indicator and an understated one does not |
+| A synthetic repainting indicator is identified at the exact mutated bar/output | **Met** | `strategy_repaint/tests.rs::a_synthetic_repaint_is_identified_at_the_exact_bar_and_output` asserts the exact output name and index, mutated bar, responsible prefix, distance, and before/after values; the centred/trailing/disappearing/revision-window controls cover the diagnostic semantics. `stored_qa_artifact_round_trips_with_identity_and_undefined_values` and `stored_qa_artifact_rejects_tampering_unknown_fields_and_oversize_before_decode` seal the evidence and pin bounded fail-closed loading. `verified_run_assembly_binds_acknowledged_repaint_qa_fail_closed` proves exact artifact resolution, dataset binding, clean/warning consistency, and rejection of missing, duplicate, mismatched, or unexpected evidence; `report_identity_inherits_the_manifest_repaint_artifact_and_acknowledgement_binding` proves propagation into report identity |
 | Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Implemented; pending final verification** | `strategy_protective/tests.rs::a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trails` derives every fill price, fee, realized PnL, cash balance and final equity on paper and asserts them exactly, including leg 0 banking its own target while leg 1 runs, the break-even move at +4.00 and the trailing step at +7.00. `both_legs_stop_out_independently_at_the_same_initial_level`, `a_short_two_leg_trade_mirrors_the_long_lifecycle`, `a_trailing_stop_never_loosens_on_a_pullback`, `a_time_stop_closes_the_remainder_at_market`, `a_legs_stop_and_target_retire_each_other_through_their_oco_group` and `a_strategy_exit_leaves_the_manager_to_cancel_the_resting_bracket` pin the state machine. `strategy_interpreter/tests.rs::canonical_trade_management_compiles_fixed_percent_and_atr_distances` pins resolved fixed, percent, and ATR distances and leg quantities; `canonical_two_leg_management_executes_a_real_partial_target`, `canonical_strategy_exit_retires_its_protective_orders_without_a_later_decision`, and `canonical_time_stop_wins_over_an_exit_signal_on_the_same_decision` cover the canonical-IR execution boundary. Final verification is still required before this clause is called met |
 
 Remaining M2 delivery beyond the gate: execution realism §6.6–§6.9 (partial fills/liquidity caps,

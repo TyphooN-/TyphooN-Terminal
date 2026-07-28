@@ -5,7 +5,10 @@
 // behaviour is known by construction and assert the exact bar, output, and both
 // values — not merely that something was flagged.
 
-use super::{ObservableIndicator, RepaintError, RepaintPolicy, diagnose_repainting};
+use super::{
+    MAX_REPAINT_ARTIFACT_JSON_BYTES, ObservableIndicator, RepaintError, RepaintPolicy,
+    RepaintQaArtifact, RepaintQaArtifactError, RepaintValue, diagnose_repainting,
+};
 use crate::core::strategy_simulator::SimBar;
 
 const MINUTE_NS: i64 = 60_000_000_000;
@@ -134,8 +137,8 @@ fn a_synthetic_repaint_is_identified_at_the_exact_bar_and_output() {
         "the fifth bar is the event that rewrote it"
     );
     assert_eq!(finding.bars_back, 2, "bar 2 was two bars back by then");
-    assert_eq!(finding.previous_value, 12.0, "it had published the close");
-    assert_eq!(finding.new_value, 999.0, "and then published this instead");
+    assert_eq!(finding.previous_value, RepaintValue::defined(12.0));
+    assert_eq!(finding.new_value, RepaintValue::defined(999.0));
     assert!(!report.is_clean());
     assert_eq!(report.first_repainted_bar(), Some(2));
 }
@@ -233,11 +236,8 @@ fn a_value_that_disappears_counts_as_a_repaint() {
     assert_eq!(report.findings.len(), 1);
     let finding = &report.findings[0];
     assert_eq!(finding.bar_index, 1);
-    assert_eq!(finding.previous_value, 2.0);
-    assert!(
-        finding.new_value.is_nan(),
-        "a level that vanishes repaints as surely as one that moves"
-    );
+    assert_eq!(finding.previous_value, RepaintValue::defined(2.0));
+    assert_eq!(finding.new_value, RepaintValue::Undefined);
 }
 
 #[test]
@@ -415,4 +415,128 @@ fn the_scan_is_bounded_before_it_runs() {
         ),
         Err(RepaintError::InvalidPolicy)
     );
+}
+
+struct VanishingArtifactFixture;
+
+impl ObservableIndicator for VanishingArtifactFixture {
+    fn output_names(&self) -> Vec<String> {
+        vec!["level".to_string()]
+    }
+
+    fn evaluate(&mut self, bars: &[SimBar]) -> Vec<Vec<f64>> {
+        let mut values: Vec<f64> = bars.iter().map(|bar| bar.close).collect();
+        if bars.len() >= 4 {
+            values[1] = f64::NAN;
+        }
+        vec![values]
+    }
+}
+
+#[test]
+fn stored_qa_artifact_round_trips_with_identity_and_undefined_values() {
+    let mut indicator = SingleMutation;
+    let report = diagnose_repainting(
+        &mut indicator,
+        &bars(&[10.0, 11.0, 12.0, 13.0, 14.0]),
+        RepaintPolicy::default(),
+    )
+    .expect("diagnoses");
+    let artifact = RepaintQaArtifact::build(&"a".repeat(64), "primary", &"b".repeat(64), report)
+        .expect("artifact builds");
+
+    assert_eq!(artifact.indicator_id(), "a".repeat(64));
+    assert_eq!(artifact.dataset_input_id(), "primary");
+    assert_eq!(artifact.dataset_id(), "b".repeat(64));
+    let bytes = artifact.to_json_vec().expect("serializes");
+    let restored = RepaintQaArtifact::from_json_slice(&bytes).expect("round trips");
+    assert_eq!(restored, artifact);
+    assert_eq!(restored.artifact_id(), artifact.artifact_id());
+
+    let mut vanishing = VanishingArtifactFixture;
+    let disappearing = diagnose_repainting(
+        &mut vanishing,
+        &bars(&[1.0, 2.0, 3.0, 4.0]),
+        RepaintPolicy::default(),
+    )
+    .expect("diagnoses disappearance");
+    let disappearing =
+        RepaintQaArtifact::build(&"c".repeat(64), "primary", &"b".repeat(64), disappearing)
+            .expect("undefined evidence is persistable");
+    let restored = RepaintQaArtifact::from_json_slice(
+        &disappearing
+            .to_json_vec()
+            .expect("serializes undefined evidence"),
+    )
+    .expect("round trips undefined evidence");
+    assert_eq!(
+        restored.report().findings[0].new_value,
+        RepaintValue::Undefined
+    );
+}
+
+#[test]
+fn stored_qa_artifact_rejects_tampering_unknown_fields_and_oversize_before_decode() {
+    let mut indicator = SingleMutation;
+    let report = diagnose_repainting(
+        &mut indicator,
+        &bars(&[10.0, 11.0, 12.0, 13.0, 14.0]),
+        RepaintPolicy::default(),
+    )
+    .expect("diagnoses");
+    let artifact = RepaintQaArtifact::build(&"a".repeat(64), "primary", &"b".repeat(64), report)
+        .expect("artifact builds");
+    let mut wire: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().expect("serializes")).expect("json");
+
+    wire["report"]["findings"][0]["new_value"]["value"] = serde_json::json!(998.0);
+    assert!(matches!(
+        RepaintQaArtifact::from_json_slice(&serde_json::to_vec(&wire).expect("json")),
+        Err(RepaintQaArtifactError::IdentityMismatch { .. })
+    ));
+
+    let mut structurally_oversized: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().expect("serializes")).expect("json");
+    structurally_oversized["report"]["bars_scanned"] =
+        serde_json::json!(super::MAX_REPAINT_BARS + 1);
+    assert!(matches!(
+        RepaintQaArtifact::from_json_slice(
+            &serde_json::to_vec(&structurally_oversized).expect("json")
+        ),
+        Err(RepaintQaArtifactError::InvalidStructure { field: "report" })
+    ));
+
+    let mut unknown = wire;
+    unknown["surprise"] = serde_json::json!(true);
+    assert!(matches!(
+        RepaintQaArtifact::from_json_slice(&serde_json::to_vec(&unknown).expect("json")),
+        Err(RepaintQaArtifactError::InvalidJson { .. })
+    ));
+    let mut nested_unknown: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().expect("serializes")).expect("json");
+    nested_unknown["report"]["policy"]["surprise"] = serde_json::json!(true);
+    assert!(matches!(
+        RepaintQaArtifact::from_json_slice(&serde_json::to_vec(&nested_unknown).expect("json")),
+        Err(RepaintQaArtifactError::InvalidJson { .. })
+    ));
+
+    let mut duplicate_finding: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().expect("serializes")).expect("json");
+    let duplicate = duplicate_finding["report"]["findings"][0].clone();
+    duplicate_finding["report"]["findings"]
+        .as_array_mut()
+        .expect("findings")
+        .push(duplicate);
+    assert!(matches!(
+        RepaintQaArtifact::from_json_slice(&serde_json::to_vec(&duplicate_finding).expect("json")),
+        Err(RepaintQaArtifactError::InvalidStructure {
+            field: "report.findings.order"
+        })
+    ));
+
+    let oversized = vec![b' '; MAX_REPAINT_ARTIFACT_JSON_BYTES + 1];
+    assert!(matches!(
+        RepaintQaArtifact::from_json_slice(&oversized),
+        Err(RepaintQaArtifactError::TooLarge { .. })
+    ));
 }

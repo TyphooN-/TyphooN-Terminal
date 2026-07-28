@@ -1867,6 +1867,21 @@ pub(crate) mod tests {
             long.r_multiple,
             MetricValue::undefined(UndefinedReason::MissingInitialRisk)
         );
+        // Compact completion table for registry ids not pinned individually by
+        // the other hand-derived corpora. Durations are [10,29] and [30,39]
+        // over an observed [0,39] interval; excursions are [20,4] in both
+        // directions and terminal equity is 1,007 from 1,000.
+        for (id, expected) in [
+            ("total_return", 7.0 / 1_000.0),
+            ("time_in_market", 28.0 / 39.0),
+            ("average_holding_period", 14.0),
+            ("closed_trade_count", 2.0),
+            ("max_trade_adverse_excursion", 20.0),
+            ("average_mae", 12.0),
+            ("average_mfe", 12.0),
+        ] {
+            assert_eq!(defined(&analysis, id), expected, "hand corpus: {id}");
+        }
     }
 
     #[test]
@@ -1965,6 +1980,8 @@ pub(crate) mod tests {
         assert_eq!(defined(&analysis, "net_profit"), 0.0);
         assert_eq!(defined(&analysis, "gross_profit"), 3.0);
         assert_eq!(defined(&analysis, "gross_loss"), -3.0);
+        assert_eq!(defined(&analysis, "average_trade"), 0.0);
+        assert_eq!(defined(&analysis, "expectancy"), 0.0);
         assert_eq!(defined(&analysis, "profit_factor"), 1.0);
         assert_eq!(defined(&analysis, "payoff_ratio"), 1.0);
         // Each entry notional is 1 unit at 100, so per-trade returns are
@@ -1989,6 +2006,12 @@ pub(crate) mod tests {
         assert_eq!(defined(&analysis, "turnover"), 0.8);
         // 4 trades over exactly 10 days: 4 * 365.2425 / 10.
         assert!((defined(&analysis, "trades_per_year") - 146.097).abs() < 1e-9);
+        // Sample variance of [-2,-1,1,2] is 10/3; SEM divides its square root
+        // by sqrt(4)=2. Monte-Carlo intervals remain unavailable until M4.
+        assert_eq!(
+            defined(&analysis, "mean_trade_standard_error"),
+            (10.0_f64 / 3.0).sqrt() / 2.0
+        );
     }
 
     #[test]
@@ -2079,6 +2102,19 @@ pub(crate) mod tests {
             (3 * DAY_NS) as f64
         );
         assert_eq!(defined(&analysis, "return_on_max_drawdown"), 0.0);
+        assert_eq!(
+            defined(&analysis, "max_drawdown_duration"),
+            3.0 * DAY_NS as f64
+        );
+    }
+
+    #[test]
+    fn one_year_doubling_pins_cagr_without_calendar_approximation() {
+        let ledger = report(vec![], &[(0, 1_000.0), (super::YEAR_NS, 2_000.0)]);
+        let analysis = analyze_simulation(&ledger, &[], 1_000.0).expect("analysis");
+        for (id, expected) in [("total_return", 1.0), ("cagr", 1.0)] {
+            assert_eq!(defined(&analysis, id), expected, "hand corpus: {id}");
+        }
     }
 
     #[test]
@@ -2196,6 +2232,68 @@ pub(crate) mod tests {
         );
         assert_eq!(diagnostics.fill_count, 2);
         assert_eq!(diagnostics.open_position_count, 0);
+    }
+
+    #[test]
+    fn hand_verified_metric_corpus_covers_every_registry_id_exactly_once() {
+        // Each id below has an exact numeric assertion or an explicitly typed
+        // UndefinedReason assertion in the compact hand-derived tests above.
+        let covered: BTreeSet<&str> = [
+            "net_profit",
+            "gross_profit",
+            "gross_loss",
+            "total_return",
+            "average_trade",
+            "expectancy",
+            "profit_factor",
+            "payoff_ratio",
+            "max_drawdown_absolute",
+            "max_drawdown_percent",
+            "max_drawdown_duration",
+            "ulcer_index",
+            "longest_stagnation",
+            "sharpe_ratio",
+            "mean_trade_standard_error",
+            "time_in_market",
+            "average_holding_period",
+            "closed_trade_count",
+            "cagr",
+            "return_on_max_drawdown",
+            "average_trade_percent",
+            "average_drawdown",
+            "max_time_to_recovery",
+            "max_trade_adverse_excursion",
+            "sortino_ratio",
+            "calmar_ratio",
+            "sterling_ratio",
+            "equity_curve_r_squared",
+            "k_ratio",
+            "average_mae",
+            "average_mfe",
+            "average_capture_efficiency",
+            "long_trade_count",
+            "short_trade_count",
+            "max_concurrent_positions",
+            "trades_per_year",
+            "turnover",
+            "trade_pnl_skewness",
+            "trade_pnl_excess_kurtosis",
+            "max_consecutive_wins",
+            "max_consecutive_losses",
+            "daily_value_at_risk_95",
+            "daily_conditional_value_at_risk_95",
+            "worst_daily_return",
+            "tail_ratio",
+            "top_decile_pnl_share",
+        ]
+        .into_iter()
+        .collect();
+        let registered: BTreeSet<&str> = metric_registry()
+            .iter()
+            .map(|definition| definition.id)
+            .collect();
+        assert_eq!(covered.len(), 46);
+        assert_eq!(covered, registered);
     }
 
     #[test]

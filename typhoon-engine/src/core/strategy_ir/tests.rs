@@ -269,6 +269,7 @@ fn binding() -> RunBinding {
         engine_version: "typhoon-engine/0.1.0".to_string(),
         metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: Some(hex_id('e')),
+        repaint_qa: vec![],
     }
 }
 
@@ -367,7 +368,7 @@ fn current_schema_identity_vectors_are_stable() {
     );
     assert_eq!(
         run_id_of(&binding()),
-        "949a83a27b3986027594ce1b930f8df6b8b72e12297de434380a0797955b7772"
+        "277cd003c1619a2373f9de3c772ff0205e3f640ebf732bd8c5b70548bc71f1b0"
     );
 }
 
@@ -848,6 +849,36 @@ fn dataset_binding_declaration_order_does_not_change_the_run_id() {
     let mut swapped = binding();
     swapped.datasets.swap(0, 1);
     assert_eq!(run_id_of(&swapped), run_id_of(&binding()));
+}
+
+#[test]
+fn repaint_qa_declaration_order_does_not_change_the_run_id() {
+    let mut canonical = binding();
+    canonical.repaint_qa = vec![
+        RepaintQaBinding {
+            indicator_id: hex_id('1'),
+            artifact_id: hex_id('a'),
+            acknowledgement: RepaintAcknowledgement::Clean,
+        },
+        RepaintQaBinding {
+            indicator_id: hex_id('2'),
+            artifact_id: hex_id('b'),
+            acknowledgement: RepaintAcknowledgement::WarningAcknowledged {
+                note: "reviewed exact evidence".to_string(),
+            },
+        },
+    ];
+    let mut swapped = canonical.clone();
+    swapped.repaint_qa.swap(0, 1);
+
+    assert_eq!(run_id_of(&swapped), run_id_of(&canonical));
+    assert_eq!(
+        StrategyRunManifest::build(&swapped)
+            .expect("manifest")
+            .binding()
+            .repaint_qa,
+        canonical.repaint_qa
+    );
 }
 
 // ── Identity: framing collision resistance ─────────────────────────
@@ -2085,6 +2116,22 @@ fn too_many_datasets_are_rejected() {
 }
 
 #[test]
+fn too_many_repaint_qa_bindings_are_rejected() {
+    let mut invalid = binding();
+    invalid.repaint_qa = (0..=MAX_INDICATORS)
+        .map(|index| RepaintQaBinding {
+            indicator_id: format!("{index:064x}"),
+            artifact_id: hex_id('a'),
+            acknowledgement: RepaintAcknowledgement::Clean,
+        })
+        .collect();
+    assert!(matches!(
+        StrategyRunManifest::build(&invalid),
+        Err(StrategyIrError::TooMany { .. })
+    ));
+}
+
+#[test]
 fn blank_engine_version_is_rejected() {
     let mut invalid = binding();
     invalid.engine_version = String::new();
@@ -2105,18 +2152,30 @@ fn unsupported_metrics_version_is_rejected_fail_closed() {
 }
 
 #[test]
-fn pre_metrics_manifest_json_is_rejected_instead_of_silently_migrated() {
+fn pre_repaint_binding_manifest_json_is_rejected_instead_of_silently_migrated() {
     let built = StrategyRunManifest::build(&binding()).expect("builds");
     let mut json = serde_json::to_value(&built).expect("serializes");
-    json["schema_version"] = serde_json::json!(2);
+    json["schema_version"] = serde_json::json!(3);
     json["binding"]
         .as_object_mut()
         .expect("binding object")
-        .remove("metrics_version");
+        .remove("repaint_qa");
 
     let bytes = serde_json::to_vec(&json).expect("serializes legacy shape");
     assert!(matches!(
         StrategyRunManifest::from_json_slice(&bytes),
+        Err(ArtifactLoadError::InvalidJson { .. })
+    ));
+}
+
+#[test]
+fn run_manifest_rejects_unknown_nested_binding_fields() {
+    let built = StrategyRunManifest::build(&binding()).expect("builds");
+    let mut json = serde_json::to_value(&built).expect("serializes");
+    json["binding"]["surprise"] = serde_json::json!(true);
+
+    assert!(matches!(
+        StrategyRunManifest::from_json_slice(&serde_json::to_vec(&json).expect("json")),
         Err(ArtifactLoadError::InvalidJson { .. })
     ));
 }
@@ -2136,6 +2195,7 @@ fn a_manifest_binds_a_real_strategy_and_config() {
         engine_version: "typhoon-engine/0.1.0".to_string(),
         metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: None,
+        repaint_qa: vec![],
     })
     .expect("binding built from real ids is valid");
 
@@ -2228,6 +2288,7 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
         engine_version: "0.1.0-test".to_string(),
         metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: None,
+        repaint_qa: vec![],
     })
     .expect("run manifest builds");
 
@@ -2285,6 +2346,7 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
             engine_version: "0.1.0-test".to_string(),
             metrics_version: METRICS_SCHEMA_VERSION.to_string(),
             intervention_log_id: None,
+            repaint_qa: vec![],
         })
         .expect("timed manifest builds");
         let timed_run = assemble_verified_run(
@@ -2384,6 +2446,164 @@ fn verified_run_assembly_binds_and_verifies_the_manifest_intervention_log() {
 }
 
 #[test]
+fn verified_run_assembly_binds_acknowledged_repaint_qa_fail_closed() {
+    use crate::core::strategy_dataset::AdjustmentPolicy;
+    use crate::core::strategy_repaint::{
+        REPAINT_REPORT_SCHEMA_VERSION, RepaintFinding, RepaintPolicy, RepaintQaArtifact,
+        RepaintReport, RepaintValue,
+    };
+    use crate::core::strategy_run::{
+        RunAssemblyError, RunDatasetInput, assemble_verified_run_with_artifacts,
+    };
+
+    let strategy = ir();
+    let config = StrategyExecutionConfig::build(&settings()).expect("config builds");
+    let (bars, dataset) = run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::Raw);
+    let report = RepaintReport {
+        schema_version: REPAINT_REPORT_SCHEMA_VERSION,
+        policy: RepaintPolicy::default(),
+        bars_scanned: 3,
+        outputs_scanned: 1,
+        findings: vec![RepaintFinding {
+            output_index: 0,
+            output_name: "signal".to_string(),
+            bar_index: 0,
+            observed_after_bars: 3,
+            bars_back: 2,
+            previous_value: RepaintValue::defined(1.0),
+            new_value: RepaintValue::defined(2.0),
+        }],
+        findings_omitted: 0,
+    };
+    let qa = RepaintQaArtifact::build(&hex_id('f'), "primary", &dataset.dataset_id, report)
+        .expect("QA artifact builds");
+    let mut bound = binding();
+    bound.datasets = vec![DatasetBinding {
+        input_id: "primary".to_string(),
+        dataset_id: dataset.dataset_id.clone(),
+    }];
+    bound.strategy_id = strategy.strategy_id().to_string();
+    bound.config_id = config.config_id().to_string();
+    bound.intervention_log_id = None;
+    bound.repaint_qa = vec![RepaintQaBinding {
+        indicator_id: qa.indicator_id().to_string(),
+        artifact_id: qa.artifact_id().to_string(),
+        acknowledgement: RepaintAcknowledgement::WarningAcknowledged {
+            note: "reviewed exact changed bar and accepted for this run".to_string(),
+        },
+    }];
+    let manifest = StrategyRunManifest::build(&bound).expect("manifest builds");
+    let mut differently_acknowledged = bound.clone();
+    differently_acknowledged.repaint_qa[0].acknowledgement =
+        RepaintAcknowledgement::WarningAcknowledged {
+            note: "a different explicit review".to_string(),
+        };
+    assert_ne!(
+        StrategyRunManifest::build(&differently_acknowledged)
+            .expect("alternate acknowledgement builds")
+            .run_id(),
+        manifest.run_id(),
+        "acknowledgement identity is part of run identity"
+    );
+    let input = RunDatasetInput {
+        input_id: "primary",
+        manifest: &dataset,
+        bars: &bars,
+    };
+
+    let verified =
+        assemble_verified_run_with_artifacts(&strategy, &config, &manifest, &[input], None, &[&qa])
+            .expect("acknowledged exact artifact resolves");
+    assert_eq!(verified.repaint_qa_artifacts(), &[&qa]);
+
+    let mut false_clean = bound.clone();
+    false_clean.repaint_qa[0].acknowledgement = RepaintAcknowledgement::Clean;
+    let false_clean = StrategyRunManifest::build(&false_clean).expect("shape-valid manifest");
+    assert!(matches!(
+        assemble_verified_run_with_artifacts(
+            &strategy,
+            &config,
+            &false_clean,
+            &[input],
+            None,
+            &[&qa],
+        ),
+        Err(RunAssemblyError::RepaintQaAcknowledgementMismatch { .. })
+    ));
+
+    assert!(matches!(
+        assemble_verified_run_with_artifacts(&strategy, &config, &manifest, &[input], None, &[],),
+        Err(RunAssemblyError::MissingRepaintQaArtifact { .. })
+    ));
+    assert!(matches!(
+        assemble_verified_run_with_artifacts(
+            &strategy,
+            &config,
+            &manifest,
+            &[input],
+            None,
+            &[&qa, &qa],
+        ),
+        Err(RunAssemblyError::DuplicateRepaintQaArtifact { .. })
+    ));
+    let foreign = RepaintQaArtifact::build(
+        &hex_id('f'),
+        "primary",
+        &dataset.dataset_id,
+        RepaintReport {
+            findings: vec![],
+            ..qa.report().clone()
+        },
+    )
+    .expect("foreign QA builds");
+    assert!(matches!(
+        assemble_verified_run_with_artifacts(
+            &strategy,
+            &config,
+            &manifest,
+            &[input],
+            None,
+            &[&foreign],
+        ),
+        Err(RunAssemblyError::RepaintQaArtifactIdMismatch { .. })
+    ));
+
+    let wrong_dataset_qa =
+        RepaintQaArtifact::build(&hex_id('f'), "primary", &hex_id('9'), qa.report().clone())
+            .expect("foreign-dataset QA builds");
+    let mut wrong_dataset_bound = bound.clone();
+    wrong_dataset_bound.repaint_qa[0].artifact_id = wrong_dataset_qa.artifact_id().to_string();
+    let wrong_dataset_manifest =
+        StrategyRunManifest::build(&wrong_dataset_bound).expect("shape-valid manifest");
+    assert!(matches!(
+        assemble_verified_run_with_artifacts(
+            &strategy,
+            &config,
+            &wrong_dataset_manifest,
+            &[input],
+            None,
+            &[&wrong_dataset_qa],
+        ),
+        Err(RunAssemblyError::RepaintQaDatasetMismatch { .. })
+    ));
+
+    let mut automated = bound;
+    automated.repaint_qa.clear();
+    let automated = StrategyRunManifest::build(&automated).expect("manifest builds");
+    assert!(matches!(
+        assemble_verified_run_with_artifacts(
+            &strategy,
+            &config,
+            &automated,
+            &[input],
+            None,
+            &[&qa],
+        ),
+        Err(RunAssemblyError::UnexpectedRepaintQaArtifact { .. })
+    ));
+}
+
+#[test]
 fn verified_run_assembly_rejects_identity_mismatch_and_dataset_tampering() {
     use crate::core::strategy_dataset::AdjustmentPolicy;
     use crate::core::strategy_run::{RunAssemblyError, RunDatasetInput, assemble_verified_run};
@@ -2459,6 +2679,7 @@ fn verified_run_assembly_rejects_missing_duplicate_and_mixed_policy_inputs() {
         engine_version: "0.1.0-test".to_string(),
         metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: None,
+        repaint_qa: vec![],
     })
     .expect("manifest builds");
 

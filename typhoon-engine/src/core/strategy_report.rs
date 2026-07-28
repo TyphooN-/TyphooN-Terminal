@@ -335,7 +335,9 @@ mod tests {
         MAX_REPORT_ARTIFACT_JSON_BYTES, REPORT_ARTIFACT_SCHEMA_VERSION, ReportArtifactError,
         StrategyReportArtifact,
     };
-    use crate::core::strategy_ir::{DatasetBinding, RunBinding, StrategyRunManifest};
+    use crate::core::strategy_ir::{
+        DatasetBinding, RepaintAcknowledgement, RepaintQaBinding, RunBinding, StrategyRunManifest,
+    };
     use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
     use crate::core::strategy_metrics::tests::report;
 
@@ -353,6 +355,7 @@ mod tests {
             engine_version: "typhoon-engine/test".to_string(),
             metrics_version: METRICS_SCHEMA_VERSION.to_string(),
             intervention_log_id: None,
+            repaint_qa: vec![],
         })
         .expect("manifest")
     }
@@ -406,6 +409,29 @@ mod tests {
             StrategyReportArtifact::from_json_slice(&oversized),
             Err(ReportArtifactError::TooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn report_identity_inherits_the_manifest_repaint_artifact_and_acknowledgement_binding() {
+        let base = manifest();
+        let mut binding = base.to_input();
+        binding.repaint_qa = vec![RepaintQaBinding {
+            indicator_id: "d".repeat(64),
+            artifact_id: "e".repeat(64),
+            acknowledgement: RepaintAcknowledgement::WarningAcknowledged {
+                note: "reviewed repaint evidence".to_string(),
+            },
+        }];
+        let bound = StrategyRunManifest::build(&binding).expect("repaint-bound manifest");
+        assert_ne!(bound.run_id(), base.run_id());
+
+        let simulator = report(vec![], &[(0, 1_000.0), (DAY_NS + 1, 1_001.0)]);
+        let base_report =
+            StrategyReportArtifact::build(&base, &simulator, &[], 1_000.0).expect("base report");
+        let bound_report =
+            StrategyReportArtifact::build(&bound, &simulator, &[], 1_000.0).expect("bound report");
+        assert_eq!(bound_report.run_id(), bound.run_id());
+        assert_ne!(bound_report.report_id(), base_report.report_id());
     }
 
     #[test]
