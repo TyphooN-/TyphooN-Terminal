@@ -8,6 +8,7 @@
 
 use crate::broker::alpaca::Bar;
 use crate::core::strategy_dataset::{AdjustmentPolicy, DatasetError, DatasetManifest};
+use crate::core::strategy_intervention::InterventionLog;
 use crate::core::strategy_ir::{
     StrategyExecutionConfig, StrategyIr, StrategyIrError, StrategyRunManifest,
 };
@@ -56,7 +57,12 @@ pub enum RunAssemblyError {
         expected: AdjustmentPolicy,
         actual: AdjustmentPolicy,
     },
-    InterventionLogUnsupported,
+    MissingInterventionLog,
+    UnexpectedInterventionLog,
+    InterventionLogIdMismatch {
+        expected: String,
+        actual: String,
+    },
 }
 
 impl std::fmt::Display for RunAssemblyError {
@@ -103,9 +109,17 @@ impl std::fmt::Display for RunAssemblyError {
                 actual.wire_id(),
                 expected.wire_id()
             ),
-            Self::InterventionLogUnsupported => write!(
+            Self::MissingInterventionLog => write!(
                 formatter,
-                "run manifest binds an intervention log, but verified intervention artifacts are not implemented"
+                "run manifest binds an intervention log, but none was supplied"
+            ),
+            Self::UnexpectedInterventionLog => write!(
+                formatter,
+                "an intervention log was supplied to an automated run"
+            ),
+            Self::InterventionLogIdMismatch { expected, actual } => write!(
+                formatter,
+                "run manifest intervention log id mismatch: expected {expected}, got {actual}"
             ),
         }
     }
@@ -121,6 +135,7 @@ pub struct VerifiedRun<'a> {
     config: &'a StrategyExecutionConfig,
     manifest: &'a StrategyRunManifest,
     datasets: Vec<RunDatasetInput<'a>>,
+    intervention_log: Option<&'a InterventionLog>,
 }
 
 impl<'a> VerifiedRun<'a> {
@@ -143,6 +158,10 @@ impl<'a> VerifiedRun<'a> {
     pub fn datasets(&self) -> &[RunDatasetInput<'a>] {
         &self.datasets
     }
+
+    pub fn intervention_log(&self) -> Option<&'a InterventionLog> {
+        self.intervention_log
+    }
 }
 
 impl RunDatasetInput<'_> {
@@ -156,6 +175,18 @@ pub fn assemble_verified_run<'a>(
     config: &'a StrategyExecutionConfig,
     manifest: &'a StrategyRunManifest,
     datasets: &[RunDatasetInput<'a>],
+) -> Result<VerifiedRun<'a>, RunAssemblyError> {
+    assemble_verified_run_with_intervention(strategy, config, manifest, datasets, None)
+}
+
+/// Resolves a run and, for a hybrid manifest, proves that the supplied sealed
+/// intervention log is exactly the artifact included in the run identity.
+pub fn assemble_verified_run_with_intervention<'a>(
+    strategy: &'a StrategyIr,
+    config: &'a StrategyExecutionConfig,
+    manifest: &'a StrategyRunManifest,
+    datasets: &[RunDatasetInput<'a>],
+    intervention_log: Option<&'a InterventionLog>,
 ) -> Result<VerifiedRun<'a>, RunAssemblyError> {
     strategy
         .verify()
@@ -178,8 +209,16 @@ pub fn assemble_verified_run<'a>(
             actual: config.config_id().to_string(),
         });
     }
-    if binding.intervention_log_id.is_some() {
-        return Err(RunAssemblyError::InterventionLogUnsupported);
+    match (&binding.intervention_log_id, intervention_log) {
+        (Some(_), None) => return Err(RunAssemblyError::MissingInterventionLog),
+        (None, Some(_)) => return Err(RunAssemblyError::UnexpectedInterventionLog),
+        (Some(expected), Some(log)) if expected != log.log_id() => {
+            return Err(RunAssemblyError::InterventionLogIdMismatch {
+                expected: expected.clone(),
+                actual: log.log_id().to_string(),
+            });
+        }
+        _ => {}
     }
 
     let mut supplied = BTreeMap::new();
@@ -237,5 +276,6 @@ pub fn assemble_verified_run<'a>(
         config,
         manifest,
         datasets: resolved,
+        intervention_log,
     })
 }

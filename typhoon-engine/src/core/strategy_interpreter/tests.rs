@@ -1049,59 +1049,190 @@ fn session_and_news_filters_are_refused() {
 }
 
 #[test]
-fn resting_order_trade_management_is_refused() {
-    let base = definition(
+fn canonical_trade_management_compiles_fixed_percent_and_atr_distances() {
+    let mut managed = definition(
+        vec![IndicatorNode {
+            id: "atr".to_string(),
+            kind: IndicatorKind::Atr,
+            inputs: vec![IndicatorInput::Constant(2.0)],
+        }],
+        rules(true, Condition::Always, Condition::Never),
+        idle(),
+    );
+    managed.trade_management = TradeManagement {
+        legs: vec![
+            TradeLeg {
+                fraction_bps: 5_000,
+                stop: Some(StopRule::PriceDistance { distance: 2.0 }),
+                target: Some(StopRule::PercentOfEntry { percent: 4.0 }),
+                trailing: None,
+            },
+            TradeLeg {
+                fraction_bps: 5_000,
+                stop: Some(StopRule::AtrMultiple {
+                    indicator: "atr".to_string(),
+                    multiple: 2.0,
+                }),
+                target: None,
+                trailing: Some(TrailingStop {
+                    distance: StopRule::PriceDistance { distance: 3.0 },
+                    activate_after: Some(StopRule::PercentOfEntry { percent: 5.0 }),
+                }),
+            },
+        ],
+        break_even_after: Some(StopRule::PriceDistance { distance: 4.0 }),
+        max_bars_in_trade: Some(20),
+    };
+
+    let ir = StrategyIr::build(&managed).expect("managed definition is valid");
+    let interpreter =
+        CanonicalIrStrategy::new(&ir).expect("canonical trade management lowers to protection");
+    let mut state = SymbolState::new(&interpreter.program);
+    state.nodes[0].history.push(Some(2.0));
+    let plan = interpreter
+        .program
+        .trade_management
+        .resolve(&state, 10.0, 100.0)
+        .expect("distance lowering succeeds")
+        .expect("the ATR value is warm");
+
+    assert_close(plan.legs[0].stop_distance.unwrap(), 2.0, "fixed stop");
+    assert_close(
+        plan.legs[0].target_distance.unwrap(),
+        4.0,
+        "four percent of a 100.00 entry",
+    );
+    assert_close(
+        plan.legs[1].stop_distance.unwrap(),
+        4.0,
+        "2.00 ATR times two",
+    );
+    let trail = plan.legs[1].trailing.expect("runner has a trail");
+    assert_close(trail.distance, 3.0, "fixed trailing distance");
+    assert_close(
+        trail.activate_after.unwrap(),
+        5.0,
+        "five percent activation distance",
+    );
+    assert_close(
+        plan.break_even_after.unwrap(),
+        4.0,
+        "fixed break-even distance",
+    );
+    assert_close(plan.legs[0].quantity, 5.0, "first leg fraction");
+    assert_close(plan.legs[1].quantity, 5.0, "second leg residual");
+    assert_eq!(plan.max_bars_in_trade, Some(20));
+}
+
+#[test]
+fn canonical_two_leg_management_executes_a_real_partial_target() {
+    let mut managed = definition(
         Vec::new(),
         rules(true, Condition::Always, Condition::Never),
         idle(),
     );
+    managed.trade_management = TradeManagement {
+        legs: vec![
+            TradeLeg {
+                fraction_bps: 5_000,
+                stop: Some(StopRule::PriceDistance { distance: 2.0 }),
+                target: Some(StopRule::PriceDistance { distance: 2.0 }),
+                trailing: None,
+            },
+            TradeLeg {
+                fraction_bps: 5_000,
+                stop: Some(StopRule::PriceDistance { distance: 2.0 }),
+                target: Some(StopRule::PriceDistance { distance: 20.0 }),
+                trailing: None,
+            },
+        ],
+        break_even_after: None,
+        max_bars_in_trade: None,
+    };
 
-    let mut stops = base.clone();
-    stops.trade_management.legs[0].stop = Some(StopRule::PercentOfEntry { percent: 2.0 });
-    assert!(matches!(
-        build_error(&stops),
-        InterpreterError::Unsupported { .. }
-    ));
+    let report = run(&managed, &[stream("AAA", &[100.0, 103.0, 104.0])]);
+    assert_eq!(report.fills.len(), 2, "entry plus only the near target");
+    assert_close(report.fills[0].quantity, 10.0, "whole-position entry");
+    assert_close(report.fills[1].quantity, 5.0, "first leg scales out");
+    assert_eq!(report.fills[1].side, OrderSide::Sell);
+}
 
-    let mut trailing = base.clone();
-    trailing.trade_management.legs[0].trailing = Some(TrailingStop {
-        distance: StopRule::PriceDistance { distance: 1.0 },
-        activate_after: None,
-    });
-    assert!(matches!(
-        build_error(&trailing),
-        InterpreterError::Unsupported { .. }
-    ));
+#[test]
+fn canonical_strategy_exit_retires_its_protective_orders_without_a_later_decision() {
+    let mut managed = definition(
+        Vec::new(),
+        rules(
+            true,
+            Condition::Compare {
+                left: close_at(0),
+                op: CompareOp::Less,
+                right: Operand::Constant(100.5),
+            },
+            Condition::Compare {
+                left: close_at(0),
+                op: CompareOp::Greater,
+                right: Operand::Constant(100.5),
+            },
+        ),
+        idle(),
+    );
+    managed.trade_management.legs[0].stop = Some(StopRule::PriceDistance { distance: 20.0 });
+    managed.trade_management.legs[0].target = Some(StopRule::PriceDistance { distance: 20.0 });
 
-    let mut scaled = base.clone();
-    scaled.trade_management.legs = vec![
-        TradeLeg {
-            fraction_bps: 5_000,
-            stop: None,
-            target: None,
-            trailing: None,
-        },
-        TradeLeg {
-            fraction_bps: 5_000,
-            stop: None,
-            target: None,
-            trailing: None,
-        },
-    ];
-    assert!(matches!(
-        build_error(&scaled),
-        InterpreterError::Unsupported {
-            feature: "trade_management.legs",
-            ..
-        }
-    ));
+    let report = run(&managed, &[stream("AAA", &[100.0, 101.0, 102.0])]);
+    assert_eq!(report.fills.len(), 2, "entry and authored exit");
+    let requested: Vec<_> = report
+        .cancellations
+        .iter()
+        .filter(|record| record.reason == crate::core::strategy_simulator::CancelReason::Requested)
+        .collect();
+    assert_eq!(
+        requested.len(),
+        2,
+        "the authored exit retires both bracket orders"
+    );
+    assert!(
+        requested
+            .iter()
+            .all(|record| record.time_ns <= report.fills[1].time_ns),
+        "bracket cancellation must arrive no later than the authored exit fill: {requested:?}"
+    );
+    assert!(
+        report.pending_orders.is_empty(),
+        "a bracket must not outlive an authored exit: {:?}",
+        report.pending_orders
+    );
+}
 
-    let mut timed = base;
-    timed.trade_management.max_bars_in_trade = Some(20);
-    assert!(matches!(
-        build_error(&timed),
-        InterpreterError::Unsupported { .. }
-    ));
+#[test]
+fn canonical_time_stop_wins_over_an_exit_signal_on_the_same_decision() {
+    let mut managed = definition(
+        Vec::new(),
+        rules(
+            true,
+            Condition::Compare {
+                left: close_at(0),
+                op: CompareOp::Less,
+                right: Operand::Constant(100.5),
+            },
+            Condition::Compare {
+                left: close_at(0),
+                op: CompareOp::Greater,
+                right: Operand::Constant(100.5),
+            },
+        ),
+        idle(),
+    );
+    managed.trade_management.legs[0].stop = Some(StopRule::PriceDistance { distance: 20.0 });
+    managed.trade_management.max_bars_in_trade = Some(1);
+
+    let report = run(&managed, &[stream("AAA", &[100.0, 101.0, 102.0, 103.0])]);
+    assert_eq!(report.fills.len(), 2, "one entry and one time-stop exit");
+    assert!(
+        report.rejections.is_empty(),
+        "management and authored exit must not submit competing reductions: {:?}",
+        report.rejections
+    );
 }
 
 #[test]

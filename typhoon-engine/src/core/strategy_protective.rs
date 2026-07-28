@@ -159,7 +159,7 @@ struct ActiveTrade {
 ///
 /// The manager is deliberately not a `ReferenceStrategy`: entries are the
 /// strategy's decision, and this only manages what happens after one.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ProtectiveManager {
     active: Option<ActiveTrade>,
     next_oco_group: u32,
@@ -273,30 +273,26 @@ impl ProtectiveManager {
     }
 
     /// Advances the lifecycle by one decision: reconciles against the position
-    /// the simulator actually holds, then applies break-even, trailing and the
-    /// time stop.
-    ///
-    /// Call once per decision, after the strategy's own entry logic.
+    /// and order book the simulator actually holds, then applies break-even,
+    /// trailing and the time stop. Returns `true` when the time stop submitted
+    /// an exit, so the owning strategy does not submit a competing exit.
     pub fn on_decision(
         &mut self,
         ctx: &DecisionContext<'_>,
         orders: &mut OrderIntents,
-    ) -> Result<(), StrategyError> {
+    ) -> Result<bool, StrategyError> {
         let Some(trade) = self.active.as_mut() else {
-            return Ok(());
+            return Ok(false);
         };
+        reconcile_orders(trade, ctx);
         let position = ctx.position(trade.symbol);
         // Protective orders exit without telling the strategy. A flat position
         // is the authoritative signal that every leg is done; cancel whatever
         // is still resting so a later re-entry cannot inherit stale protection.
         if position.is_flat() {
-            for leg in &trade.legs {
-                for order in [leg.stop, leg.target].into_iter().flatten() {
-                    orders.cancel(order)?;
-                }
-            }
+            cancel_resting(trade, ctx, orders)?;
             self.active = None;
-            return Ok(());
+            return Ok(false);
         }
         trade.bars_held = trade.bars_held.saturating_add(1);
 
@@ -310,10 +306,12 @@ impl ProtectiveManager {
                 OrderSide::Buy => OrderSide::Sell,
                 OrderSide::Sell => OrderSide::Buy,
             };
+            cancel_resting(trade, ctx, orders)?;
             orders.submit(
                 OrderRequest::market(trade.symbol, exit_side, position.units.abs()).reduce_only(),
             )?;
-            return Ok(());
+            self.active = None;
+            return Ok(true);
         }
 
         let favorable = match trade.side {
@@ -350,7 +348,22 @@ impl ProtectiveManager {
             };
             move_stop(trade.side, leg, proposed, orders)?;
         }
-        Ok(())
+        Ok(false)
+    }
+
+    /// Retires every still-live protective order when the owning strategy
+    /// submits its own exit. Cancellation is emitted on the same decision as
+    /// the exit, so no bracket can survive until a later flat-state poll.
+    pub fn retire(
+        &mut self,
+        ctx: &DecisionContext<'_>,
+        orders: &mut OrderIntents,
+    ) -> Result<(), StrategyError> {
+        let Some(mut trade) = self.active.take() else {
+            return Ok(());
+        };
+        reconcile_orders(&mut trade, ctx);
+        cancel_resting(&trade, ctx, orders)
     }
 
     /// Abandons the lifecycle without emitting orders. For a strategy that
@@ -358,6 +371,33 @@ impl ProtectiveManager {
     pub fn forget(&mut self) {
         self.active = None;
     }
+}
+
+fn reconcile_orders(trade: &mut ActiveTrade, ctx: &DecisionContext<'_>) {
+    for leg in &mut trade.legs {
+        if leg.stop.is_some_and(|order| !ctx.is_order_live(order)) {
+            leg.stop = None;
+            leg.stop_price = None;
+        }
+        if leg.target.is_some_and(|order| !ctx.is_order_live(order)) {
+            leg.target = None;
+        }
+    }
+}
+
+fn cancel_resting(
+    trade: &ActiveTrade,
+    ctx: &DecisionContext<'_>,
+    orders: &mut OrderIntents,
+) -> Result<(), StrategyError> {
+    for leg in &trade.legs {
+        for order in [leg.stop, leg.target].into_iter().flatten() {
+            if ctx.is_order_live(order) {
+                orders.cancel(order)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Moves one leg's resting stop, but only ever tighter.

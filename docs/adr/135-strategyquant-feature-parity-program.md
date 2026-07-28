@@ -1098,8 +1098,10 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   monthly/annual series, and a ledger cost/rejection diagnostic block. Uncertainty is typed
   rather than omitted: the mean-trade standard error is reported and Monte-Carlo confidence
   intervals are an explicit `UnavailableUntilM4` value instead of a silent absence.
-- `strategy_protective.rs` (M2, partial): the NNFX two-leg order lifecycle (§10.3) as a pure
-  state machine over the M1 simulator — N legs each with an independent stop and target in
+- `strategy_protective.rs` + `strategy_interpreter.rs` (M2, partial): canonical IR
+  `TradeManagement` now lowers into the NNFX two-leg order lifecycle (§10.3), resolving fixed,
+  percent-of-entry, and ATR-multiple rules from deterministic interpreter state. The lifecycle
+  is a pure state machine over the M1 simulator — N legs each with an independent stop and target in
   their own OCO group, a position-level break-even move, per-leg trailing that only ever
   tightens, and a bar-budget time stop. It is expressible because orders execute within a bar
   in submission order and `reduce_only` is checked at execution, so a bracket submitted with
@@ -1108,7 +1110,10 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   execution cost instead of silently resizing the authored risk. To support it,
   `DecisionContext` gained a `PositionView` (units, average entry, realized PnL, entry time,
   and a committed-bars-only favourable extreme) — the feedback whose absence previously forced
-  the interpreter to reject break-even, trailing and time stops outright.
+  the interpreter to reject break-even, trailing and time stops outright. Canonical authored exits
+  retire still-live brackets on the same decision, and time-stop exits take precedence over a
+  competing authored exit. This implementation is pending the final M2 verification command set;
+  it does not complete M2.
 - `strategy_intervention.rs` (M2): the operator intervention log and deterministic hybrid
   replay (§6.13). Every operator action is anchored to the *decision ordinal* it interrupted
   rather than to a wall clock — the decision sequence is already the run's deterministic spine,
@@ -1117,8 +1122,10 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   reproduce with the same fidelity. The log is content-addressed over its interventions
   including the operator's stated reason, so reordering two same-decision actions, moving one
   to a different decision, or rewriting a note all change its id. Loading is byte-bounded,
-  version-checked and re-verified. What remains is wiring the log into `RunBinding`'s existing
-  `intervention_log_id` at assembly time and a UI to produce one from a live session.
+  version-checked and re-verified. Verified run assembly now requires the exact log named by
+  `RunBinding::intervention_log_id`, rejects a missing or mismatched log, and rejects a log supplied
+  to an automated manifest. This assembly wiring is pending final verification. A UI to produce a
+  log from a live session remains open.
 - `strategy_repaint.rs` (M2): the §11.5 repainting diagnostic. It evaluates an indicator over
   every prefix of the bar series and reports each already-published closed-bar value that a
   later event moved, naming the output, the bar, the event, and both values — never a single
@@ -1190,7 +1197,7 @@ have test evidence:
 | Reports round-trip through JSON without loss | **Met** | `report_artifact_round_trips_detects_tampering_and_rejects_replay_mismatch` round-trips, re-verifies, and rejects both a mutated metric value and a divergent replay ledger; `report_loader_is_byte_bounded_before_decode` and `an_unsealed_report_id_never_passes_verification` pin the fail-closed loader |
 | Replaying a recorded hybrid run reproduces its ledger bit-for-bit | **Met** | `strategy_intervention/tests.rs::replaying_a_recorded_hybrid_run_reproduces_its_ledger_bit_for_bit` records a session where an automated strategy and an operator both act under costs, intrabar resolution and seeded latency, then replays the sealed log and compares the serialized ledgers byte for byte. `a_hybrid_run_replays_identically_from_a_round_tripped_log` proves the same through a persisted log, and `the_operator_actions_are_what_make_the_two_ledgers_match` is the control: replaying with an empty log must *not* reproduce the session, so the equality above is not vacuous |
 | A synthetic repainting indicator is identified at the exact mutated bar/output | **Met** | `strategy_repaint/tests.rs::a_synthetic_repaint_is_identified_at_the_exact_bar_and_output` asserts the exact output name and index, the mutated bar, the prefix length that mutated it, how far back it was, and both the previous and new value. `a_centred_average_repaints_every_bar_inside_its_look_ahead` catches the classic look-ahead shape and pins the precise set of bars from the window arithmetic; `a_trailing_indicator_is_clean` is the negative control; `a_value_that_disappears_counts_as_a_repaint` covers a level being withdrawn rather than moved; `a_declared_revision_window_makes_provisional_output_honest` shows a declared window clears an indicator and an understated one does not |
-| Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Met for the lifecycle; not yet reachable from the IR** | `strategy_protective/tests.rs::a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trails` derives every fill price, fee, realized PnL, cash balance and final equity on paper and asserts them exactly, including leg 0 banking its own target while leg 1 runs, the break-even move at +4.00 and the trailing step at +7.00. `both_legs_stop_out_independently_at_the_same_initial_level`, `a_short_two_leg_trade_mirrors_the_long_lifecycle`, `a_trailing_stop_never_loosens_on_a_pullback`, `a_time_stop_closes_the_remainder_at_market`, `a_legs_stop_and_target_retire_each_other_through_their_oco_group` and `a_strategy_exit_leaves_the_manager_to_cancel_the_resting_bracket` pin the rest of the state machine. **Outstanding:** `strategy_interpreter.rs` still rejects `trade_management`, so a canonical IR strategy cannot yet request this lifecycle — compiling `TradeManagement` into `ProtectivePlan` is the remaining step |
+| Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Implemented; pending final verification** | `strategy_protective/tests.rs::a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trails` derives every fill price, fee, realized PnL, cash balance and final equity on paper and asserts them exactly, including leg 0 banking its own target while leg 1 runs, the break-even move at +4.00 and the trailing step at +7.00. `both_legs_stop_out_independently_at_the_same_initial_level`, `a_short_two_leg_trade_mirrors_the_long_lifecycle`, `a_trailing_stop_never_loosens_on_a_pullback`, `a_time_stop_closes_the_remainder_at_market`, `a_legs_stop_and_target_retire_each_other_through_their_oco_group` and `a_strategy_exit_leaves_the_manager_to_cancel_the_resting_bracket` pin the state machine. `strategy_interpreter/tests.rs::canonical_trade_management_compiles_fixed_percent_and_atr_distances` pins resolved fixed, percent, and ATR distances and leg quantities; `canonical_two_leg_management_executes_a_real_partial_target`, `canonical_strategy_exit_retires_its_protective_orders_without_a_later_decision`, and `canonical_time_stop_wins_over_an_exit_signal_on_the_same_decision` cover the canonical-IR execution boundary. Final verification is still required before this clause is called met |
 
 Remaining M2 delivery beyond the gate: execution realism §6.6–§6.9 (partial fills/liquidity caps,
 sessions/timezones, corporate actions, sub-bar fidelity), the M1-deferred time-accrued financing,

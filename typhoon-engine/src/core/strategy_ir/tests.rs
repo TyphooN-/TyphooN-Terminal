@@ -2304,6 +2304,86 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
 }
 
 #[test]
+fn verified_run_assembly_binds_and_verifies_the_manifest_intervention_log() {
+    use crate::core::strategy_dataset::AdjustmentPolicy;
+    use crate::core::strategy_intervention::InterventionLog;
+    use crate::core::strategy_run::{
+        RunAssemblyError, RunDatasetInput, assemble_verified_run_with_intervention,
+    };
+
+    let strategy = ir();
+    let config = StrategyExecutionConfig::build(&settings()).expect("config builds");
+    let (bars, dataset) = run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::Raw);
+    let log = InterventionLog::empty();
+    let mut bound = binding();
+    bound.datasets = vec![DatasetBinding {
+        input_id: "primary".to_string(),
+        dataset_id: dataset.dataset_id.clone(),
+    }];
+    bound.strategy_id = strategy.strategy_id().to_string();
+    bound.config_id = config.config_id().to_string();
+    bound.intervention_log_id = Some(log.log_id().to_string());
+    let manifest = StrategyRunManifest::build(&bound).expect("hybrid manifest builds");
+    let input = RunDatasetInput {
+        input_id: "primary",
+        manifest: &dataset,
+        bars: &bars,
+    };
+
+    let verified = assemble_verified_run_with_intervention(
+        &strategy,
+        &config,
+        &manifest,
+        &[input],
+        Some(&log),
+    )
+    .expect("the identity-bound log resolves");
+    assert_eq!(verified.intervention_log(), Some(&log));
+
+    let foreign = InterventionLog::build(vec![crate::core::strategy_intervention::Intervention {
+        decision_index: 0,
+        note: "different".to_string(),
+        action: crate::core::strategy_intervention::InterventionAction::Submit {
+            request: crate::core::strategy_simulator::OrderRequest::market(
+                crate::core::strategy_simulator::SymbolId(0),
+                crate::core::strategy_simulator::OrderSide::Buy,
+                1.0,
+            ),
+        },
+    }])
+    .expect("foreign log builds");
+    assert!(matches!(
+        assemble_verified_run_with_intervention(
+            &strategy,
+            &config,
+            &manifest,
+            &[input],
+            Some(&foreign),
+        ),
+        Err(RunAssemblyError::InterventionLogIdMismatch { .. })
+    ));
+    assert!(matches!(
+        assemble_verified_run_with_intervention(&strategy, &config, &manifest, &[input], None),
+        Err(RunAssemblyError::MissingInterventionLog)
+    ));
+
+    let mut automated = bound;
+    automated.intervention_log_id = None;
+    let automated_manifest =
+        StrategyRunManifest::build(&automated).expect("automated manifest builds");
+    assert!(matches!(
+        assemble_verified_run_with_intervention(
+            &strategy,
+            &config,
+            &automated_manifest,
+            &[input],
+            Some(&log),
+        ),
+        Err(RunAssemblyError::UnexpectedInterventionLog)
+    ));
+}
+
+#[test]
 fn verified_run_assembly_rejects_identity_mismatch_and_dataset_tampering() {
     use crate::core::strategy_dataset::AdjustmentPolicy;
     use crate::core::strategy_run::{RunAssemblyError, RunDatasetInput, assemble_verified_run};

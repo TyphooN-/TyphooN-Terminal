@@ -1006,6 +1006,7 @@ pub struct DecisionContext<'a> {
     forming: Option<FormingBar>,
     market: MarketView<'a>,
     positions: &'a [PositionState],
+    orders: &'a [Order],
 }
 
 impl DecisionContext<'_> {
@@ -1050,6 +1051,15 @@ impl DecisionContext<'_> {
     /// Shorthand for the position on the symbol this decision is about.
     pub fn own_position(&self) -> PositionView {
         self.position(self.symbol)
+    }
+
+    /// Whether an order created by this strategy remains submitted or active
+    /// as of this decision. Lifecycle managers use this to avoid modifying or
+    /// cancelling an order already retired by a fill, OCO sibling, or expiry.
+    pub fn is_order_live(&self, client_id: ClientOrderId) -> bool {
+        self.orders
+            .iter()
+            .any(|order| order.client_id == client_id && order.state != OrderState::Done)
     }
 }
 
@@ -2271,6 +2281,7 @@ fn decide(
                 opened: &sim.opened,
             },
             positions: &sim.positions,
+            orders: &sim.orders,
         };
         let mut orders = OrderIntents::new(sim.symbol_count, sim.next_client_id);
         strategy

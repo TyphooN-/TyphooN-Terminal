@@ -98,9 +98,10 @@
 
 use crate::core::strategy_ir::{
     CompareOp, Condition, DirectionRules, IndicatorInput, IndicatorKind, IndicatorNode,
-    MAX_BARS_AGO, MAX_CONDITION_DEPTH, Operand, ParamValue, PriceField, SizingRule,
-    StrategyDefinition, StrategyIr, StrategyIrError,
+    MAX_BARS_AGO, MAX_CONDITION_DEPTH, Operand, ParamValue, PriceField, SizingRule, StopRule,
+    StrategyDefinition, StrategyIr, StrategyIrError, TradeManagement,
 };
+use crate::core::strategy_protective::{LegPlan, ProtectiveManager, ProtectivePlan, TrailingPlan};
 use crate::core::strategy_simulator::{
     DecisionContext, MAX_ORDER_QUANTITY, MAX_SYMBOLS, MarketDataError, MarketView, OrderIntents,
     OrderSide, ReferenceStrategy, StrategyError, SymbolId,
@@ -407,6 +408,118 @@ impl CompiledSizing {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum CompiledDistance {
+    Fixed(f64),
+    Percent(f64),
+    Indicator { slot: usize, multiple: f64 },
+}
+
+impl CompiledDistance {
+    fn resolve(
+        self,
+        state: &SymbolState,
+        entry_price: f64,
+    ) -> Result<Option<f64>, InterpreterError> {
+        match self {
+            Self::Fixed(distance) => Ok(Some(distance)),
+            Self::Percent(percent) => Ok(Some(entry_price * percent / 100.0)),
+            Self::Indicator { slot, multiple } => Ok(state.nodes[slot]
+                .history
+                .get(0)?
+                .map(|value| value * multiple)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CompiledLeg {
+    fraction_bps: u32,
+    stop: Option<CompiledDistance>,
+    target: Option<CompiledDistance>,
+    trailing: Option<(CompiledDistance, Option<CompiledDistance>)>,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledTradeManagement {
+    legs: Vec<CompiledLeg>,
+    break_even_after: Option<CompiledDistance>,
+    max_bars_in_trade: Option<u32>,
+}
+
+impl CompiledTradeManagement {
+    fn resolve(
+        &self,
+        state: &SymbolState,
+        quantity: f64,
+        entry_price: f64,
+    ) -> Result<Option<ProtectivePlan>, InterpreterError> {
+        let mut assigned = 0.0;
+        let last = self.legs.len() - 1;
+        let mut legs = Vec::with_capacity(self.legs.len());
+        for (index, leg) in self.legs.iter().enumerate() {
+            let leg_quantity = if index == last {
+                quantity - assigned
+            } else {
+                quantity * f64::from(leg.fraction_bps) / 10_000.0
+            };
+            assigned += leg_quantity;
+            let resolve = |rule: CompiledDistance| rule.resolve(state, entry_price);
+            let stop_distance = match leg.stop.map(resolve).transpose()? {
+                Some(Some(value)) => Some(value),
+                Some(None) => return Ok(None),
+                None => None,
+            };
+            let target_distance = match leg.target.map(resolve).transpose()? {
+                Some(Some(value)) => Some(value),
+                Some(None) => return Ok(None),
+                None => None,
+            };
+            let trailing = match leg.trailing {
+                Some((distance, activate)) => {
+                    let Some(distance) = resolve(distance)? else {
+                        return Ok(None);
+                    };
+                    let activate_after = match activate {
+                        Some(rule) => {
+                            let Some(value) = resolve(rule)? else {
+                                return Ok(None);
+                            };
+                            Some(value)
+                        }
+                        None => None,
+                    };
+                    Some(TrailingPlan {
+                        distance,
+                        activate_after,
+                    })
+                }
+                None => None,
+            };
+            legs.push(LegPlan {
+                quantity: leg_quantity,
+                stop_distance,
+                target_distance,
+                trailing,
+            });
+        }
+        let break_even_after = match self.break_even_after {
+            Some(rule) => {
+                let Some(value) = rule.resolve(state, entry_price)? else {
+                    return Ok(None);
+                };
+                Some(value)
+            }
+            None => None,
+        };
+        Ok(Some(ProtectivePlan {
+            legs,
+            break_even_after,
+            max_bars_in_trade: self.max_bars_in_trade,
+        }))
+    }
+}
+
 /// The whole strategy, resolved once and then read-only for the run.
 #[derive(Debug, Clone)]
 struct Program {
@@ -418,6 +531,7 @@ struct Program {
     long: CompiledRules,
     short: CompiledRules,
     sizing: CompiledSizing,
+    trade_management: CompiledTradeManagement,
     max_open_positions: usize,
 }
 
@@ -1234,6 +1348,7 @@ struct SymbolState {
     bars: usize,
     nodes: Vec<NodeState>,
     position: Position,
+    protective: ProtectiveManager,
 }
 
 impl SymbolState {
@@ -1249,6 +1364,7 @@ impl SymbolState {
                 })
                 .collect(),
             position: Position::Flat,
+            protective: ProtectiveManager::new(),
         }
     }
 }
@@ -1258,7 +1374,6 @@ impl SymbolState {
 fn compile(definition: &StrategyDefinition) -> Result<Program, InterpreterError> {
     compile_timing(definition)?;
     compile_filters(definition)?;
-    compile_trade_management(definition)?;
     let sizing = compile_sizing(definition)?;
 
     let parameters: BTreeMap<&str, &ParamValue> = definition
@@ -1272,6 +1387,7 @@ fn compile(definition: &StrategyDefinition) -> Result<Program, InterpreterError>
         .enumerate()
         .map(|(index, node)| (node.id.as_str(), index))
         .collect();
+    let trade_management = compile_trade_management(&definition.trade_management, &slots)?;
 
     let nodes = definition
         .indicators
@@ -1304,6 +1420,7 @@ fn compile(definition: &StrategyDefinition) -> Result<Program, InterpreterError>
         long,
         short,
         sizing,
+        trade_management,
         max_open_positions: definition.sizing.max_open_positions as usize,
     })
 }
@@ -1333,34 +1450,65 @@ fn compile_filters(definition: &StrategyDefinition) -> Result<(), InterpreterErr
     Ok(())
 }
 
-fn compile_trade_management(definition: &StrategyDefinition) -> Result<(), InterpreterError> {
-    let management = &definition.trade_management;
-    if management.legs.len() != 1 {
-        return Err(InterpreterError::Unsupported {
-            feature: "trade_management.legs",
-            detail: "scale-outs need resting orders the simulator does not model",
-        });
-    }
-    let leg = &management.legs[0];
-    if leg.stop.is_some() || leg.target.is_some() || leg.trailing.is_some() {
-        return Err(InterpreterError::Unsupported {
-            feature: "trade_management.legs[0]",
-            detail: "protective stops, targets and trails need intrabar execution",
-        });
-    }
-    if management.break_even_after.is_some() {
-        return Err(InterpreterError::Unsupported {
-            feature: "trade_management.break_even_after",
-            detail: "break-even moves need a resting stop to move",
-        });
-    }
-    if management.max_bars_in_trade.is_some() {
-        return Err(InterpreterError::Unsupported {
-            feature: "trade_management.max_bars_in_trade",
-            detail: "a time stop must anchor on the fill, which is not reported back",
-        });
-    }
-    Ok(())
+fn compile_trade_management(
+    management: &TradeManagement,
+    slots: &BTreeMap<&str, usize>,
+) -> Result<CompiledTradeManagement, InterpreterError> {
+    let compile_rule = |rule: &StopRule| -> Result<CompiledDistance, InterpreterError> {
+        match rule {
+            StopRule::PriceDistance { distance } => Ok(CompiledDistance::Fixed(*distance)),
+            StopRule::PercentOfEntry { percent } => Ok(CompiledDistance::Percent(*percent)),
+            StopRule::AtrMultiple {
+                indicator,
+                multiple,
+            } => slots
+                .get(indicator.as_str())
+                .copied()
+                .map(|slot| CompiledDistance::Indicator {
+                    slot,
+                    multiple: *multiple,
+                })
+                .ok_or_else(|| InterpreterError::UnknownRef {
+                    kind: "indicator",
+                    id: indicator.clone(),
+                    context: "trade_management".to_string(),
+                }),
+        }
+    };
+    let legs = management
+        .legs
+        .iter()
+        .map(|leg| {
+            Ok(CompiledLeg {
+                fraction_bps: leg.fraction_bps,
+                stop: leg.stop.as_ref().map(&compile_rule).transpose()?,
+                target: leg.target.as_ref().map(&compile_rule).transpose()?,
+                trailing: leg
+                    .trailing
+                    .as_ref()
+                    .map(|trail| {
+                        Ok((
+                            compile_rule(&trail.distance)?,
+                            trail
+                                .activate_after
+                                .as_ref()
+                                .map(&compile_rule)
+                                .transpose()?,
+                        ))
+                    })
+                    .transpose()?,
+            })
+        })
+        .collect::<Result<Vec<_>, InterpreterError>>()?;
+    Ok(CompiledTradeManagement {
+        legs,
+        break_even_after: management
+            .break_even_after
+            .as_ref()
+            .map(compile_rule)
+            .transpose()?,
+        max_bars_in_trade: management.max_bars_in_trade,
+    })
 }
 
 fn compile_sizing(definition: &StrategyDefinition) -> Result<CompiledSizing, InterpreterError> {
@@ -2078,6 +2226,23 @@ impl CanonicalIrStrategy {
         state.bars = observed;
         advance(program, state, symbol, market)?;
 
+        let actual = ctx.position(symbol);
+        state.position = if actual.units > 0.0 {
+            Position::Long {
+                units: actual.units,
+            }
+        } else if actual.units < 0.0 {
+            Position::Short {
+                units: -actual.units,
+            }
+        } else {
+            Position::Flat
+        };
+        let protective_exit_sent = state
+            .protective
+            .on_decision(ctx, orders)
+            .map_err(InterpreterError::Order)?;
+
         let held = self.open_positions();
         let state = self.symbols[symbol.0]
             .as_ref()
@@ -2087,16 +2252,21 @@ impl CanonicalIrStrategy {
 
         let mut position = state.position;
         let mut actions: Vec<(OrderSide, f64)> = Vec::new();
+        let mut protected_entry: Option<(OrderSide, ProtectivePlan)> = None;
 
         match position {
             Position::Long { units } => {
-                if evaluate(&program.long.exit, state, symbol, market, 1)? == Truth::True {
+                if !protective_exit_sent
+                    && evaluate(&program.long.exit, state, symbol, market, 1)? == Truth::True
+                {
                     actions.push((OrderSide::Sell, units));
                     position = Position::Flat;
                 }
             }
             Position::Short { units } => {
-                if evaluate(&program.short.exit, state, symbol, market, 1)? == Truth::True {
+                if !protective_exit_sent
+                    && evaluate(&program.short.exit, state, symbol, market, 1)? == Truth::True
+                {
                     actions.push((OrderSide::Buy, units));
                     position = Position::Flat;
                 }
@@ -2133,17 +2303,40 @@ impl CanonicalIrStrategy {
                 if !units.is_finite() || units <= 0.0 || units > MAX_ORDER_QUANTITY {
                     return Err(InterpreterError::InvalidQuantity { units });
                 }
-                actions.push((side, units));
-                position = match side {
-                    OrderSide::Buy => Position::Long { units },
-                    OrderSide::Sell => Position::Short { units },
-                };
+                if let Some(plan) = program.trade_management.resolve(state, units, price)? {
+                    protected_entry = Some((side, plan));
+                    position = match side {
+                        OrderSide::Buy => Position::Long { units },
+                        OrderSide::Sell => Position::Short { units },
+                    };
+                }
             }
         }
 
+        if !actions.is_empty() {
+            let state = self.symbols[symbol.0]
+                .as_mut()
+                .ok_or(InterpreterError::UnexpectedHistory { symbol: symbol.0 })?;
+            state
+                .protective
+                .retire(ctx, orders)
+                .map_err(InterpreterError::Order)?;
+        }
         for (side, quantity) in actions {
             orders
                 .market(symbol, side, quantity)
+                .map_err(InterpreterError::Order)?;
+        }
+        if let Some((side, plan)) = protected_entry {
+            let reference_price = market
+                .close(symbol, 0)
+                .map_err(InterpreterError::MarketData)?;
+            let state = self.symbols[symbol.0]
+                .as_mut()
+                .ok_or(InterpreterError::UnexpectedHistory { symbol: symbol.0 })?;
+            state
+                .protective
+                .enter(symbol, side, reference_price, &plan, orders)
                 .map_err(InterpreterError::Order)?;
         }
         if let Some(state) = self.symbols[symbol.0].as_mut() {

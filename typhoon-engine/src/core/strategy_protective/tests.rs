@@ -278,6 +278,11 @@ fn a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trail
     );
     assert_close(report.final_cash, 100_037.0, "100 000 + 40 - 3");
     assert_close(report.final_equity, 100_037.0, "flat, so equity is cash");
+    assert!(
+        report.rejections.is_empty(),
+        "lifecycle maintenance must not address already-retired orders: {:?}",
+        report.rejections
+    );
 }
 
 /// The same plan, but price falls straight through both initial stops. Both
