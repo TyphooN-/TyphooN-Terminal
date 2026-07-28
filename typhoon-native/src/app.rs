@@ -469,6 +469,11 @@ impl TyphooNApp {
             strategy_result_workflow: strategy_report_view::ResultWorkflowState::default(),
             strategy_result_workflow_rx: None,
             strategy_result_load_rx: None,
+            strategy_comparison: None,
+            strategy_comparison_selected_run: 0,
+            strategy_comparison_status: String::new(),
+            strategy_comparison_load_state: strategy_report_view::ComparisonLoadState::default(),
+            strategy_comparison_rx: None,
             sub_bar_run_ui: strategy_sub_bar_run::SubBarRunUiState::default(),
             sub_bar_run_state: strategy_sub_bar_run::SubBarRunState::default(),
             strategy_run_worker: strategy_sub_bar_run::StrategyRunWorker::spawn_at(

@@ -716,6 +716,25 @@ pub struct TyphooNApp {
             >,
         >,
     >,
+    pub(crate) strategy_comparison:
+        Option<crate::app::strategy_report_view::StrategyComparisonView>,
+    pub(crate) strategy_comparison_selected_run: usize,
+    pub(crate) strategy_comparison_status: String,
+    pub(crate) strategy_comparison_load_state:
+        crate::app::strategy_report_view::ComparisonLoadState,
+    pub(crate) strategy_comparison_rx: Option<
+        std::sync::mpsc::Receiver<
+            Result<
+                (
+                    u64,
+                    usize,
+                    u64,
+                    crate::app::strategy_report_view::StrategyComparisonView,
+                ),
+                (u64, String),
+            >,
+        >,
+    >,
     pub(crate) sub_bar_run_ui: crate::app::strategy_sub_bar_run::SubBarRunUiState,
     pub(crate) sub_bar_run_state: crate::app::strategy_sub_bar_run::SubBarRunState,
     pub(crate) strategy_run_worker: Option<crate::app::strategy_sub_bar_run::StrategyRunWorker>,

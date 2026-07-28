@@ -258,6 +258,99 @@ impl TyphooNApp {
         });
     }
 
+    fn drain_strategy_comparison(&mut self) {
+        let received = self
+            .strategy_comparison_rx
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        let Some(result) = received else {
+            return;
+        };
+        self.strategy_comparison_rx = None;
+        match result {
+            Ok((request, chart_index, bars_generation, comparison)) => {
+                let current = self.charts.get(chart_index).is_some_and(|chart| {
+                    comparison.runs.iter().all(|run| {
+                        chart.bars_generation == bars_generation
+                            && chart.bars.len() == run.chart_bar_count
+                            && chart.symbol_matches(&run.symbol)
+                    })
+                });
+                if current
+                    && self
+                        .strategy_comparison_load_state
+                        .accept(request, comparison.runs.len())
+                {
+                    self.strategy_comparison_status = format!(
+                        "Loaded {} verified pairs; first selection is the baseline",
+                        comparison.runs.len()
+                    );
+                    self.strategy_comparison_selected_run = 0;
+                    self.strategy_comparison = Some(comparison);
+                } else {
+                    self.strategy_comparison_status =
+                        "Error: stale comparison ignored after chart/request identity changed"
+                            .into();
+                }
+            }
+            Err((request, error)) => {
+                if self.strategy_comparison_load_state.accept(request, 2) {
+                    self.strategy_comparison_status = format!("Error: {error}");
+                }
+            }
+        }
+    }
+
+    fn start_strategy_comparison_load(&mut self, ctx: &egui::Context) {
+        let Some(paths) = rfd::FileDialog::new()
+            .set_title("Select 2-4 verified report artifacts and paired simulations")
+            .add_filter("JSON report pairs", &["json"])
+            .pick_files()
+        else {
+            return;
+        };
+        if paths.len() < 4
+            || paths.len() > strategy_report_view::MAX_COMPARISON_RUNS * 2
+            || paths.len() % 2 != 0
+        {
+            self.strategy_comparison_status = format!(
+                "Error: select 2..={} complete pairs (4..={} files)",
+                strategy_report_view::MAX_COMPARISON_RUNS,
+                strategy_report_view::MAX_COMPARISON_RUNS * 2
+            );
+            return;
+        }
+        let Some(chart) = self.charts.get(self.active_tab) else {
+            self.strategy_comparison_status = "Error: no active chart is available".into();
+            return;
+        };
+        if chart.bars.is_empty() {
+            self.strategy_comparison_status = "Error: the active chart has no timeline".into();
+            return;
+        }
+        let request = self.strategy_comparison_load_state.begin_request();
+        let chart_index = self.active_tab;
+        let bars_generation = chart.bars_generation;
+        let chart_symbol = chart.symbol.clone();
+        let chart_bar_times_ms: Vec<_> = chart.bars.iter().map(|bar| bar.ts_ms).collect();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.strategy_comparison_rx = Some(receiver);
+        self.strategy_comparison_status =
+            "Loading, pairing, verifying and binning on worker…".into();
+        let repaint = ctx.clone();
+        std::thread::spawn(move || {
+            let result = strategy_report_view::load_prepared_comparison(
+                paths,
+                &chart_symbol,
+                &chart_bar_times_ms,
+            )
+            .map(|comparison| (request, chart_index, bars_generation, comparison))
+            .map_err(|error| (request, error));
+            let _ = sender.send(result);
+            repaint.request_repaint();
+        });
+    }
+
     fn drain_sub_bar_runs(&mut self) {
         let events = self
             .strategy_run_worker
@@ -522,6 +615,7 @@ impl TyphooNApp {
 
     pub(super) fn render_backtest_window(&mut self, ctx: &egui::Context) {
         self.drain_strategy_result_load();
+        self.drain_strategy_comparison();
         self.drain_strategy_workflow();
         self.drain_sub_bar_runs();
         self.drain_intervention_runs();
@@ -530,6 +624,7 @@ impl TyphooNApp {
         }
         let mut show_backtest = self.show_backtest;
         let mut workflow_commands = Vec::new();
+        let mut comparison_install = None;
         egui::Window::new("Backtest Engine")
             .open(&mut show_backtest)
             .resizable(true)
@@ -565,6 +660,30 @@ impl TyphooNApp {
                     if loading {
                         ui.spinner();
                     }
+                    let comparison_loading = self.strategy_comparison_load_state.is_busy();
+                    if ui
+                        .add_enabled(
+                            !comparison_loading && n_bars > 0,
+                            egui::Button::new("Compare verified pairs…"),
+                        )
+                        .on_hover_text(
+                            "Select 2-4 complete report/simulation pairs; the first selected artifact is the baseline",
+                        )
+                        .clicked()
+                    {
+                        self.start_strategy_comparison_load(ctx);
+                    }
+                    if ui
+                        .add_enabled(comparison_loading, egui::Button::new("Cancel comparison"))
+                        .clicked()
+                    {
+                        self.strategy_comparison_load_state.cancel();
+                        self.strategy_comparison_rx = None;
+                        self.strategy_comparison_status = "Comparison load cancelled".into();
+                    }
+                    if comparison_loading {
+                        ui.spinner();
+                    }
                     if let Some(chart_tab) = self.strategy_result_chart_tab
                         && chart_tab != self.active_tab
                         && ui.button("Focus report chart").clicked()
@@ -582,6 +701,20 @@ impl TyphooNApp {
                     };
                     ui.label(
                         egui::RichText::new(&self.strategy_result_status)
+                            .color(color)
+                            .small(),
+                    );
+                }
+                if !self.strategy_comparison_status.is_empty() {
+                    let color = if self.strategy_comparison_status.starts_with("Error:") {
+                        DOWN
+                    } else if self.strategy_comparison_load_state.is_busy() {
+                        egui::Color32::from_rgb(255, 200, 50)
+                    } else {
+                        UP
+                    };
+                    ui.label(
+                        egui::RichText::new(&self.strategy_comparison_status)
                             .color(color)
                             .small(),
                     );
@@ -951,8 +1084,36 @@ impl TyphooNApp {
                         );
                     }
                 }
+                if let Some(comparison) = self.strategy_comparison.as_ref()
+                    && strategy_report_view::render_comparison(
+                        ui,
+                        comparison,
+                        &mut self.strategy_comparison_selected_run,
+                    )
+                {
+                    comparison_install = strategy_report_view::comparison_run_to_install(
+                        comparison,
+                        self.strategy_comparison_selected_run,
+                    );
+                }
             });
         self.show_backtest = show_backtest;
+        if let Some(view) = comparison_install {
+            self.replay_active = false;
+            self.replay_playing = false;
+            self.strategy_result_selected_trade = None;
+            self.strategy_result_chart_tab = Some(self.active_tab);
+            self.strategy_result_status = format!(
+                "Installed comparison run {} / report {} on existing viewer and chart overlay",
+                view.run_id.get(..8).unwrap_or(&view.run_id),
+                view.report_id.get(..8).unwrap_or(&view.report_id)
+            );
+            self.strategy_result_workflow = strategy_report_view::ResultWorkflowState::default();
+            self.strategy_result_view = Some(view);
+            if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                chart.cached_trade_overlay_frame = 0;
+            }
+        }
         for command in workflow_commands {
             self.start_strategy_workflow_command(ctx, command);
         }

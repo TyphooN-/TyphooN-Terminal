@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt;
 
-pub const REPORT_ARTIFACT_SCHEMA_VERSION: u32 = 1;
+pub const REPORT_ARTIFACT_SCHEMA_VERSION_V1: u32 = 1;
+pub const REPORT_ARTIFACT_SCHEMA_VERSION: u32 = 2;
 pub const MAX_REPORT_ARTIFACT_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_REPORT_COLLECTION_ITEMS: usize = 1_000_000;
 const REPORT_ID_DOMAIN: &[u8] = b"typhoon.strategy_report.report_id.v1";
@@ -26,6 +27,8 @@ pub struct StrategyReportArtifact {
     schema_version: u32,
     report_id: String,
     run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_manifest: Option<StrategyRunManifest>,
     metrics_version: String,
     simulator_report_digest: String,
     simulator_event_digest: String,
@@ -38,6 +41,8 @@ struct ReportWire {
     schema_version: u32,
     report_id: String,
     run_id: String,
+    #[serde(default)]
+    run_manifest: Option<serde_json::Value>,
     metrics_version: String,
     simulator_report_digest: String,
     simulator_event_digest: String,
@@ -101,6 +106,7 @@ impl StrategyReportArtifact {
             schema_version: REPORT_ARTIFACT_SCHEMA_VERSION,
             report_id: String::new(),
             run_id: manifest.run_id().to_string(),
+            run_manifest: Some(manifest.clone()),
             metrics_version: METRICS_SCHEMA_VERSION.to_string(),
             simulator_report_digest: digest_json(SIMULATOR_REPORT_DOMAIN, simulator_report)?,
             simulator_event_digest: digest_json(SIMULATOR_EVENT_DOMAIN, &simulator_report.events)?,
@@ -123,10 +129,22 @@ impl StrategyReportArtifact {
             });
         }
         let wire: ReportWire = serde_json::from_slice(bytes).map_err(invalid_json)?;
+        let run_manifest = wire
+            .run_manifest
+            .map(|value| {
+                let bytes = serde_json::to_vec(&value).map_err(invalid_json)?;
+                StrategyRunManifest::from_json_slice(&bytes).map_err(|error| {
+                    ReportArtifactError::InvalidRunManifest {
+                        message: error.to_string(),
+                    }
+                })
+            })
+            .transpose()?;
         let artifact = Self {
             schema_version: wire.schema_version,
             report_id: wire.report_id,
             run_id: wire.run_id,
+            run_manifest,
             metrics_version: wire.metrics_version,
             simulator_report_digest: wire.simulator_report_digest,
             simulator_event_digest: wire.simulator_event_digest,
@@ -160,6 +178,12 @@ impl StrategyReportArtifact {
         &self.run_id
     }
 
+    /// Returns the manifest evidence carried by deterministic v2 artifacts.
+    /// Sealed v1 artifacts remain verifiable but did not persist this evidence.
+    pub fn run_manifest(&self) -> Option<&StrategyRunManifest> {
+        self.run_manifest.as_ref()
+    }
+
     pub fn metrics_version(&self) -> &str {
         &self.metrics_version
     }
@@ -177,7 +201,10 @@ impl StrategyReportArtifact {
     }
 
     pub fn verify(&self) -> Result<(), ReportArtifactError> {
-        if self.schema_version != REPORT_ARTIFACT_SCHEMA_VERSION {
+        if !matches!(
+            self.schema_version,
+            REPORT_ARTIFACT_SCHEMA_VERSION_V1 | REPORT_ARTIFACT_SCHEMA_VERSION
+        ) {
             return Err(ReportArtifactError::UnsupportedSchemaVersion {
                 found: self.schema_version,
                 supported: REPORT_ARTIFACT_SCHEMA_VERSION,
@@ -189,6 +216,23 @@ impl StrategyReportArtifact {
             return Err(ReportArtifactError::UnsupportedMetricsVersion {
                 found: self.metrics_version.clone(),
             });
+        }
+        match (self.schema_version, self.run_manifest.as_ref()) {
+            (REPORT_ARTIFACT_SCHEMA_VERSION_V1, None) => {}
+            (REPORT_ARTIFACT_SCHEMA_VERSION, Some(manifest)) => {
+                verify_manifest(manifest)?;
+                if manifest.run_id() != self.run_id {
+                    return Err(ReportArtifactError::RunIdMismatch {
+                        expected: self.run_id.clone(),
+                        actual: manifest.run_id().to_string(),
+                    });
+                }
+            }
+            (_, _) => {
+                return Err(ReportArtifactError::InvalidStructure {
+                    field: "run_manifest",
+                });
+            }
         }
         self.validate_structure()?;
         let actual = self.compute_report_id()?;
@@ -296,6 +340,12 @@ impl StrategyReportArtifact {
         hash_frame(&mut hasher, REPORT_ID_DOMAIN);
         hash_frame(&mut hasher, &self.schema_version.to_be_bytes());
         hash_frame(&mut hasher, self.run_id.as_bytes());
+        if let Some(manifest) = &self.run_manifest {
+            hash_frame(
+                &mut hasher,
+                &serde_json::to_vec(manifest).map_err(invalid_json)?,
+            );
+        }
         hash_frame(&mut hasher, self.metrics_version.as_bytes());
         hash_frame(&mut hasher, self.simulator_report_digest.as_bytes());
         hash_frame(&mut hasher, self.simulator_event_digest.as_bytes());
@@ -361,8 +411,8 @@ fn is_lowercase_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_REPORT_ARTIFACT_JSON_BYTES, REPORT_ARTIFACT_SCHEMA_VERSION, ReportArtifactError,
-        StrategyReportArtifact,
+        MAX_REPORT_ARTIFACT_JSON_BYTES, REPORT_ARTIFACT_SCHEMA_VERSION,
+        REPORT_ARTIFACT_SCHEMA_VERSION_V1, ReportArtifactError, StrategyReportArtifact,
     };
     use crate::core::strategy_ir::{
         DatasetBinding, RepaintAcknowledgement, RepaintQaBinding, RunBinding, StrategyRunManifest,
@@ -398,6 +448,7 @@ mod tests {
             .expect("artifact builds");
         assert_eq!(artifact.schema_version(), REPORT_ARTIFACT_SCHEMA_VERSION);
         assert_eq!(artifact.run_id(), manifest.run_id());
+        assert_eq!(artifact.run_manifest(), Some(&manifest));
         assert_eq!(artifact.metrics_version(), METRICS_SCHEMA_VERSION);
 
         // Identity is a pure function of the sealed inputs, not of build order.
@@ -433,6 +484,22 @@ mod tests {
             artifact.verify_against(&manifest, &replay),
             Err(ReportArtifactError::SimulatorDigestMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn sealed_v1_golden_bytes_and_report_identity_remain_loadable_and_unchanged() {
+        const GOLDEN: &[u8] = include_bytes!("testdata/strategy-report-v1-golden.json");
+        const REPORT_ID: &str = "1df8152d2e5e0d76db0365eb8e91f75503389de78e135d17b918244e92ac4951";
+        let artifact = StrategyReportArtifact::from_json_slice(GOLDEN).expect("sealed v1 loads");
+        assert_eq!(artifact.schema_version(), REPORT_ARTIFACT_SCHEMA_VERSION_V1);
+        assert_eq!(artifact.report_id(), REPORT_ID);
+        assert_eq!(artifact.run_manifest(), None);
+        assert_eq!(artifact.to_json_vec().expect("v1 reserializes"), GOLDEN);
+
+        let simulator = report(vec![], &[(0, 1_000.0), (DAY_NS + 1, 1_001.0)]);
+        artifact
+            .verify_against(&manifest(), &simulator)
+            .expect("v1 identity and paired simulation still verify");
     }
 
     #[test]
