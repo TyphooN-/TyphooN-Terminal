@@ -123,9 +123,10 @@ pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 3;
 
 /// Wire-format version of [`StrategyRunManifest`]. v4 binds acknowledged
-/// repaint QA artifacts into run identity; older manifests are intentionally
-/// not migrated.
-pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 4;
+/// repaint QA artifacts into run identity; v5 binds each immutable sub-bar
+/// dataset to its named parent input. Older manifests are intentionally not
+/// migrated.
+pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 5;
 
 /// Maximum encoded JSON size accepted by the sealed-artifact loading APIs.
 /// Structural limits are then enforced while sealing the decoded DTO.
@@ -139,7 +140,7 @@ const STRATEGY_ID_DOMAIN: &str = "typhoon.strategy_ir.strategy_id.v1";
 const CONFIG_ID_DOMAIN: &str = "typhoon.strategy_ir.config_id.v1";
 
 /// Domain-separation prefix for the run-id hash.
-const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v4";
+const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v5";
 
 /// Longest root-to-leaf path allowed in one [`Condition`] tree, counting the
 /// leaf. Bounds both validation recursion and the future interpreter's.
@@ -1759,6 +1760,16 @@ pub struct DatasetBinding {
     pub dataset_id: String,
 }
 
+/// One immutable finer-timeframe dataset supplying the level-3 path for a
+/// named parent input. The relationship is semantic rather than positional;
+/// declaration order is canonicalized by `parent_input_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubBarDatasetBinding {
+    pub parent_input_id: String,
+    pub dataset_id: String,
+}
+
 /// The operator disposition for one repaint QA artifact. The disposition and
 /// warning note are sealed into the run id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1783,6 +1794,9 @@ pub struct RunBinding {
     /// Named dataset inputs. Declaration order is canonicalized by `input_id`.
     /// The same immutable dataset may intentionally serve more than one role.
     pub datasets: Vec<DatasetBinding>,
+    /// Finer immutable inputs consumed by `FidelityLevel::SubBar`, canonicalized
+    /// by their semantic parent input id.
+    pub sub_bar_datasets: Vec<SubBarDatasetBinding>,
     pub strategy_id: String,
     pub config_id: String,
     /// Root seed for every derived RNG stream (§6.10).
@@ -3608,6 +3622,9 @@ fn normalize_binding(binding: &RunBinding) -> Result<RunBinding, StrategyIrError
         .datasets
         .sort_by(|left, right| left.input_id.cmp(&right.input_id));
     normalized
+        .sub_bar_datasets
+        .sort_by(|left, right| left.parent_input_id.cmp(&right.parent_input_id));
+    normalized
         .repaint_qa
         .sort_by(|left, right| left.indicator_id.cmp(&right.indicator_id));
     Ok(normalized)
@@ -3619,6 +3636,11 @@ fn compute_validated_run_id(binding: &RunBinding) -> String {
     digest.begin_seq("datasets", binding.datasets.len());
     for dataset in &binding.datasets {
         digest.tagged_text("input_id", &dataset.input_id);
+        digest.tagged_text("dataset_id", &dataset.dataset_id);
+    }
+    digest.begin_seq("sub_bar_datasets", binding.sub_bar_datasets.len());
+    for dataset in &binding.sub_bar_datasets {
+        digest.tagged_text("parent_input_id", &dataset.parent_input_id);
         digest.tagged_text("dataset_id", &dataset.dataset_id);
     }
     digest.tagged_text("strategy_id", &binding.strategy_id);
@@ -3675,6 +3697,36 @@ fn validate_binding(binding: &RunBinding) -> Result<(), StrategyIrError> {
             return Err(StrategyIrError::DuplicateId {
                 kind: RefKind::Dataset,
                 id: dataset.input_id.clone(),
+            });
+        }
+    }
+
+    check_size(
+        "binding.sub_bar_datasets",
+        binding.sub_bar_datasets.len(),
+        MAX_DATASETS_PER_RUN,
+    )?;
+    let mut seen_parents = BTreeSet::new();
+    for (index, dataset) in binding.sub_bar_datasets.iter().enumerate() {
+        check_stable_id(
+            &format!("binding.sub_bar_datasets[{index}].parent_input_id"),
+            &dataset.parent_input_id,
+        )?;
+        check_digest_id(
+            &format!("binding.sub_bar_datasets[{index}].dataset_id"),
+            &dataset.dataset_id,
+        )?;
+        if !seen_parents.insert(dataset.parent_input_id.as_str()) {
+            return Err(StrategyIrError::DuplicateId {
+                kind: RefKind::Dataset,
+                id: dataset.parent_input_id.clone(),
+            });
+        }
+        if !seen_inputs.contains(dataset.parent_input_id.as_str()) {
+            return Err(StrategyIrError::UnknownRef {
+                kind: RefKind::Dataset,
+                id: dataset.parent_input_id.clone(),
+                context: format!("sub-bar binding {}", index),
             });
         }
     }

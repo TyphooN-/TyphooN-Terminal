@@ -277,6 +277,94 @@ fn sub_bar_fidelity_uses_the_earlier_path_step_before_parent_ambiguity() {
 }
 
 #[test]
+fn sub_bar_path_requires_exact_causal_tiling_without_gaps_or_overlaps() {
+    let stream = stream_from("aaa", &[(100.0, 101.0, 99.0, 100.0)]);
+    let settings = ExecutionSettings {
+        fidelity: FidelityLevel::SubBar {
+            sub_bar_seconds: 30,
+        },
+        ..free_settings()
+    };
+    let run_path = |bars: Vec<SimBar>| {
+        run_simulation_with_paths(
+            &config(settings.clone()),
+            &SimulationSetup::default(),
+            std::slice::from_ref(&stream),
+            &[SubBarPath {
+                symbol: "aaa".into(),
+                bars,
+            }],
+            &mut OrderScript::new(vec![]),
+        )
+    };
+    let half = MINUTE_NS / 2;
+    let sub = |open_time_ns, close_time_ns| SimBar {
+        open_time_ns,
+        close_time_ns,
+        open: 100.0,
+        high: 101.0,
+        low: 99.0,
+        close: 100.0,
+        volume: 1.0,
+    };
+
+    run_path(vec![sub(0, half - 1), sub(half, MINUTE_NS - 1)])
+        .expect("an exact contiguous tiling is valid");
+    assert!(matches!(
+        run_path(vec![sub(0, half - 1), sub(half + 1, MINUTE_NS - 1)]),
+        Err(SimulationError::SubBarGap { .. })
+    ));
+    assert!(matches!(
+        run_path(vec![sub(0, half), sub(half, MINUTE_NS - 1)]),
+        Err(SimulationError::SubBarOverlap { .. })
+    ));
+    assert!(matches!(
+        run_path(vec![sub(1, half - 1), sub(half, MINUTE_NS - 1)]),
+        Err(SimulationError::SubBarGap { .. })
+    ));
+    assert!(matches!(
+        run_path(vec![sub(0, half - 1)]),
+        Err(SimulationError::SubBarGap { .. })
+    ));
+    assert!(matches!(
+        run_path(vec![
+            sub(0, half - 1),
+            sub(half, MINUTE_NS - 1),
+            sub(MINUTE_NS, MINUTE_NS + half - 1),
+        ]),
+        Err(SimulationError::SubBarNotContained { index: 2, .. })
+    ));
+    assert!(matches!(
+        run_path(vec![sub(-half, -1), sub(0, half - 1)]),
+        Err(SimulationError::SubBarNotContained { index: 0, .. })
+    ));
+    assert!(matches!(
+        run_path(vec![sub(0, half - 2), sub(half - 1, MINUTE_NS - 1)]),
+        Err(SimulationError::SubBarDurationMismatch { index: 0, .. })
+    ));
+
+    assert!(matches!(
+        run_simulation_with_paths(
+            &config(settings),
+            &SimulationSetup::default(),
+            &[stream],
+            &[
+                SubBarPath {
+                    symbol: "aaa".into(),
+                    bars: vec![sub(0, half - 1), sub(half, MINUTE_NS - 1)],
+                },
+                SubBarPath {
+                    symbol: "aaa".into(),
+                    bars: vec![sub(0, half - 1), sub(half, MINUTE_NS - 1)],
+                },
+            ],
+            &mut OrderScript::new(vec![]),
+        ),
+        Err(SimulationError::DuplicateSubBarPath { .. })
+    ));
+}
+
+#[test]
 fn financing_uses_last_committed_mark_and_reconciles_report_totals() {
     let policy = FinancingPolicy {
         day_count: DayCount::Act365Fixed,

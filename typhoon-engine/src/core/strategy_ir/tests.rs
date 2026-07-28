@@ -263,6 +263,7 @@ fn binding() -> RunBinding {
                 dataset_id: hex_id('b'),
             },
         ],
+        sub_bar_datasets: vec![],
         strategy_id: hex_id('c'),
         config_id: hex_id('d'),
         seed: 42,
@@ -271,6 +272,15 @@ fn binding() -> RunBinding {
         intervention_log_id: Some(hex_id('e')),
         repaint_qa: vec![],
     }
+}
+
+fn binding_with_sub_bars() -> RunBinding {
+    let mut binding = binding();
+    binding.sub_bar_datasets = vec![SubBarDatasetBinding {
+        parent_input_id: "primary".to_string(),
+        dataset_id: hex_id('9'),
+    }];
+    binding
 }
 
 fn ir() -> StrategyIr {
@@ -367,8 +377,8 @@ fn current_schema_identity_vectors_are_stable() {
         "cc27d29b253c9fd0b5cd7d8c8294021b76dd8a97083fc60c1128f32eaba09ce8"
     );
     assert_eq!(
-        run_id_of(&binding()),
-        "277cd003c1619a2373f9de3c772ff0205e3f640ebf732bd8c5b70548bc71f1b0"
+        run_id_of(&binding_with_sub_bars()),
+        "47a73220ca10948c2bd86b96f7b0c309b74b1ad77fe70d596e35f8d6919a6c85"
     );
 }
 
@@ -773,6 +783,23 @@ fn every_identity_bearing_binding_field_changes_the_run_id() {
     }
 }
 
+#[test]
+fn every_sub_bar_binding_field_changes_the_run_id() {
+    let baseline = run_id_of(&binding_with_sub_bars());
+
+    let mut parent_changed = binding_with_sub_bars();
+    parent_changed.sub_bar_datasets[0].parent_input_id = "confirmation".to_string();
+    assert_ne!(run_id_of(&parent_changed), baseline);
+
+    let mut id_changed = binding_with_sub_bars();
+    id_changed.sub_bar_datasets[0].dataset_id = hex_id('8');
+    assert_ne!(run_id_of(&id_changed), baseline);
+
+    let mut removed = binding_with_sub_bars();
+    removed.sub_bar_datasets.clear();
+    assert_ne!(run_id_of(&removed), baseline);
+}
+
 // ── Identity: canonical ordering ───────────────────────────────────
 
 #[test]
@@ -849,6 +876,30 @@ fn dataset_binding_declaration_order_does_not_change_the_run_id() {
     let mut swapped = binding();
     swapped.datasets.swap(0, 1);
     assert_eq!(run_id_of(&swapped), run_id_of(&binding()));
+}
+
+#[test]
+fn sub_bar_binding_declaration_order_does_not_change_the_run_id() {
+    let mut canonical = binding_with_sub_bars();
+    canonical.sub_bar_datasets.push(SubBarDatasetBinding {
+        parent_input_id: "confirmation".to_string(),
+        dataset_id: hex_id('8'),
+    });
+    let mut swapped = canonical.clone();
+    swapped.sub_bar_datasets.swap(0, 1);
+    assert_eq!(run_id_of(&swapped), run_id_of(&canonical));
+    let expected = StrategyRunManifest::build(&canonical)
+        .expect("canonical manifest")
+        .binding()
+        .sub_bar_datasets
+        .clone();
+    assert_eq!(
+        StrategyRunManifest::build(&swapped)
+            .expect("manifest")
+            .binding()
+            .sub_bar_datasets,
+        expected
+    );
 }
 
 #[test]
@@ -2189,6 +2240,7 @@ fn a_manifest_binds_a_real_strategy_and_config() {
             input_id: "primary".to_string(),
             dataset_id: hex_id('a'),
         }],
+        sub_bar_datasets: vec![],
         strategy_id: built_ir.strategy_id.clone(),
         config_id: config.config_id.clone(),
         seed: 7,
@@ -2212,9 +2264,28 @@ fn run_dataset_fixture(
     Vec<crate::broker::alpaca::Bar>,
     crate::core::strategy_dataset::DatasetManifest,
 ) {
+    run_dataset_fixture_with(
+        input_id,
+        symbol,
+        "1Day",
+        adjustment,
+        crate::core::strategy_dataset::CalendarPolicy::WeekdaysOnly,
+    )
+}
+
+fn run_dataset_fixture_with(
+    provenance_label: &str,
+    symbol: &str,
+    timeframe: &str,
+    adjustment: crate::core::strategy_dataset::AdjustmentPolicy,
+    calendar: crate::core::strategy_dataset::CalendarPolicy,
+) -> (
+    Vec<crate::broker::alpaca::Bar>,
+    crate::core::strategy_dataset::DatasetManifest,
+) {
     use crate::broker::alpaca::Bar;
     use crate::core::strategy_dataset::{
-        CalendarPolicy, DatasetManifest, DatasetManifestInput, DatasetProvenance, DatasetQaPolicy,
+        DatasetManifest, DatasetManifestInput, DatasetProvenance, DatasetQaPolicy,
     };
     let bars = vec![Bar {
         timestamp: "2024-01-02T00:00:00Z".to_string(),
@@ -2227,20 +2298,394 @@ fn run_dataset_fixture(
     let manifest = DatasetManifest::build(
         &DatasetManifestInput {
             symbol: symbol.to_string(),
-            timeframe: "1Day".to_string(),
+            timeframe: timeframe.to_string(),
             provenance: DatasetProvenance {
                 source: "fixture".to_string(),
-                venue: input_id.to_string(),
+                venue: provenance_label.to_string(),
                 pipeline: "strategy-run-test/v1".to_string(),
             },
             adjustment,
-            calendar: CalendarPolicy::WeekdaysOnly,
+            calendar,
             qa_policy: DatasetQaPolicy::default(),
         },
         &bars,
     )
     .expect("dataset manifest builds");
     (bars, manifest)
+}
+
+fn sub_bar_run_fixture() -> (
+    StrategyIr,
+    StrategyExecutionConfig,
+    Vec<crate::broker::alpaca::Bar>,
+    crate::core::strategy_dataset::DatasetManifest,
+    Vec<crate::broker::alpaca::Bar>,
+    crate::core::strategy_dataset::DatasetManifest,
+    StrategyRunManifest,
+) {
+    use crate::core::strategy_dataset::{AdjustmentPolicy, CalendarPolicy};
+
+    let strategy = ir();
+    let mut execution = settings();
+    execution.fidelity = FidelityLevel::SubBar {
+        sub_bar_seconds: 60,
+    };
+    let config = StrategyExecutionConfig::build(&execution).expect("sub-bar config builds");
+    let (parent_bars, parent) = run_dataset_fixture_with(
+        "parent-feed",
+        "AAPL",
+        "1Hour",
+        AdjustmentPolicy::Raw,
+        CalendarPolicy::WeekdaysOnly,
+    );
+    let (sub_bars, sub) = run_dataset_fixture_with(
+        "finer-derived-feed",
+        "AAPL",
+        "1Min",
+        AdjustmentPolicy::Raw,
+        CalendarPolicy::WeekdaysOnly,
+    );
+    let manifest = StrategyRunManifest::build(&RunBinding {
+        datasets: vec![DatasetBinding {
+            input_id: "primary".to_string(),
+            dataset_id: parent.dataset_id.clone(),
+        }],
+        sub_bar_datasets: vec![SubBarDatasetBinding {
+            parent_input_id: "primary".to_string(),
+            dataset_id: sub.dataset_id.clone(),
+        }],
+        strategy_id: strategy.strategy_id().to_string(),
+        config_id: config.config_id().to_string(),
+        seed: 7,
+        engine_version: "0.1.0-test".to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
+        intervention_log_id: None,
+        repaint_qa: vec![],
+    })
+    .expect("sub-bar run manifest builds");
+    (
+        strategy,
+        config,
+        parent_bars,
+        parent,
+        sub_bars,
+        sub,
+        manifest,
+    )
+}
+
+#[test]
+fn verified_sub_bar_resolution_accepts_exact_identity_with_distinct_provenance() {
+    use crate::core::strategy_run::{
+        RunDatasetInput, RunSubBarDatasetInput, assemble_verified_run_with_sub_bars,
+    };
+
+    let (strategy, config, parent_bars, parent, sub_bars, sub, manifest) = sub_bar_run_fixture();
+    assert_ne!(parent.provenance, sub.provenance);
+    let verified = assemble_verified_run_with_sub_bars(
+        &strategy,
+        &config,
+        &manifest,
+        &[RunDatasetInput {
+            input_id: "primary",
+            manifest: &parent,
+            bars: &parent_bars,
+        }],
+        &[RunSubBarDatasetInput {
+            parent_input_id: "primary",
+            manifest: &sub,
+            bars: &sub_bars,
+        }],
+    )
+    .expect("sealed finer data resolves by its parent role, not provenance equality");
+    assert_eq!(verified.sub_bar_datasets().len(), 1);
+    assert_eq!(verified.sub_bar_datasets()[0].parent_input_id(), "primary");
+}
+
+#[test]
+fn verified_sub_bar_resolution_rejects_missing_and_unexpected_parent_inputs() {
+    use crate::core::strategy_run::{
+        RunAssemblyError, RunDatasetInput, RunSubBarDatasetInput,
+        assemble_verified_run_with_sub_bars,
+    };
+
+    let (strategy, config, parent_bars, parent, sub_bars, sub, manifest) = sub_bar_run_fixture();
+    let parents = [RunDatasetInput {
+        input_id: "primary",
+        manifest: &parent,
+        bars: &parent_bars,
+    }];
+    assert!(matches!(
+        assemble_verified_run_with_sub_bars(&strategy, &config, &manifest, &parents, &[]),
+        Err(RunAssemblyError::MissingSubBarDatasetInput { parent_input_id })
+            if parent_input_id == "primary"
+    ));
+    assert!(matches!(
+        assemble_verified_run_with_sub_bars(
+            &strategy,
+            &config,
+            &manifest,
+            &parents,
+            &[
+                RunSubBarDatasetInput {
+                    parent_input_id: "primary",
+                    manifest: &sub,
+                    bars: &sub_bars,
+                },
+                RunSubBarDatasetInput {
+                    parent_input_id: "unexpected",
+                    manifest: &sub,
+                    bars: &sub_bars,
+                },
+            ],
+        ),
+        Err(RunAssemblyError::UnexpectedSubBarDatasetInput { parent_input_id })
+            if parent_input_id == "unexpected"
+    ));
+    assert!(matches!(
+        assemble_verified_run_with_sub_bars(
+            &strategy,
+            &config,
+            &manifest,
+            &parents,
+            &[
+                RunSubBarDatasetInput {
+                    parent_input_id: "primary",
+                    manifest: &sub,
+                    bars: &sub_bars,
+                },
+                RunSubBarDatasetInput {
+                    parent_input_id: "primary",
+                    manifest: &sub,
+                    bars: &sub_bars,
+                },
+            ],
+        ),
+        Err(RunAssemblyError::DuplicateSubBarDatasetInput { parent_input_id })
+            if parent_input_id == "primary"
+    ));
+}
+
+#[test]
+fn verified_sub_bar_resolution_rejects_id_and_seal_failures() {
+    use crate::core::strategy_run::{
+        RunAssemblyError, RunDatasetInput, RunSubBarDatasetInput,
+        assemble_verified_run_with_sub_bars,
+    };
+
+    let (strategy, config, parent_bars, parent, sub_bars, sub, manifest) = sub_bar_run_fixture();
+    let parents = [RunDatasetInput {
+        input_id: "primary",
+        manifest: &parent,
+        bars: &parent_bars,
+    }];
+    let mut wrong_id_binding = manifest.to_input();
+    wrong_id_binding.sub_bar_datasets[0].dataset_id = hex_id('f');
+    let wrong_id = StrategyRunManifest::build(&wrong_id_binding).expect("shape-valid binding");
+    assert!(matches!(
+        assemble_verified_run_with_sub_bars(
+            &strategy,
+            &config,
+            &wrong_id,
+            &parents,
+            &[RunSubBarDatasetInput {
+                parent_input_id: "primary",
+                manifest: &sub,
+                bars: &sub_bars,
+            }],
+        ),
+        Err(RunAssemblyError::SubBarDatasetIdMismatch { .. })
+    ));
+
+    let mut unsealed = sub.clone();
+    unsealed.manifest_id = hex_id('0');
+    assert!(matches!(
+        assemble_verified_run_with_sub_bars(
+            &strategy,
+            &config,
+            &manifest,
+            &parents,
+            &[RunSubBarDatasetInput {
+                parent_input_id: "primary",
+                manifest: &unsealed,
+                bars: &sub_bars,
+            }],
+        ),
+        Err(RunAssemblyError::InvalidSubBarDataset { .. })
+    ));
+
+    let mut tampered_bars = sub_bars.clone();
+    tampered_bars[0].close += 0.25;
+    assert!(matches!(
+        assemble_verified_run_with_sub_bars(
+            &strategy,
+            &config,
+            &manifest,
+            &parents,
+            &[RunSubBarDatasetInput {
+                parent_input_id: "primary",
+                manifest: &sub,
+                bars: &tampered_bars,
+            }],
+        ),
+        Err(RunAssemblyError::InvalidSubBarDataset { .. })
+    ));
+}
+
+#[test]
+fn verified_sub_bar_resolution_rejects_symbol_adjustment_and_calendar_mismatches() {
+    use crate::core::strategy_dataset::{AdjustmentPolicy, CalendarPolicy};
+    use crate::core::strategy_run::{
+        RunAssemblyError, RunDatasetInput, RunSubBarDatasetInput,
+        assemble_verified_run_with_sub_bars,
+    };
+
+    let (strategy, config, parent_bars, parent, _, _, manifest) = sub_bar_run_fixture();
+    let parents = [RunDatasetInput {
+        input_id: "primary",
+        manifest: &parent,
+        bars: &parent_bars,
+    }];
+    for (bars, candidate, expected) in [
+        {
+            let (bars, manifest) = run_dataset_fixture_with(
+                "symbol-feed",
+                "MSFT",
+                "1Min",
+                AdjustmentPolicy::Raw,
+                CalendarPolicy::WeekdaysOnly,
+            );
+            (bars, manifest, "symbol")
+        },
+        {
+            let (bars, manifest) = run_dataset_fixture_with(
+                "adjusted-feed",
+                "AAPL",
+                "1Min",
+                AdjustmentPolicy::SplitAdjusted,
+                CalendarPolicy::WeekdaysOnly,
+            );
+            (bars, manifest, "adjustment")
+        },
+        {
+            let (bars, manifest) = run_dataset_fixture_with(
+                "continuous-feed",
+                "AAPL",
+                "1Min",
+                AdjustmentPolicy::Raw,
+                CalendarPolicy::Continuous24x7,
+            );
+            (bars, manifest, "calendar")
+        },
+    ] {
+        let mut binding = manifest.to_input();
+        binding.sub_bar_datasets[0].dataset_id = candidate.dataset_id.clone();
+        let run_manifest = StrategyRunManifest::build(&binding).expect("candidate is bound");
+        let error = assemble_verified_run_with_sub_bars(
+            &strategy,
+            &config,
+            &run_manifest,
+            &parents,
+            &[RunSubBarDatasetInput {
+                parent_input_id: "primary",
+                manifest: &candidate,
+                bars: &bars,
+            }],
+        )
+        .expect_err("cross-dataset mismatch must fail");
+        assert!(
+            matches!(
+                (&error, expected),
+                (RunAssemblyError::SubBarSymbolMismatch { .. }, "symbol")
+                    | (
+                        RunAssemblyError::SubBarAdjustmentMismatch { .. },
+                        "adjustment"
+                    )
+                    | (RunAssemblyError::SubBarCalendarMismatch { .. }, "calendar")
+            ),
+            "unexpected {expected} error: {error}"
+        );
+    }
+}
+
+#[test]
+fn verified_sub_bar_resolution_requires_declared_fixed_and_finer_timeframes() {
+    use crate::core::strategy_dataset::{AdjustmentPolicy, CalendarPolicy};
+    use crate::core::strategy_run::{
+        RunAssemblyError, RunDatasetInput, RunSubBarDatasetInput,
+        assemble_verified_run_with_sub_bars,
+    };
+
+    let (strategy, config, parent_bars, parent, _, _, manifest) = sub_bar_run_fixture();
+    let parents = [RunDatasetInput {
+        input_id: "primary",
+        manifest: &parent,
+        bars: &parent_bars,
+    }];
+    for (timeframe, expected) in [("5Min", "declared"), ("1Month", "fixed")] {
+        let (bars, candidate) = run_dataset_fixture_with(
+            "timeframe-feed",
+            "AAPL",
+            timeframe,
+            AdjustmentPolicy::Raw,
+            CalendarPolicy::WeekdaysOnly,
+        );
+        let mut binding = manifest.to_input();
+        binding.sub_bar_datasets[0].dataset_id = candidate.dataset_id.clone();
+        let run_manifest = StrategyRunManifest::build(&binding).expect("candidate is bound");
+        let error = assemble_verified_run_with_sub_bars(
+            &strategy,
+            &config,
+            &run_manifest,
+            &parents,
+            &[RunSubBarDatasetInput {
+                parent_input_id: "primary",
+                manifest: &candidate,
+                bars: &bars,
+            }],
+        )
+        .expect_err("invalid timeframe must fail");
+        assert!(
+            matches!(
+                (&error, expected),
+                (RunAssemblyError::SubBarTimeframeMismatch { .. }, "declared")
+                    | (RunAssemblyError::UnsupportedSubBarTimeframe { .. }, "fixed")
+            ),
+            "unexpected {expected} error: {error}"
+        );
+    }
+
+    let mut same_size_settings = settings();
+    same_size_settings.fidelity = FidelityLevel::SubBar {
+        sub_bar_seconds: 3_600,
+    };
+    let same_size_config =
+        StrategyExecutionConfig::build(&same_size_settings).expect("hour fidelity builds");
+    let (bars, candidate) = run_dataset_fixture_with(
+        "same-size-feed",
+        "AAPL",
+        "1Hour",
+        AdjustmentPolicy::Raw,
+        CalendarPolicy::WeekdaysOnly,
+    );
+    let mut binding = manifest.to_input();
+    binding.config_id = same_size_config.config_id().to_string();
+    binding.sub_bar_datasets[0].dataset_id = candidate.dataset_id.clone();
+    let same_size_manifest = StrategyRunManifest::build(&binding).expect("candidate is bound");
+    assert!(matches!(
+        assemble_verified_run_with_sub_bars(
+            &strategy,
+            &same_size_config,
+            &same_size_manifest,
+            &parents,
+            &[RunSubBarDatasetInput {
+                parent_input_id: "primary",
+                manifest: &candidate,
+                bars: &bars,
+            }],
+        ),
+        Err(RunAssemblyError::SubBarTimeframeNotFiner { .. })
+    ));
 }
 
 #[test]
@@ -2282,6 +2727,7 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
             input_id: "primary".to_string(),
             dataset_id: dataset.dataset_id.clone(),
         }],
+        sub_bar_datasets: vec![],
         strategy_id: strategy.strategy_id().to_string(),
         config_id: config.config_id().to_string(),
         seed: 7,
@@ -2340,6 +2786,7 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
                 input_id: "primary".to_string(),
                 dataset_id: dataset.dataset_id.clone(),
             }],
+            sub_bar_datasets: vec![],
             strategy_id: timed_strategy.strategy_id().to_string(),
             config_id: config.config_id().to_string(),
             seed: 7,
@@ -2391,6 +2838,7 @@ fn verified_run_assembly_refuses_corporate_actions_already_baked_into_prices() {
             input_id: "primary".to_string(),
             dataset_id: dataset.dataset_id.clone(),
         }],
+        sub_bar_datasets: vec![],
         strategy_id: strategy.strategy_id().to_string(),
         config_id: config.config_id().to_string(),
         seed: 7,
@@ -2880,6 +3328,7 @@ fn verified_run_assembly_rejects_missing_duplicate_and_mixed_policy_inputs() {
                 dataset_id: dataset_b.dataset_id.clone(),
             },
         ],
+        sub_bar_datasets: vec![],
         strategy_id: strategy.strategy_id().to_string(),
         config_id: config.config_id().to_string(),
         seed: 9,

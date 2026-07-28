@@ -361,6 +361,7 @@ mod tests {
                 input_id: "primary".to_string(),
                 dataset_id: "a".repeat(64),
             }],
+            sub_bar_datasets: vec![],
             strategy_id: "b".repeat(64),
             config_id: "c".repeat(64),
             seed: 7,

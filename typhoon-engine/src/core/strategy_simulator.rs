@@ -126,6 +126,7 @@ use crate::core::strategy_ir::{
 };
 use crate::core::strategy_run::VerifiedRun;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
@@ -884,11 +885,31 @@ pub enum SimulationError {
         symbol: String,
         index: usize,
     },
-    /// A parent bar has no sub-bars, so its intrabar path is unknown while the
-    /// run claims to know it.
+    /// A parent interval is not fully tiled by consecutive sub-bars.
     SubBarGap {
         symbol: String,
+        parent_index: usize,
+        expected_open_time_ns: i64,
+        actual_open_time_ns: Option<i64>,
+    },
+    /// Two consecutive sub-bars claim the same part of a parent interval.
+    SubBarOverlap {
+        symbol: String,
+        parent_index: usize,
+        previous_index: usize,
         index: usize,
+    },
+    /// A path bar's half-open duration disagrees with the run's declared
+    /// `sub_bar_seconds` fidelity.
+    SubBarDurationMismatch {
+        symbol: String,
+        index: usize,
+        expected_ns: i64,
+        actual_ns: i64,
+    },
+    /// More than one path was supplied for the same symbol.
+    DuplicateSubBarPath {
+        symbol: String,
     },
     /// A corporate action names a symbol the run does not trade.
     UnknownCorporateActionSymbol {
@@ -995,8 +1016,38 @@ impl fmt::Display for SimulationError {
                 f,
                 "symbol `{symbol}` sub-bar {index} is not contained in a parent bar"
             ),
-            Self::SubBarGap { symbol, index } => {
-                write!(f, "symbol `{symbol}` bar {index} has no sub-bars")
+            Self::SubBarGap {
+                symbol,
+                parent_index,
+                expected_open_time_ns,
+                actual_open_time_ns,
+            } => write!(
+                f,
+                "symbol `{symbol}` parent bar {parent_index} has a sub-bar gap: expected next open {expected_open_time_ns}, got {}",
+                actual_open_time_ns
+                    .map(|time| time.to_string())
+                    .unwrap_or_else(|| "end of path".to_string())
+            ),
+            Self::SubBarOverlap {
+                symbol,
+                parent_index,
+                previous_index,
+                index,
+            } => write!(
+                f,
+                "symbol `{symbol}` sub-bars {previous_index} and {index} overlap while tiling parent bar {parent_index}"
+            ),
+            Self::SubBarDurationMismatch {
+                symbol,
+                index,
+                expected_ns,
+                actual_ns,
+            } => write!(
+                f,
+                "symbol `{symbol}` sub-bar {index} duration is {actual_ns}ns, expected {expected_ns}ns"
+            ),
+            Self::DuplicateSubBarPath { symbol } => {
+                write!(f, "duplicate sub-bar path for symbol `{symbol}`")
             }
             Self::UnknownCorporateActionSymbol { symbol } => {
                 write!(f, "corporate action names unknown symbol `{symbol}`")
@@ -2313,14 +2364,39 @@ impl Sim<'_> {
 pub enum VerifiedSimulationError {
     Interpreter(InterpreterError),
     Simulation(SimulationError),
-    UnsupportedDatasetTimeframe { input_id: String, timeframe: String },
-    InvalidDatasetTimestamp { input_id: String, timestamp: String },
-    DatasetTimeOverflow { input_id: String },
+    UnsupportedDatasetTimeframe {
+        input_id: String,
+        timeframe: String,
+    },
+    InvalidDatasetTimestamp {
+        input_id: String,
+        timestamp: String,
+    },
+    DatasetTimeOverflow {
+        input_id: String,
+    },
+    InvalidSubBarDatasetTimestamp {
+        parent_input_id: String,
+        timestamp: String,
+    },
+    SubBarDatasetTimeOverflow {
+        parent_input_id: String,
+    },
+    TooManyVerifiedSubBars {
+        limit: usize,
+        found: usize,
+    },
     InvalidInterventionLog(InterventionError),
     MissingInterventionLog,
     UnexpectedInterventionLog,
-    InterventionLogIdMismatch { expected: String, actual: String },
-    InterventionReplayIncomplete { expected: usize, applied: usize },
+    InterventionLogIdMismatch {
+        expected: String,
+        actual: String,
+    },
+    InterventionReplayIncomplete {
+        expected: usize,
+        applied: usize,
+    },
 }
 
 impl fmt::Display for VerifiedSimulationError {
@@ -2348,6 +2424,21 @@ impl fmt::Display for VerifiedSimulationError {
                     "dataset `{input_id}` bar time exceeds simulator range"
                 )
             }
+            Self::InvalidSubBarDatasetTimestamp {
+                parent_input_id,
+                timestamp,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` has invalid bar timestamp `{timestamp}`"
+            ),
+            Self::SubBarDatasetTimeOverflow { parent_input_id } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` exceeds simulator time range"
+            ),
+            Self::TooManyVerifiedSubBars { limit, found } => write!(
+                formatter,
+                "verified run materializes {found} sub-bars, limit {limit}"
+            ),
             Self::InvalidInterventionLog(error) => write!(formatter, "intervention log: {error}"),
             Self::MissingInterventionLog => formatter.write_str(
                 "run manifest binds an intervention log, but none was supplied for replay",
@@ -2421,10 +2512,11 @@ pub fn run_verified_simulation_with_intervention(
     let setup = SimulationSetup::from_verified_run(run);
     let mut strategy =
         CanonicalIrStrategy::new(run.strategy()).map_err(VerifiedSimulationError::Interpreter)?;
-    let streams = verified_streams(run)?;
+    let (streams, sub_bar_paths) = verified_streams_and_paths(run)?;
     let mut replay = HybridReplay::new(&mut strategy, log);
-    let report = run_simulation(run.config(), &setup, &streams, &mut replay)
-        .map_err(VerifiedSimulationError::Simulation)?;
+    let report =
+        run_simulation_with_paths(run.config(), &setup, &streams, &sub_bar_paths, &mut replay)
+            .map_err(VerifiedSimulationError::Simulation)?;
     if replay.applied() != log.interventions().len() {
         return Err(VerifiedSimulationError::InterventionReplayIncomplete {
             expected: log.interventions().len(),
@@ -2440,12 +2532,121 @@ fn run_verified_automated_simulation(
     let setup = SimulationSetup::from_verified_run(run);
     let mut strategy =
         CanonicalIrStrategy::new(run.strategy()).map_err(VerifiedSimulationError::Interpreter)?;
+    let (streams, sub_bar_paths) = verified_streams_and_paths(run)?;
+    run_simulation_with_paths(
+        run.config(),
+        &setup,
+        &streams,
+        &sub_bar_paths,
+        &mut strategy,
+    )
+    .map_err(VerifiedSimulationError::Simulation)
+}
+
+fn verified_streams_and_paths(
+    run: &VerifiedRun<'_>,
+) -> Result<(Vec<SymbolStream>, Vec<SubBarPath>), VerifiedSimulationError> {
     let streams = verified_streams(run)?;
-    run_simulation(run.config(), &setup, &streams, &mut strategy)
-        .map_err(VerifiedSimulationError::Simulation)
+    let total = run
+        .sub_bar_datasets()
+        .iter()
+        .try_fold(0usize, |total, dataset| {
+            total.checked_add(dataset.bars.len())
+        })
+        .unwrap_or(usize::MAX);
+    if total > MAX_TOTAL_SUB_BARS {
+        return Err(VerifiedSimulationError::TooManyVerifiedSubBars {
+            limit: MAX_TOTAL_SUB_BARS,
+            found: total,
+        });
+    }
+    let mut paths = Vec::with_capacity(run.sub_bar_datasets().len());
+    for parent in run.datasets() {
+        let Some(dataset) = run
+            .sub_bar_datasets()
+            .iter()
+            .find(|dataset| dataset.parent_input_id() == parent.input_id())
+        else {
+            continue;
+        };
+        let step_seconds = fixed_timeframe_seconds(&dataset.manifest.timeframe)
+            .expect("verified run assembly accepts only fixed sub-bar timeframes");
+        let step_ns = step_seconds.checked_mul(1_000_000_000).ok_or_else(|| {
+            VerifiedSimulationError::SubBarDatasetTimeOverflow {
+                parent_input_id: dataset.parent_input_id().to_string(),
+            }
+        })?;
+        let bars = dataset
+            .bars
+            .iter()
+            .map(|bar| {
+                let open_time_ns = chrono::DateTime::parse_from_rfc3339(&bar.timestamp)
+                    .ok()
+                    .and_then(|stamp| stamp.timestamp_nanos_opt())
+                    .ok_or_else(|| VerifiedSimulationError::InvalidSubBarDatasetTimestamp {
+                        parent_input_id: dataset.parent_input_id().to_string(),
+                        timestamp: bar.timestamp.clone(),
+                    })?;
+                let close_time_ns = open_time_ns
+                    .checked_add(step_ns)
+                    .and_then(|time| time.checked_sub(1))
+                    .ok_or_else(|| VerifiedSimulationError::SubBarDatasetTimeOverflow {
+                        parent_input_id: dataset.parent_input_id().to_string(),
+                    })?;
+                Ok(SimBar {
+                    open_time_ns,
+                    close_time_ns,
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume,
+                })
+            })
+            .collect::<Result<Vec<_>, VerifiedSimulationError>>()?;
+        paths.push(SubBarPath {
+            symbol: parent.manifest.symbol.clone(),
+            bars,
+        });
+    }
+    Ok((streams, paths))
 }
 
 fn verified_streams(run: &VerifiedRun<'_>) -> Result<Vec<SymbolStream>, VerifiedSimulationError> {
+    if run.datasets().len() > MAX_SYMBOLS {
+        return Err(VerifiedSimulationError::Simulation(
+            SimulationError::TooManySymbols {
+                limit: MAX_SYMBOLS,
+                found: run.datasets().len(),
+            },
+        ));
+    }
+    let total_bars = run
+        .datasets()
+        .iter()
+        .try_fold(0usize, |total, dataset| {
+            total.checked_add(dataset.bars.len())
+        })
+        .unwrap_or(usize::MAX);
+    if total_bars > MAX_TOTAL_BARS {
+        return Err(VerifiedSimulationError::Simulation(
+            SimulationError::TooManyTotalBars {
+                limit: MAX_TOTAL_BARS,
+                found: total_bars,
+            },
+        ));
+    }
+    for dataset in run.datasets() {
+        if dataset.bars.len() > MAX_BARS_PER_SYMBOL {
+            return Err(VerifiedSimulationError::Simulation(
+                SimulationError::TooManyBars {
+                    symbol: dataset.manifest.symbol.clone(),
+                    limit: MAX_BARS_PER_SYMBOL,
+                    found: dataset.bars.len(),
+                },
+            ));
+        }
+    }
     run.datasets()
         .iter()
         .map(|dataset| {
@@ -2691,8 +2892,13 @@ fn validate_sub_bars(
     paths: &[SubBarPath],
     fidelity: FidelityLevel,
 ) -> Result<SubBarBinding, SimulationError> {
-    let wants_path = matches!(fidelity, FidelityLevel::SubBar { .. });
-    if !wants_path {
+    let expected_step_ns = match fidelity {
+        FidelityLevel::SubBar { sub_bar_seconds } => {
+            Some(i64::from(sub_bar_seconds) * NANOS_PER_SECOND)
+        }
+        _ => None,
+    };
+    if expected_step_ns.is_none() {
         if let Some(path) = paths.first() {
             return Err(SimulationError::UnexpectedSubBarPath {
                 symbol: path.symbol.clone(),
@@ -2704,14 +2910,23 @@ fn validate_sub_bars(
         ));
     }
 
-    let total: usize = paths.iter().map(|path| path.bars.len()).sum();
+    let total = paths
+        .iter()
+        .try_fold(0usize, |total, path| total.checked_add(path.bars.len()))
+        .unwrap_or(usize::MAX);
     if total > MAX_TOTAL_SUB_BARS {
         return Err(SimulationError::TooManySubBars {
             limit: MAX_TOTAL_SUB_BARS,
             found: total,
         });
     }
+    let mut seen_paths = BTreeSet::new();
     for path in paths {
+        if !seen_paths.insert(path.symbol.as_str()) {
+            return Err(SimulationError::DuplicateSubBarPath {
+                symbol: path.symbol.clone(),
+            });
+        }
         if !streams.iter().any(|stream| stream.symbol == path.symbol) {
             return Err(SimulationError::UnknownSubBarSymbol {
                 symbol: path.symbol.clone(),
@@ -2727,25 +2942,34 @@ fn validate_sub_bars(
                 symbol: stream.symbol.clone(),
             });
         };
-        // A sub-bar path is validated as a bar series in its own right first,
-        // so a malformed OHLC row cannot reach execution through the back door.
-        let checked = validate_inputs(&[SymbolStream {
-            symbol: stream.symbol.clone(),
-            bars: path.bars.clone(),
-        }])?;
-        let sub = checked.into_iter().next().expect("one stream in, one out");
+        validate_sub_bar_path(stream, path)?;
+        let sub = &path.bars;
+        let expected_step_ns = expected_step_ns.expect("sub-bar fidelity supplies a duration");
 
         let mut ranges = Vec::with_capacity(stream.bars.len());
         let mut cursor = 0usize;
-        for (bar_index, parent) in stream.bars.iter().enumerate() {
+        for (parent_index, parent) in stream.bars.iter().enumerate() {
             let start = cursor;
-            while cursor < sub.bars.len() {
-                let candidate = sub.bars[cursor];
-                if candidate.open_time_ns > parent.close_time_ns {
+            let mut expected_open_time_ns = parent.open_time_ns;
+            let parent_end = parent.close_time_ns.checked_add(1).ok_or_else(|| {
+                SimulationError::SubBarNotContained {
+                    symbol: stream.symbol.clone(),
+                    index: cursor,
+                }
+            })?;
+            while cursor < sub.len() {
+                let candidate = sub[cursor];
+                if candidate.open_time_ns >= parent_end {
                     break;
                 }
-                let inside_time = candidate.open_time_ns >= parent.open_time_ns
-                    && candidate.close_time_ns <= parent.close_time_ns;
+                let candidate_end = candidate.close_time_ns.checked_add(1).ok_or_else(|| {
+                    SimulationError::SubBarNotContained {
+                        symbol: stream.symbol.clone(),
+                        index: cursor,
+                    }
+                })?;
+                let inside_time =
+                    candidate.open_time_ns >= parent.open_time_ns && candidate_end <= parent_end;
                 let inside_price = candidate.high <= parent.high && candidate.low >= parent.low;
                 if !inside_time || !inside_price {
                     return Err(SimulationError::SubBarNotContained {
@@ -2753,26 +2977,113 @@ fn validate_sub_bars(
                         index: cursor,
                     });
                 }
+                if candidate.open_time_ns > expected_open_time_ns {
+                    return Err(SimulationError::SubBarGap {
+                        symbol: stream.symbol.clone(),
+                        parent_index,
+                        expected_open_time_ns,
+                        actual_open_time_ns: Some(candidate.open_time_ns),
+                    });
+                }
+                if candidate.open_time_ns < expected_open_time_ns {
+                    return Err(SimulationError::SubBarOverlap {
+                        symbol: stream.symbol.clone(),
+                        parent_index,
+                        previous_index: cursor.saturating_sub(1),
+                        index: cursor,
+                    });
+                }
+                let actual_ns = candidate_end
+                    .checked_sub(candidate.open_time_ns)
+                    .ok_or_else(|| SimulationError::SubBarNotContained {
+                        symbol: stream.symbol.clone(),
+                        index: cursor,
+                    })?;
+                if actual_ns != expected_step_ns {
+                    return Err(SimulationError::SubBarDurationMismatch {
+                        symbol: stream.symbol.clone(),
+                        index: cursor,
+                        expected_ns: expected_step_ns,
+                        actual_ns,
+                    });
+                }
+                expected_open_time_ns = candidate_end;
                 cursor += 1;
             }
-            if cursor == start {
+            if expected_open_time_ns != parent_end {
                 return Err(SimulationError::SubBarGap {
                     symbol: stream.symbol.clone(),
-                    index: bar_index,
+                    parent_index,
+                    expected_open_time_ns,
+                    actual_open_time_ns: sub.get(cursor).map(|bar| bar.open_time_ns),
                 });
             }
             ranges.push((start, cursor));
         }
-        if cursor != sub.bars.len() {
+        if cursor != sub.len() {
             return Err(SimulationError::SubBarNotContained {
                 symbol: stream.symbol.clone(),
                 index: cursor,
             });
         }
-        bars_by_symbol.push(sub.bars);
+        // The path has passed the global hard cap before this sole ownership
+        // clone. Validation above operates on the borrowed bars and therefore
+        // cannot amplify an untrusted path before its size is bounded.
+        bars_by_symbol.push(sub.to_vec());
         index_by_symbol.push(ranges);
     }
     Ok((bars_by_symbol, index_by_symbol))
+}
+
+fn validate_sub_bar_path(stream: &SymbolStream, path: &SubBarPath) -> Result<(), SimulationError> {
+    for (index, bar) in path.bars.iter().enumerate() {
+        if ![bar.open, bar.high, bar.low, bar.close, bar.volume]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(SimulationError::NonFiniteBar {
+                symbol: stream.symbol.clone(),
+                index,
+            });
+        }
+        let defect = if bar.close_time_ns <= bar.open_time_ns {
+            Some(BarDefect::NonPositiveDuration)
+        } else if bar.open <= 0.0 || bar.high <= 0.0 || bar.low <= 0.0 || bar.close <= 0.0 {
+            Some(BarDefect::NonPositivePrice)
+        } else if bar.volume < 0.0 {
+            Some(BarDefect::NegativeVolume)
+        } else if bar.high < bar.low {
+            Some(BarDefect::HighBelowLow)
+        } else if bar.open < bar.low || bar.open > bar.high {
+            Some(BarDefect::OpenOutsideRange)
+        } else if bar.close < bar.low || bar.close > bar.high {
+            Some(BarDefect::CloseOutsideRange)
+        } else {
+            None
+        };
+        if let Some(defect) = defect {
+            return Err(SimulationError::InconsistentBar {
+                symbol: stream.symbol.clone(),
+                index,
+                defect,
+            });
+        }
+        if index > 0 && bar.open_time_ns <= path.bars[index - 1].close_time_ns {
+            let open = bar.open_time_ns;
+            let parent_index = stream
+                .bars
+                .iter()
+                .position(|parent| open >= parent.open_time_ns && open <= parent.close_time_ns)
+                .unwrap_or(0);
+            return Err(SimulationError::SubBarOverlap {
+                symbol: stream.symbol.clone(),
+                parent_index,
+                previous_index: index - 1,
+                index,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Lay down every bar-driven event up front. Ties inside one `(time, priority)`

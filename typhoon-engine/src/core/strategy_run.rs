@@ -10,7 +10,7 @@ use crate::broker::alpaca::Bar;
 use crate::core::strategy_dataset::{AdjustmentPolicy, DatasetError, DatasetManifest};
 use crate::core::strategy_intervention::InterventionLog;
 use crate::core::strategy_ir::{
-    RepaintAcknowledgement, StrategyExecutionConfig, StrategyIr, StrategyIrError,
+    FidelityLevel, RepaintAcknowledgement, StrategyExecutionConfig, StrategyIr, StrategyIrError,
     StrategyRunManifest,
 };
 use crate::core::strategy_repaint::{RepaintQaArtifact, RepaintQaArtifactError};
@@ -19,6 +19,15 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy)]
 pub struct RunDatasetInput<'a> {
     pub input_id: &'a str,
+    pub manifest: &'a DatasetManifest,
+    pub bars: &'a [Bar],
+}
+
+/// The sealed finer-timeframe record bound to one named parent dataset input.
+/// `parent_input_id` is a semantic join key, not another strategy input.
+#[derive(Debug, Clone, Copy)]
+pub struct RunSubBarDatasetInput<'a> {
+    pub parent_input_id: &'a str,
     pub manifest: &'a DatasetManifest,
     pub bars: &'a [Bar],
 }
@@ -45,6 +54,15 @@ pub enum RunAssemblyError {
     UnexpectedDatasetInput {
         input_id: String,
     },
+    DuplicateSubBarDatasetInput {
+        parent_input_id: String,
+    },
+    MissingSubBarDatasetInput {
+        parent_input_id: String,
+    },
+    UnexpectedSubBarDatasetInput {
+        parent_input_id: String,
+    },
     DatasetIdMismatch {
         input_id: String,
         expected: String,
@@ -53,6 +71,46 @@ pub enum RunAssemblyError {
     InvalidDataset {
         input_id: String,
         source: DatasetError,
+    },
+    SubBarDatasetIdMismatch {
+        parent_input_id: String,
+        expected: String,
+        actual: String,
+    },
+    InvalidSubBarDataset {
+        parent_input_id: String,
+        source: DatasetError,
+    },
+    SubBarFidelityMismatch {
+        detail: String,
+    },
+    SubBarSymbolMismatch {
+        parent_input_id: String,
+        expected: String,
+        actual: String,
+    },
+    SubBarAdjustmentMismatch {
+        parent_input_id: String,
+        expected: AdjustmentPolicy,
+        actual: AdjustmentPolicy,
+    },
+    SubBarCalendarMismatch {
+        parent_input_id: String,
+    },
+
+    UnsupportedSubBarTimeframe {
+        parent_input_id: String,
+        timeframe: String,
+    },
+    SubBarTimeframeMismatch {
+        parent_input_id: String,
+        expected_seconds: u32,
+        actual_seconds: u64,
+    },
+    SubBarTimeframeNotFiner {
+        parent_input_id: String,
+        parent_timeframe: String,
+        sub_bar_timeframe: String,
     },
     MixedAdjustmentPolicy {
         input_id: String,
@@ -117,6 +175,18 @@ impl std::fmt::Display for RunAssemblyError {
             Self::UnexpectedDatasetInput { input_id } => {
                 write!(formatter, "unexpected dataset input `{input_id}`")
             }
+            Self::DuplicateSubBarDatasetInput { parent_input_id } => write!(
+                formatter,
+                "duplicate sub-bar dataset input for parent `{parent_input_id}`"
+            ),
+            Self::MissingSubBarDatasetInput { parent_input_id } => write!(
+                formatter,
+                "missing sub-bar dataset input for parent `{parent_input_id}`"
+            ),
+            Self::UnexpectedSubBarDatasetInput { parent_input_id } => write!(
+                formatter,
+                "unexpected sub-bar dataset input for parent `{parent_input_id}`"
+            ),
             Self::DatasetIdMismatch {
                 input_id,
                 expected,
@@ -128,6 +198,71 @@ impl std::fmt::Display for RunAssemblyError {
             Self::InvalidDataset { input_id, source } => {
                 write!(formatter, "dataset input `{input_id}` is invalid: {source}")
             }
+            Self::SubBarDatasetIdMismatch {
+                parent_input_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` id mismatch: expected {expected}, got {actual}"
+            ),
+            Self::InvalidSubBarDataset {
+                parent_input_id,
+                source,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` is invalid: {source}"
+            ),
+            Self::SubBarFidelityMismatch { detail } => write!(
+                formatter,
+                "sub-bar dataset bindings contradict execution fidelity: {detail}"
+            ),
+            Self::SubBarSymbolMismatch {
+                parent_input_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` has symbol `{actual}`, expected `{expected}`"
+            ),
+            Self::SubBarAdjustmentMismatch {
+                parent_input_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` uses adjustment `{}`, expected `{}`",
+                actual.wire_id(),
+                expected.wire_id()
+            ),
+            Self::SubBarCalendarMismatch { parent_input_id } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` uses a different calendar policy"
+            ),
+
+            Self::UnsupportedSubBarTimeframe {
+                parent_input_id,
+                timeframe,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` has unsupported fixed timeframe `{timeframe}`"
+            ),
+            Self::SubBarTimeframeMismatch {
+                parent_input_id,
+                expected_seconds,
+                actual_seconds,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` is {actual_seconds}s, but fidelity binds {expected_seconds}s"
+            ),
+            Self::SubBarTimeframeNotFiner {
+                parent_input_id,
+                parent_timeframe,
+                sub_bar_timeframe,
+            } => write!(
+                formatter,
+                "sub-bar dataset for parent `{parent_input_id}` timeframe `{sub_bar_timeframe}` is not finer than parent timeframe `{parent_timeframe}`"
+            ),
             Self::MixedAdjustmentPolicy {
                 input_id,
                 expected,
@@ -209,6 +344,7 @@ pub struct VerifiedRun<'a> {
     config: &'a StrategyExecutionConfig,
     manifest: &'a StrategyRunManifest,
     datasets: Vec<RunDatasetInput<'a>>,
+    sub_bar_datasets: Vec<RunSubBarDatasetInput<'a>>,
     intervention_log: Option<&'a InterventionLog>,
     repaint_qa_artifacts: Vec<&'a RepaintQaArtifact>,
 }
@@ -234,6 +370,10 @@ impl<'a> VerifiedRun<'a> {
         &self.datasets
     }
 
+    pub fn sub_bar_datasets(&self) -> &[RunSubBarDatasetInput<'a>] {
+        &self.sub_bar_datasets
+    }
+
     pub fn intervention_log(&self) -> Option<&'a InterventionLog> {
         self.intervention_log
     }
@@ -249,13 +389,38 @@ impl RunDatasetInput<'_> {
     }
 }
 
+impl RunSubBarDatasetInput<'_> {
+    pub fn parent_input_id(&self) -> &str {
+        self.parent_input_id
+    }
+}
+
 pub fn assemble_verified_run<'a>(
     strategy: &'a StrategyIr,
     config: &'a StrategyExecutionConfig,
     manifest: &'a StrategyRunManifest,
     datasets: &[RunDatasetInput<'a>],
 ) -> Result<VerifiedRun<'a>, RunAssemblyError> {
-    assemble_verified_run_with_artifacts(strategy, config, manifest, datasets, None, &[])
+    assemble_verified_run_with_all_artifacts(strategy, config, manifest, datasets, &[], None, &[])
+}
+
+/// Resolve an automated run together with every bound finer-timeframe record.
+pub fn assemble_verified_run_with_sub_bars<'a>(
+    strategy: &'a StrategyIr,
+    config: &'a StrategyExecutionConfig,
+    manifest: &'a StrategyRunManifest,
+    datasets: &[RunDatasetInput<'a>],
+    sub_bar_datasets: &[RunSubBarDatasetInput<'a>],
+) -> Result<VerifiedRun<'a>, RunAssemblyError> {
+    assemble_verified_run_with_all_artifacts(
+        strategy,
+        config,
+        manifest,
+        datasets,
+        sub_bar_datasets,
+        None,
+        &[],
+    )
 }
 
 /// Resolves a run and, for a hybrid manifest, proves that the supplied sealed
@@ -267,11 +432,12 @@ pub fn assemble_verified_run_with_intervention<'a>(
     datasets: &[RunDatasetInput<'a>],
     intervention_log: Option<&'a InterventionLog>,
 ) -> Result<VerifiedRun<'a>, RunAssemblyError> {
-    assemble_verified_run_with_artifacts(
+    assemble_verified_run_with_all_artifacts(
         strategy,
         config,
         manifest,
         datasets,
+        &[],
         intervention_log,
         &[],
     )
@@ -283,6 +449,28 @@ pub fn assemble_verified_run_with_artifacts<'a>(
     config: &'a StrategyExecutionConfig,
     manifest: &'a StrategyRunManifest,
     datasets: &[RunDatasetInput<'a>],
+    intervention_log: Option<&'a InterventionLog>,
+    repaint_qa_artifacts: &[&'a RepaintQaArtifact],
+) -> Result<VerifiedRun<'a>, RunAssemblyError> {
+    assemble_verified_run_with_all_artifacts(
+        strategy,
+        config,
+        manifest,
+        datasets,
+        &[],
+        intervention_log,
+        repaint_qa_artifacts,
+    )
+}
+
+/// Resolves every identity-bearing artifact required by a run, including the
+/// immutable finer-timeframe records consumed by level-3 execution.
+pub fn assemble_verified_run_with_all_artifacts<'a>(
+    strategy: &'a StrategyIr,
+    config: &'a StrategyExecutionConfig,
+    manifest: &'a StrategyRunManifest,
+    datasets: &[RunDatasetInput<'a>],
+    sub_bar_datasets: &[RunSubBarDatasetInput<'a>],
     intervention_log: Option<&'a InterventionLog>,
     repaint_qa_artifacts: &[&'a RepaintQaArtifact],
 ) -> Result<VerifiedRun<'a>, RunAssemblyError> {
@@ -423,6 +611,123 @@ pub fn assemble_verified_run_with_artifacts<'a>(
         });
     }
 
+    let sub_bar_seconds = match config.settings().fidelity {
+        FidelityLevel::SubBar { sub_bar_seconds } => {
+            if binding.sub_bar_datasets.len() != binding.datasets.len() {
+                return Err(RunAssemblyError::SubBarFidelityMismatch {
+                    detail: format!(
+                        "sub-bar fidelity requires exactly one binding for each of {} parent inputs, found {}",
+                        binding.datasets.len(),
+                        binding.sub_bar_datasets.len()
+                    ),
+                });
+            }
+            Some(sub_bar_seconds)
+        }
+        _ => {
+            if !binding.sub_bar_datasets.is_empty() {
+                return Err(RunAssemblyError::SubBarFidelityMismatch {
+                    detail:
+                        "the run binds sub-bar datasets at a fidelity that does not consume them"
+                            .to_string(),
+                });
+            }
+            None
+        }
+    };
+
+    let mut supplied_sub_bars = BTreeMap::new();
+    for dataset in sub_bar_datasets {
+        if supplied_sub_bars
+            .insert(dataset.parent_input_id, *dataset)
+            .is_some()
+        {
+            return Err(RunAssemblyError::DuplicateSubBarDatasetInput {
+                parent_input_id: dataset.parent_input_id.to_string(),
+            });
+        }
+    }
+    let mut resolved_sub_bars = Vec::with_capacity(binding.sub_bar_datasets.len());
+    for expected in &binding.sub_bar_datasets {
+        let Some(dataset) = supplied_sub_bars.remove(expected.parent_input_id.as_str()) else {
+            return Err(RunAssemblyError::MissingSubBarDatasetInput {
+                parent_input_id: expected.parent_input_id.clone(),
+            });
+        };
+        dataset.manifest.verify(dataset.bars).map_err(|source| {
+            RunAssemblyError::InvalidSubBarDataset {
+                parent_input_id: expected.parent_input_id.clone(),
+                source,
+            }
+        })?;
+        if dataset.manifest.dataset_id != expected.dataset_id {
+            return Err(RunAssemblyError::SubBarDatasetIdMismatch {
+                parent_input_id: expected.parent_input_id.clone(),
+                expected: expected.dataset_id.clone(),
+                actual: dataset.manifest.dataset_id.clone(),
+            });
+        }
+        let parent = resolved
+            .iter()
+            .find(|parent| parent.input_id == expected.parent_input_id)
+            .expect("run binding validation proved the parent exists");
+        if dataset.manifest.symbol != parent.manifest.symbol {
+            return Err(RunAssemblyError::SubBarSymbolMismatch {
+                parent_input_id: expected.parent_input_id.clone(),
+                expected: parent.manifest.symbol.clone(),
+                actual: dataset.manifest.symbol.clone(),
+            });
+        }
+        if dataset.manifest.adjustment != parent.manifest.adjustment {
+            return Err(RunAssemblyError::SubBarAdjustmentMismatch {
+                parent_input_id: expected.parent_input_id.clone(),
+                expected: parent.manifest.adjustment,
+                actual: dataset.manifest.adjustment,
+            });
+        }
+        if dataset.manifest.calendar != parent.manifest.calendar {
+            return Err(RunAssemblyError::SubBarCalendarMismatch {
+                parent_input_id: expected.parent_input_id.clone(),
+            });
+        }
+        let actual_seconds =
+            fixed_timeframe_seconds(&dataset.manifest.timeframe).ok_or_else(|| {
+                RunAssemblyError::UnsupportedSubBarTimeframe {
+                    parent_input_id: expected.parent_input_id.clone(),
+                    timeframe: dataset.manifest.timeframe.clone(),
+                }
+            })?;
+        let expected_seconds = sub_bar_seconds.expect("bindings require sub-bar fidelity");
+        if actual_seconds != u64::from(expected_seconds) {
+            return Err(RunAssemblyError::SubBarTimeframeMismatch {
+                parent_input_id: expected.parent_input_id.clone(),
+                expected_seconds,
+                actual_seconds,
+            });
+        }
+        let parent_seconds =
+            fixed_timeframe_seconds(&parent.manifest.timeframe).ok_or_else(|| {
+                RunAssemblyError::SubBarTimeframeNotFiner {
+                    parent_input_id: expected.parent_input_id.clone(),
+                    parent_timeframe: parent.manifest.timeframe.clone(),
+                    sub_bar_timeframe: dataset.manifest.timeframe.clone(),
+                }
+            })?;
+        if actual_seconds >= parent_seconds {
+            return Err(RunAssemblyError::SubBarTimeframeNotFiner {
+                parent_input_id: expected.parent_input_id.clone(),
+                parent_timeframe: parent.manifest.timeframe.clone(),
+                sub_bar_timeframe: dataset.manifest.timeframe.clone(),
+            });
+        }
+        resolved_sub_bars.push(dataset);
+    }
+    if let Some((parent_input_id, _)) = supplied_sub_bars.into_iter().next() {
+        return Err(RunAssemblyError::UnexpectedSubBarDatasetInput {
+            parent_input_id: parent_input_id.to_string(),
+        });
+    }
+
     // §6.8: the adjustment policy and event schedule are two representations
     // of the same economics. This check belongs at verified assembly, where the
     // identity-bound datasets and execution config are finally both present;
@@ -441,7 +746,29 @@ pub fn assemble_verified_run_with_artifacts<'a>(
         config,
         manifest,
         datasets: resolved,
+        sub_bar_datasets: resolved_sub_bars,
         intervention_log,
         repaint_qa_artifacts: resolved_qa,
     })
+}
+
+fn fixed_timeframe_seconds(timeframe: &str) -> Option<u64> {
+    let digits = timeframe
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(timeframe.len());
+    if digits == 0 {
+        return None;
+    }
+    let count = timeframe[..digits].parse::<u64>().ok()?;
+    if count == 0 {
+        return None;
+    }
+    let unit = match &timeframe[digits..] {
+        "Min" => 60,
+        "Hour" => 3_600,
+        "Day" => 86_400,
+        "Week" => 604_800,
+        _ => return None,
+    };
+    count.checked_mul(unit)
 }
