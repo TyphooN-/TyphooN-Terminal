@@ -26,6 +26,7 @@ pub mod strategy_dataset_store;
 pub mod strategy_dataset_worker;
 pub mod strategy_fees;
 pub mod strategy_interpreter;
+pub mod strategy_intervention;
 pub mod strategy_ir;
 pub mod strategy_metrics;
 pub mod strategy_protective;
