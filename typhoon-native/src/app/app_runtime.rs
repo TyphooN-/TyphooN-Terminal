@@ -34,6 +34,9 @@ fn report_slow_pre_broker_ticks(ticks: &[(&'static str, f32)]) {
 }
 impl eframe::App for TyphooNApp {
     fn on_exit(&mut self) {
+        if let Some(worker) = self.strategy_run_worker.take() {
+            worker.shutdown();
+        }
         self.ui_repaint_wake_alive
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.save_session();
@@ -61,8 +64,8 @@ impl eframe::App for TyphooNApp {
         // frame. When rendering stops, the gap grows past the vendored-eframe
         // starvation threshold (1s); 2s adds margin against ordinary slow
         // frames so a heavy visible frame is never misclassified as hidden.
-        let hidden = now_instant.duration_since(self.last_ui_frame_at)
-            >= std::time::Duration::from_secs(2);
+        let hidden =
+            now_instant.duration_since(self.last_ui_frame_at) >= std::time::Duration::from_secs(2);
         if hidden && !self.pump_hidden {
             self.hidden_pump_last_heartbeat = now_instant;
             tracing::info!(
@@ -404,7 +407,6 @@ impl eframe::App for TyphooNApp {
                     }
                 }
             }
-
         }
 
         // Broad catalog schedulers (Kraken universe/futures sector budgets and

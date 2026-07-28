@@ -7,7 +7,8 @@ use crate::core::strategy_ir::StrategyRunManifest;
 use crate::core::strategy_metrics::{
     METRICS_SCHEMA_VERSION, MetricsError, StrategyAnalysis, analyze_simulation, metric_registry,
 };
-use crate::core::strategy_simulator::{SimulationReport, SymbolStream};
+use crate::core::strategy_run::VerifiedRun;
+use crate::core::strategy_simulator::{SimulationReport, SymbolStream, verified_symbol_streams};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -56,6 +57,7 @@ pub enum ReportArtifactError {
     RunIdMismatch { expected: String, actual: String },
     SimulatorDigestMismatch { expected: String, actual: String },
     EventDigestMismatch { expected: String, actual: String },
+    VerifiedRun { message: String },
 }
 
 impl fmt::Display for ReportArtifactError {
@@ -67,6 +69,21 @@ impl fmt::Display for ReportArtifactError {
 impl Error for ReportArtifactError {}
 
 impl StrategyReportArtifact {
+    /// Build metrics from the exact parent streams already admitted by a
+    /// [`VerifiedRun`]. This keeps native workers from rebuilding simulator
+    /// inputs through a second, unverified path.
+    pub fn build_for_verified_run(
+        run: &VerifiedRun<'_>,
+        simulator_report: &SimulationReport,
+        initial_equity: f64,
+    ) -> Result<Self, ReportArtifactError> {
+        let streams =
+            verified_symbol_streams(run).map_err(|error| ReportArtifactError::VerifiedRun {
+                message: error.to_string(),
+            })?;
+        Self::build(run.manifest(), simulator_report, &streams, initial_equity)
+    }
+
     pub fn build(
         manifest: &StrategyRunManifest,
         simulator_report: &SimulationReport,

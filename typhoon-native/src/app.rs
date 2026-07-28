@@ -112,6 +112,7 @@ mod ssr_scan;
 mod state;
 mod storage;
 mod strategy_report_view;
+mod strategy_sub_bar_run;
 mod strategy_windows;
 mod style_scope;
 mod symbol_investigation;
@@ -467,6 +468,12 @@ impl TyphooNApp {
             strategy_result_workflow: strategy_report_view::ResultWorkflowState::default(),
             strategy_result_workflow_rx: None,
             strategy_result_load_rx: None,
+            sub_bar_run_ui: strategy_sub_bar_run::SubBarRunUiState::default(),
+            sub_bar_run_state: strategy_sub_bar_run::SubBarRunState::default(),
+            strategy_run_worker: strategy_sub_bar_run::StrategyRunWorker::spawn_at(
+                platform::strategy_dataset_dir(),
+            )
+            .ok(),
             opt_fast_range: "5-50".to_string(),
             opt_slow_range: "20-200".to_string(),
             opt_results: Vec::new(),

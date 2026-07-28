@@ -2546,7 +2546,7 @@ fn run_verified_automated_simulation(
 fn verified_streams_and_paths(
     run: &VerifiedRun<'_>,
 ) -> Result<(Vec<SymbolStream>, Vec<SubBarPath>), VerifiedSimulationError> {
-    let streams = verified_streams(run)?;
+    let streams = verified_symbol_streams(run)?;
     let total = run
         .sub_bar_datasets()
         .iter()
@@ -2612,7 +2612,9 @@ fn verified_streams_and_paths(
     Ok((streams, paths))
 }
 
-fn verified_streams(run: &VerifiedRun<'_>) -> Result<Vec<SymbolStream>, VerifiedSimulationError> {
+pub(crate) fn verified_symbol_streams(
+    run: &VerifiedRun<'_>,
+) -> Result<Vec<SymbolStream>, VerifiedSimulationError> {
     if run.datasets().len() > MAX_SYMBOLS {
         return Err(VerifiedSimulationError::Simulation(
             SimulationError::TooManySymbols {

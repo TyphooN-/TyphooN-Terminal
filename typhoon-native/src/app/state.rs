@@ -716,6 +716,9 @@ pub struct TyphooNApp {
             >,
         >,
     >,
+    pub(crate) sub_bar_run_ui: crate::app::strategy_sub_bar_run::SubBarRunUiState,
+    pub(crate) sub_bar_run_state: crate::app::strategy_sub_bar_run::SubBarRunState,
+    pub(crate) strategy_run_worker: Option<crate::app::strategy_sub_bar_run::StrategyRunWorker>,
 
     // ── optimizer state ──────────────────────────────────────────────────
     pub(crate) opt_fast_range: String,
