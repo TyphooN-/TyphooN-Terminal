@@ -1098,6 +1098,17 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   monthly/annual series, and a ledger cost/rejection diagnostic block. Uncertainty is typed
   rather than omitted: the mean-trade standard error is reported and Monte-Carlo confidence
   intervals are an explicit `UnavailableUntilM4` value instead of a silent absence.
+- `strategy_protective.rs` (M2, partial): the NNFX two-leg order lifecycle (§10.3) as a pure
+  state machine over the M1 simulator — N legs each with an independent stop and target in
+  their own OCO group, a position-level break-even move, per-leg trailing that only ever
+  tightens, and a bar-budget time stop. It is expressible because orders execute within a bar
+  in submission order and `reduce_only` is checked at execution, so a bracket submitted with
+  its entry protects the entry bar itself. Protective levels are anchored to the strategy's
+  reference price rather than the achieved fill, so spread, slippage or a gap shows up as
+  execution cost instead of silently resizing the authored risk. To support it,
+  `DecisionContext` gained a `PositionView` (units, average entry, realized PnL, entry time,
+  and a committed-bars-only favourable extreme) — the feedback whose absence previously forced
+  the interpreter to reject break-even, trailing and time stops outright.
 - `strategy_report.rs` (M2, partial): the sealed report artifact. `report_id` is domain-separated
   over the schema version, verified run id, metrics version, and separate digests of the
   simulator report and its event stream, with the analysis sealed in its exact JSON-wire
@@ -1160,7 +1171,7 @@ have test evidence:
 | Reports round-trip through JSON without loss | **Met** | `report_artifact_round_trips_detects_tampering_and_rejects_replay_mismatch` round-trips, re-verifies, and rejects both a mutated metric value and a divergent replay ledger; `report_loader_is_byte_bounded_before_decode` and `an_unsealed_report_id_never_passes_verification` pin the fail-closed loader |
 | Replaying a recorded hybrid run reproduces its ledger bit-for-bit | **Not started** | No intervention log or hybrid replay path exists yet |
 | A synthetic repainting indicator is identified at the exact mutated bar/output | **Not started** | §11.5 diagnostic not implemented |
-| Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Not started** | Exits remain all-or-nothing; no partial-exit or protective-management lifecycle exists |
+| Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Met for the lifecycle; not yet reachable from the IR** | `strategy_protective/tests.rs::a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trails` derives every fill price, fee, realized PnL, cash balance and final equity on paper and asserts them exactly, including leg 0 banking its own target while leg 1 runs, the break-even move at +4.00 and the trailing step at +7.00. `both_legs_stop_out_independently_at_the_same_initial_level`, `a_short_two_leg_trade_mirrors_the_long_lifecycle`, `a_trailing_stop_never_loosens_on_a_pullback`, `a_time_stop_closes_the_remainder_at_market`, `a_legs_stop_and_target_retire_each_other_through_their_oco_group` and `a_strategy_exit_leaves_the_manager_to_cancel_the_resting_bracket` pin the rest of the state machine. **Outstanding:** `strategy_interpreter.rs` still rejects `trade_management`, so a canonical IR strategy cannot yet request this lifecycle — compiling `TradeManagement` into `ProtectivePlan` is the remaining step |
 
 Remaining M2 delivery beyond the gate: execution realism §6.6–§6.9 (partial fills/liquidity caps,
 sessions/timezones, corporate actions, sub-bar fidelity), the M1-deferred time-accrued financing,

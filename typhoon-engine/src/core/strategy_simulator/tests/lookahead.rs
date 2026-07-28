@@ -363,3 +363,66 @@ fn canary_a_future_dated_indicator_input_is_a_guard_trip_not_a_number() {
         "the cheating average must never have been produced"
     );
 }
+
+/// The position feedback added for protective management (§10.3) is new state
+/// handed to strategies, so it needs its own canary: a high-water mark that
+/// included the bar being decided *on* at a pre-close decision would leak that
+/// bar's unfinished range.
+///
+/// At a pre-close decision the forming bar has not closed, so
+/// `favorable_extreme` may only reflect bars that have. The ramp's bar `i` has
+/// high `101 + i`, so a decision inside bar `i` must never see beyond
+/// `100 + i`.
+#[test]
+fn the_position_high_water_mark_never_includes_the_forming_bar() {
+    #[derive(Default)]
+    struct ExtremeProbe {
+        decisions: usize,
+        /// (decision index, forming bar high water mark) once long.
+        observed: Vec<(usize, f64)>,
+    }
+
+    impl ReferenceStrategy for ExtremeProbe {
+        fn on_bar_close(
+            &mut self,
+            ctx: &DecisionContext<'_>,
+            orders: &mut OrderIntents,
+        ) -> Result<(), StrategyError> {
+            let now = self.decisions;
+            self.decisions += 1;
+            if now == 0 {
+                orders.market(ctx.symbol(), OrderSide::Buy, 1.0)?;
+                return Ok(());
+            }
+            let position = ctx.own_position();
+            if !position.is_flat() {
+                self.observed.push((now, position.favorable_extreme));
+            }
+            Ok(())
+        }
+    }
+
+    let mut canary = ExtremeProbe::default();
+    let setup = SimulationSetup {
+        decision_point: DecisionPoint::PreClose {
+            offset_ns: HALF_SECOND_NS,
+        },
+        ..SimulationSetup::default()
+    };
+    run_with(free_settings(), setup, &[ramp("aaa", 6)], &mut canary).expect("runs");
+
+    assert!(
+        !canary.observed.is_empty(),
+        "the probe must actually have held a position"
+    );
+    for (decision, extreme) in canary.observed {
+        // A pre-close decision inside bar `decision` may only have seen bars
+        // 0..decision-1, whose highest high is 100 + decision.
+        let highest_committed = 100.0 + decision as f64;
+        assert!(
+            extreme <= highest_committed + 1e-9,
+            "decision {decision} saw {extreme}, beyond the committed high \
+             {highest_committed}"
+        );
+    }
+}

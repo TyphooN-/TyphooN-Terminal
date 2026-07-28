@@ -967,11 +967,45 @@ impl MarketView<'_> {
     }
 }
 
+/// What a strategy is allowed to know about the exposure it already holds.
+///
+/// Every field is a consequence of fills that have already happened, so this
+/// reveals no future information — but without it, protective management is
+/// impossible to express: a break-even move has no entry price to move to, and
+/// a trail has no high-water mark to ratchet against.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PositionView {
+    /// Signed units held. Positive is long, negative short, zero flat.
+    pub units: f64,
+    /// Volume-weighted entry of the exposure currently held; zero when flat.
+    pub average_entry: f64,
+    /// Realized PnL banked on this symbol so far, across all closed exposure.
+    pub realized_pnl: f64,
+    /// Fill time that opened the exposure currently held; zero when flat.
+    pub opened_time_ns: i64,
+    /// Best price reached in the position's favour since it opened, taken from
+    /// committed bars only. Equals `average_entry` before any bar has closed.
+    pub favorable_extreme: f64,
+}
+
+impl PositionView {
+    pub const fn is_flat(&self) -> bool {
+        self.units == 0.0
+    }
+    pub const fn is_long(&self) -> bool {
+        self.units > 0.0
+    }
+    pub const fn is_short(&self) -> bool {
+        self.units < 0.0
+    }
+}
+
 pub struct DecisionContext<'a> {
     symbol: SymbolId,
     time_ns: i64,
     forming: Option<FormingBar>,
     market: MarketView<'a>,
+    positions: &'a [PositionState],
 }
 
 impl DecisionContext<'_> {
@@ -989,6 +1023,33 @@ impl DecisionContext<'_> {
     /// closed-bar decision, where the next bar has not started.
     pub const fn forming_bar(&self) -> Option<FormingBar> {
         self.forming
+    }
+
+    /// Exposure held on `symbol` as of this decision. Unknown symbols read as
+    /// flat rather than erroring: a strategy asking about a symbol it cannot
+    /// trade holds nothing in it either way.
+    pub fn position(&self, symbol: SymbolId) -> PositionView {
+        self.positions.get(symbol.0).map_or(
+            PositionView {
+                units: 0.0,
+                average_entry: 0.0,
+                realized_pnl: 0.0,
+                opened_time_ns: 0,
+                favorable_extreme: 0.0,
+            },
+            |state| PositionView {
+                units: state.units,
+                average_entry: state.avg_entry,
+                realized_pnl: state.realized_pnl,
+                opened_time_ns: state.opened_time_ns,
+                favorable_extreme: state.favorable_extreme,
+            },
+        )
+    }
+
+    /// Shorthand for the position on the symbol this decision is about.
+    pub fn own_position(&self) -> PositionView {
+        self.position(self.symbol)
     }
 }
 
@@ -1035,6 +1096,14 @@ struct PositionState {
     units: f64,
     avg_entry: f64,
     realized_pnl: f64,
+    /// Fill time that opened the exposure currently held, so a strategy can
+    /// anchor a time stop or a break-even move without being handed the raw
+    /// fill stream. Reset when the position goes flat, re-stamped on a flip.
+    opened_time_ns: i64,
+    /// Extreme mark seen while this exposure has been held, in the direction
+    /// that favours it. A trailing stop needs a high-water mark, and deriving
+    /// one from `MarketView` would force every strategy to re-scan history.
+    favorable_extreme: f64,
 }
 
 struct Recorder {
@@ -1206,7 +1275,13 @@ fn finite_accounting(field: &'static str, value: f64) -> Result<f64, SimulationE
         .ok_or(SimulationError::NonFiniteAccounting { field })
 }
 
-fn apply_fill(position: &mut PositionState, side: OrderSide, quantity: f64, price: f64) -> f64 {
+fn apply_fill(
+    position: &mut PositionState,
+    side: OrderSide,
+    quantity: f64,
+    price: f64,
+    time_ns: i64,
+) -> f64 {
     let delta = side.sign() * quantity;
     let old = position.units;
     if old == 0.0 || old.signum() == delta.signum() {
@@ -1216,6 +1291,10 @@ fn apply_fill(position: &mut PositionState, side: OrderSide, quantity: f64, pric
         } else {
             (position.avg_entry * old.abs() + price * quantity) / new_units.abs()
         });
+        if old == 0.0 {
+            position.opened_time_ns = time_ns;
+            position.favorable_extreme = price;
+        }
         position.units = new_units;
         return 0.0;
     }
@@ -1228,8 +1307,14 @@ fn apply_fill(position: &mut PositionState, side: OrderSide, quantity: f64, pric
     let new_units = old + delta;
     if new_units == 0.0 {
         position.avg_entry = 0.0;
+        position.opened_time_ns = 0;
+        position.favorable_extreme = 0.0;
     } else if new_units.signum() != old.signum() {
+        // A flip is a new position: its protective anchors must not inherit the
+        // reversed one's entry time or high-water mark.
         position.avg_entry = price;
+        position.opened_time_ns = time_ns;
+        position.favorable_extreme = price;
     }
     position.units = new_units;
     position.realized_pnl = stable_decimal(position.realized_pnl + realized);
@@ -2051,6 +2136,17 @@ fn run_task(
         Task::BarClose { symbol, bar } => {
             sim.committed[symbol] = bar + 1;
             sim.marks[symbol] = Some(sim.bar(symbol, bar).close);
+            // Advance the trailing high-water mark only on committed bars, so a
+            // trail can never ratchet off a bar the strategy is not allowed to
+            // have seen yet.
+            let row = sim.bar(symbol, bar);
+            let (high, low) = (row.high, row.low);
+            let position = &mut sim.positions[symbol];
+            if position.units > 0.0 {
+                position.favorable_extreme = position.favorable_extreme.max(high);
+            } else if position.units < 0.0 {
+                position.favorable_extreme = position.favorable_extreme.min(low);
+            }
             sim.recorder.event(
                 entry.time_ns,
                 SimEventKind::BarClose,
@@ -2174,6 +2270,7 @@ fn decide(
                 committed: &sim.committed,
                 opened: &sim.opened,
             },
+            positions: &sim.positions,
         };
         let mut orders = OrderIntents::new(sim.symbol_count, sim.next_client_id);
         strategy
@@ -2834,6 +2931,7 @@ fn attempt_fill(
         order.side,
         order.quantity,
         fill_price,
+        time_ns,
     );
     finite_accounting("realized_pnl", realized_pnl)?;
     finite_accounting("position_units", sim.positions[order.symbol.0].units)?;

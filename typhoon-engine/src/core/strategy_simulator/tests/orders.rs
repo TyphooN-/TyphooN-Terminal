@@ -798,3 +798,71 @@ fn a_rejected_modify_leaves_every_order_field_unchanged() {
         assert_eq!(pending.kind, OrderKind::Limit { limit_price: 90.0 });
     }
 }
+
+/// A reversal is a new position, so the anchors protective management hangs off
+/// must not be inherited from the position that was reversed.
+///
+/// Ramp bars: bar `i` opens at `100 + i`, high `101 + i`, low `99 + i`.
+/// Decision 0 buys 1; it fills at bar 1's open (101.00). Decision 2 sells 3,
+/// flipping to short 2 at bar 3's open (103.00). The short's entry time and
+/// high-water mark must both be stamped at that flip, not carried over.
+#[test]
+fn a_reversal_restamps_the_position_entry_time_and_high_water_mark() {
+    #[derive(Default)]
+    struct FlipProbe {
+        decisions: usize,
+        long_opened_at: Option<i64>,
+        short_opened_at: Option<i64>,
+        short_extreme: Option<f64>,
+    }
+
+    impl ReferenceStrategy for FlipProbe {
+        fn on_bar_close(
+            &mut self,
+            ctx: &DecisionContext<'_>,
+            orders: &mut OrderIntents,
+        ) -> Result<(), StrategyError> {
+            let now = self.decisions;
+            self.decisions += 1;
+            let position = ctx.own_position();
+            if position.is_long() && self.long_opened_at.is_none() {
+                self.long_opened_at = Some(position.opened_time_ns);
+            }
+            if position.is_short() {
+                self.short_opened_at.get_or_insert(position.opened_time_ns);
+                self.short_extreme = Some(position.favorable_extreme);
+            }
+            match now {
+                0 => {
+                    orders.market(ctx.symbol(), OrderSide::Buy, 1.0)?;
+                }
+                2 => {
+                    orders.market(ctx.symbol(), OrderSide::Sell, 3.0)?;
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+
+    let mut probe = FlipProbe::default();
+    run(free_settings(), &[ramp("aaa", 6)], &mut probe).expect("runs");
+
+    assert_eq!(
+        probe.long_opened_at,
+        Some(MINUTE_NS),
+        "the long was opened at bar 1's open"
+    );
+    assert_eq!(
+        probe.short_opened_at,
+        Some(3 * MINUTE_NS),
+        "the flip restamps the entry time rather than keeping the long's"
+    );
+    // The short is stamped at 103.00 and then tracks lows. Bar 3's low is
+    // 102.00, so by the next decision the extreme has moved down, never up.
+    let extreme = probe.short_extreme.expect("short observed");
+    assert!(
+        extreme <= 103.0 + 1e-9,
+        "a short's high-water mark moves down from its entry, got {extreme}"
+    );
+}
