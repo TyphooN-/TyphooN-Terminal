@@ -1,6 +1,162 @@
 use super::*;
 
 impl TyphooNApp {
+    fn drain_strategy_workflow(&mut self) {
+        let received = self
+            .strategy_result_workflow_rx
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        let Some(result) = received else {
+            return;
+        };
+        self.strategy_result_workflow_rx = None;
+        use strategy_report_view::WorkflowWorkerResult;
+        match result {
+            WorkflowWorkerResult::Sealed(result) => match result {
+                Ok(log) => {
+                    self.strategy_result_workflow.intervention.status = format!(
+                        "Sealed candidate log {} with verified content identity; ledger replay is not verified until this id is manifest-bound and the simulation rerun succeeds",
+                        log.log_id()
+                    );
+                    self.strategy_result_workflow.intervention.sealed = Some(log);
+                }
+                Err(error) => {
+                    self.strategy_result_workflow.intervention.status = format!("Error: {error}");
+                }
+            },
+            WorkflowWorkerResult::Loaded(result) => match result {
+                Ok(log) => {
+                    self.strategy_result_workflow.intervention.entries =
+                        log.interventions().to_vec();
+                    self.strategy_result_workflow.intervention.status = format!(
+                        "Loaded sealed log {} with verified content identity; no ledger replay was attempted because run inputs are not loaded",
+                        log.log_id()
+                    );
+                    self.strategy_result_workflow.intervention.sealed = Some(log);
+                }
+                Err(error) => {
+                    self.strategy_result_workflow.intervention.status = format!("Error: {error}");
+                }
+            },
+            WorkflowWorkerResult::Exported {
+                kind,
+                identity,
+                path,
+                result,
+            } => {
+                self.strategy_result_workflow.export_status = match result {
+                    Ok(()) => strategy_report_view::ExportStatus::Saved {
+                        kind,
+                        identity,
+                        path,
+                    },
+                    Err(error) => strategy_report_view::ExportStatus::Error(error),
+                };
+            }
+        }
+    }
+
+    fn start_strategy_workflow_command(
+        &mut self,
+        ctx: &egui::Context,
+        command: strategy_report_view::ResultCommand,
+    ) {
+        if self.strategy_result_workflow_rx.is_some() {
+            return;
+        }
+        let Some(view) = self.strategy_result_view.as_ref() else {
+            return;
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        use strategy_report_view::{ExportKind, ResultCommand, WorkflowWorkerResult};
+        match command {
+            ResultCommand::Seal(entries) => {
+                let decisions = view.decisions.clone();
+                self.strategy_result_workflow_rx = Some(receiver);
+                let repaint = ctx.clone();
+                std::thread::spawn(move || {
+                    let result = strategy_report_view::seal_interventions(entries, &decisions);
+                    let _ = sender.send(WorkflowWorkerResult::Sealed(result));
+                    repaint.request_repaint();
+                });
+            }
+            ResultCommand::LoadIntervention => {
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title("Load sealed intervention log")
+                    .add_filter("Intervention log JSON", &["json"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                let decisions = view.decisions.clone();
+                self.strategy_result_workflow_rx = Some(receiver);
+                let repaint = ctx.clone();
+                std::thread::spawn(move || {
+                    let result = strategy_report_view::load_intervention_log(&path, &decisions);
+                    let _ = sender.send(WorkflowWorkerResult::Loaded(result));
+                    repaint.request_repaint();
+                });
+            }
+            ResultCommand::Export(kind) => {
+                let (identity, source, stem) = match kind {
+                    ExportKind::Report => (
+                        view.report_id.clone(),
+                        strategy_report_view::ExportSource::VerifiedBytes(
+                            view.report_artifact_json.clone(),
+                        ),
+                        "strategy_report",
+                    ),
+                    ExportKind::Simulation => (
+                        view.run_id.clone(),
+                        strategy_report_view::ExportSource::VerifiedBytes(
+                            view.simulation_report_json.clone(),
+                        ),
+                        "simulation_report",
+                    ),
+                    ExportKind::Intervention => {
+                        let Some(log) = self.strategy_result_workflow.intervention.sealed.as_ref()
+                        else {
+                            self.strategy_result_workflow.export_status =
+                                strategy_report_view::ExportStatus::Error(
+                                    "seal or load and verify the intervention log before export"
+                                        .into(),
+                                );
+                            return;
+                        };
+                        (
+                            log.log_id().to_string(),
+                            strategy_report_view::ExportSource::Intervention(log.clone()),
+                            "intervention_log",
+                        )
+                    }
+                };
+                let short = identity.get(..12).unwrap_or(&identity);
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title(format!("Export {kind:?} with identity"))
+                    .add_filter("JSON", &["json"])
+                    .set_file_name(format!("{stem}_{short}.json"))
+                    .save_file()
+                else {
+                    return;
+                };
+                self.strategy_result_workflow.export_status =
+                    strategy_report_view::ExportStatus::Working { kind };
+                self.strategy_result_workflow_rx = Some(receiver);
+                let repaint = ctx.clone();
+                std::thread::spawn(move || {
+                    let result = strategy_report_view::export_verified_source(&path, source);
+                    let _ = sender.send(WorkflowWorkerResult::Exported {
+                        kind,
+                        identity,
+                        path,
+                        result,
+                    });
+                    repaint.request_repaint();
+                });
+            }
+        }
+    }
+
     fn drain_strategy_result_load(&mut self) {
         let received =
             self.strategy_result_load_rx
@@ -39,6 +195,8 @@ impl TyphooNApp {
                     view.run_id.get(..8).unwrap_or(&view.run_id)
                 );
                 self.strategy_result_chart_tab = Some(chart_index);
+                self.strategy_result_workflow =
+                    strategy_report_view::ResultWorkflowState::default();
                 self.strategy_result_view = Some(view);
                 if let Some(chart) = self.charts.get_mut(chart_index) {
                     chart.cached_trade_overlay_frame = 0;
@@ -102,10 +260,12 @@ impl TyphooNApp {
 
     pub(super) fn render_backtest_window(&mut self, ctx: &egui::Context) {
         self.drain_strategy_result_load();
+        self.drain_strategy_workflow();
         if !self.show_backtest {
             return;
         }
         let mut show_backtest = self.show_backtest;
+        let mut workflow_commands = Vec::new();
         egui::Window::new("Backtest Engine")
             .open(&mut show_backtest)
             .resizable(true)
@@ -364,15 +524,16 @@ impl TyphooNApp {
                     let report_chart_is_active =
                         self.strategy_result_chart_tab == Some(self.active_tab);
                     if report_chart_is_active {
-                        strategy_report_view::render_prepared_result(
+                        workflow_commands.extend(strategy_report_view::render_prepared_result(
                             ui,
                             view,
+                            &mut self.strategy_result_workflow,
                             &mut self.strategy_result_selected_trade,
                             &mut self.replay_active,
                             &mut self.replay_bar_idx,
                             &mut self.replay_playing,
                             &mut self.replay_speed,
-                        );
+                        ));
                     } else {
                         ui.separator();
                         ui.label(
@@ -385,6 +546,9 @@ impl TyphooNApp {
                 }
             });
         self.show_backtest = show_backtest;
+        for command in workflow_commands {
+            self.start_strategy_workflow_command(ctx, command);
+        }
     }
 
     pub(super) fn render_optimizer_window(&mut self, ctx: &egui::Context) {

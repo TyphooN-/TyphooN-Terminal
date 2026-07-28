@@ -464,6 +464,8 @@ impl TyphooNApp {
             strategy_result_chart_tab: None,
             strategy_result_selected_trade: None,
             strategy_result_status: String::new(),
+            strategy_result_workflow: strategy_report_view::ResultWorkflowState::default(),
+            strategy_result_workflow_rx: None,
             strategy_result_load_rx: None,
             opt_fast_range: "5-50".to_string(),
             opt_slow_range: "20-200".to_string(),

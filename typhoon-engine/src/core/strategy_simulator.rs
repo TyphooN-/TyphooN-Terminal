@@ -117,6 +117,7 @@ use crate::core::strategy_calendar::{SessionStatus, TradingCalendar};
 use crate::core::strategy_corporate::{CorporateAction, CorporateActionKind};
 use crate::core::strategy_financing::{AccrualBreakdown, FinancingCharge, FinancingPolicy, accrue};
 use crate::core::strategy_interpreter::{CanonicalIrStrategy, InterpreterError};
+use crate::core::strategy_intervention::{HybridReplay, InterventionError, InterventionLog};
 use crate::core::strategy_ir::{
     CommissionModel, DecisionTiming, ExecutionCompatibility, FeeSide, FidelityLevel, LatencyModel,
     MAX_PRE_CLOSE_OFFSET_SECONDS, MAX_SUBMIT_DELAY_BARS, MarginPolicy, OhlcAmbiguityPolicy,
@@ -2315,6 +2316,11 @@ pub enum VerifiedSimulationError {
     UnsupportedDatasetTimeframe { input_id: String, timeframe: String },
     InvalidDatasetTimestamp { input_id: String, timestamp: String },
     DatasetTimeOverflow { input_id: String },
+    InvalidInterventionLog(InterventionError),
+    MissingInterventionLog,
+    UnexpectedInterventionLog,
+    InterventionLogIdMismatch { expected: String, actual: String },
+    InterventionReplayIncomplete { expected: usize, applied: usize },
 }
 
 impl fmt::Display for VerifiedSimulationError {
@@ -2342,15 +2348,93 @@ impl fmt::Display for VerifiedSimulationError {
                     "dataset `{input_id}` bar time exceeds simulator range"
                 )
             }
+            Self::InvalidInterventionLog(error) => write!(formatter, "intervention log: {error}"),
+            Self::MissingInterventionLog => formatter.write_str(
+                "run manifest binds an intervention log, but none was supplied for replay",
+            ),
+            Self::UnexpectedInterventionLog => formatter.write_str(
+                "an intervention log was supplied for a run manifest that does not bind one",
+            ),
+            Self::InterventionLogIdMismatch { expected, actual } => write!(
+                formatter,
+                "run manifest intervention log id mismatch: expected {expected}, got {actual}"
+            ),
+            Self::InterventionReplayIncomplete { expected, applied } => write!(
+                formatter,
+                "hybrid replay applied {applied} of {expected} bound interventions"
+            ),
         }
     }
 }
 
 impl Error for VerifiedSimulationError {}
 
-/// Execute an identity-bearing run without accepting any simulation knob that
-/// could disagree with its sealed strategy and manifest.
+/// Execute an automated identity-bearing run without accepting any simulation
+/// knob that could disagree with its sealed strategy and manifest.
+///
+/// Hybrid runs must use [`run_verified_simulation_with_intervention`]; this
+/// preserves the automated API while refusing to silently ignore a bound log.
 pub fn run_verified_simulation(
+    run: &VerifiedRun<'_>,
+) -> Result<SimulationReport, VerifiedSimulationError> {
+    if run.intervention_log().is_some() {
+        return Err(VerifiedSimulationError::UnexpectedInterventionLog);
+    }
+    run_verified_automated_simulation(run)
+}
+
+/// Execute a hybrid run only when the supplied sealed log is exactly the log
+/// included in the verified run manifest identity.
+pub fn run_verified_simulation_with_intervention(
+    run: &VerifiedRun<'_>,
+    intervention_log: Option<&InterventionLog>,
+) -> Result<SimulationReport, VerifiedSimulationError> {
+    let expected = run.manifest().binding().intervention_log_id.as_ref();
+    let log = match (expected, intervention_log) {
+        (Some(_), None) | (None, None) => {
+            return Err(VerifiedSimulationError::MissingInterventionLog);
+        }
+        (None, Some(_)) => return Err(VerifiedSimulationError::UnexpectedInterventionLog),
+        (Some(expected), Some(log)) => {
+            log.verify()
+                .map_err(VerifiedSimulationError::InvalidInterventionLog)?;
+            if expected != log.log_id() {
+                return Err(VerifiedSimulationError::InterventionLogIdMismatch {
+                    expected: expected.clone(),
+                    actual: log.log_id().to_string(),
+                });
+            }
+            log
+        }
+    };
+    if run.intervention_log().map(InterventionLog::log_id) != Some(log.log_id()) {
+        return Err(VerifiedSimulationError::InterventionLogIdMismatch {
+            expected: expected.cloned().unwrap_or_default(),
+            actual: run
+                .intervention_log()
+                .map(InterventionLog::log_id)
+                .unwrap_or("missing-from-verified-run")
+                .to_string(),
+        });
+    }
+
+    let setup = SimulationSetup::from_verified_run(run);
+    let mut strategy =
+        CanonicalIrStrategy::new(run.strategy()).map_err(VerifiedSimulationError::Interpreter)?;
+    let streams = verified_streams(run)?;
+    let mut replay = HybridReplay::new(&mut strategy, log);
+    let report = run_simulation(run.config(), &setup, &streams, &mut replay)
+        .map_err(VerifiedSimulationError::Simulation)?;
+    if replay.applied() != log.interventions().len() {
+        return Err(VerifiedSimulationError::InterventionReplayIncomplete {
+            expected: log.interventions().len(),
+            applied: replay.applied(),
+        });
+    }
+    Ok(report)
+}
+
+fn run_verified_automated_simulation(
     run: &VerifiedRun<'_>,
 ) -> Result<SimulationReport, VerifiedSimulationError> {
     let setup = SimulationSetup::from_verified_run(run);

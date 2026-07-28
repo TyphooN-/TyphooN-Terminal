@@ -45,6 +45,9 @@ pub const MAX_INTERVENTIONS: usize = 65_536;
 /// Largest encoded log accepted by the loading API.
 pub const MAX_INTERVENTION_LOG_JSON_BYTES: usize = 8 * 1024 * 1024;
 
+/// Largest UTF-8 operator note accepted in one intervention.
+pub const MAX_INTERVENTION_NOTE_BYTES: usize = 512;
+
 /// What an operator did. These are exactly the three things a strategy can do,
 /// because an operator acting through the same order interface is the only way
 /// their action can be modelled with the same fidelity as an automated one.
@@ -97,6 +100,7 @@ pub enum InterventionError {
     TooLarge { limit: usize, found: usize },
     Unordered { at: usize },
     NoteTooLong { at: usize },
+    MalformedAction { at: usize, message: String },
     InvalidJson { message: String },
     UnsupportedSchemaVersion { found: u32, supported: u32 },
     IdentityMismatch { expected: String, actual: String },
@@ -109,8 +113,6 @@ impl std::fmt::Display for InterventionError {
 }
 
 impl std::error::Error for InterventionError {}
-
-const MAX_NOTE_LEN: usize = 512;
 
 impl InterventionLog {
     /// Seals a recorded session. Interventions must already be in the order
@@ -131,9 +133,13 @@ impl InterventionLog {
         }
         if let Some(at) = interventions
             .iter()
-            .position(|entry| entry.note.len() > MAX_NOTE_LEN)
+            .position(|entry| entry.note.len() > MAX_INTERVENTION_NOTE_BYTES)
         {
             return Err(InterventionError::NoteTooLong { at });
+        }
+        for (at, entry) in interventions.iter().enumerate() {
+            validate_action(&entry.action)
+                .map_err(|message| InterventionError::MalformedAction { at, message })?;
         }
         let log_id = compute_log_id(&interventions);
         Ok(Self {
@@ -165,7 +171,26 @@ impl InterventionLog {
         self.interventions.is_empty()
     }
 
+    /// Recompute every structural and content-address check on an in-memory log.
+    pub fn verify(&self) -> Result<(), InterventionError> {
+        if self.schema_version != INTERVENTION_LOG_SCHEMA_VERSION {
+            return Err(InterventionError::UnsupportedSchemaVersion {
+                found: self.schema_version,
+                supported: INTERVENTION_LOG_SCHEMA_VERSION,
+            });
+        }
+        let rebuilt = Self::build(self.interventions.clone())?;
+        if rebuilt.log_id != self.log_id {
+            return Err(InterventionError::IdentityMismatch {
+                expected: self.log_id.clone(),
+                actual: rebuilt.log_id,
+            });
+        }
+        Ok(())
+    }
+
     pub fn to_json_vec(&self) -> Result<Vec<u8>, InterventionError> {
+        self.verify()?;
         let bytes = serde_json::to_vec(self).map_err(invalid_json)?;
         if bytes.len() > MAX_INTERVENTION_LOG_JSON_BYTES {
             return Err(InterventionError::TooLarge {
@@ -200,6 +225,57 @@ impl InterventionLog {
         }
         Ok(rebuilt)
     }
+}
+
+fn validate_action(action: &InterventionAction) -> Result<(), String> {
+    let positive = |value: f64, field: &str| {
+        if value.is_finite() && value > 0.0 {
+            Ok(())
+        } else {
+            Err(format!("{field} must be finite and positive"))
+        }
+    };
+    match action {
+        InterventionAction::Submit { request } => {
+            positive(request.quantity, "quantity")?;
+            match request.kind {
+                crate::core::strategy_simulator::OrderKind::Market
+                | crate::core::strategy_simulator::OrderKind::MarketOnClose => {}
+                crate::core::strategy_simulator::OrderKind::Limit { limit_price } => {
+                    positive(limit_price, "limit price")?;
+                }
+                crate::core::strategy_simulator::OrderKind::Stop { stop_price } => {
+                    positive(stop_price, "stop price")?;
+                }
+                crate::core::strategy_simulator::OrderKind::StopLimit {
+                    stop_price,
+                    limit_price,
+                } => {
+                    positive(stop_price, "stop price")?;
+                    positive(limit_price, "limit price")?;
+                }
+            }
+        }
+        InterventionAction::Cancel { .. } => {}
+        InterventionAction::Modify { change, .. } => {
+            if change.quantity.is_none()
+                && change.limit_price.is_none()
+                && change.stop_price.is_none()
+            {
+                return Err("modify action must change at least one field".into());
+            }
+            if let Some(quantity) = change.quantity {
+                positive(quantity, "quantity")?;
+            }
+            if let Some(limit_price) = change.limit_price {
+                positive(limit_price, "limit price")?;
+            }
+            if let Some(stop_price) = change.stop_price {
+                positive(stop_price, "stop price")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn compute_log_id(interventions: &[Intervention]) -> String {

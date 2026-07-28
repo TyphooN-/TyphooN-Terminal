@@ -341,4 +341,29 @@ fn the_loader_is_bounded_and_version_checked_before_it_trusts_anything() {
         InterventionLog::build(long_note),
         Err(InterventionError::NoteTooLong { at: 0 })
     );
+
+    let malformed = vec![Intervention {
+        decision_index: 0,
+        note: String::new(),
+        action: InterventionAction::Modify {
+            target: ClientOrderId(0),
+            change: ModifyRequest::default(),
+        },
+    }];
+    assert!(matches!(
+        InterventionLog::build(malformed),
+        Err(InterventionError::MalformedAction { at: 0, .. })
+    ));
+
+    let prototype = Intervention {
+        decision_index: 0,
+        note: String::new(),
+        action: InterventionAction::Cancel {
+            target: ClientOrderId(0),
+        },
+    };
+    assert!(matches!(
+        InterventionLog::build(vec![prototype; super::MAX_INTERVENTIONS + 1]),
+        Err(InterventionError::TooMany { .. })
+    ));
 }

@@ -701,6 +701,9 @@ pub struct TyphooNApp {
     pub(crate) strategy_result_chart_tab: Option<usize>,
     pub(crate) strategy_result_selected_trade: Option<usize>,
     pub(crate) strategy_result_status: String,
+    pub(crate) strategy_result_workflow: crate::app::strategy_report_view::ResultWorkflowState,
+    pub(crate) strategy_result_workflow_rx:
+        Option<std::sync::mpsc::Receiver<crate::app::strategy_report_view::WorkflowWorkerResult>>,
     pub(crate) strategy_result_load_rx: Option<
         std::sync::mpsc::Receiver<
             Result<

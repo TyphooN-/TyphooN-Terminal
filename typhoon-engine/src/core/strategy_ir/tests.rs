@@ -2497,6 +2497,162 @@ fn verified_run_assembly_binds_and_verifies_the_manifest_intervention_log() {
 }
 
 #[test]
+fn verified_hybrid_execution_is_identity_bound_exact_and_fail_closed() {
+    use crate::broker::alpaca::Bar;
+    use crate::core::strategy_dataset::{AdjustmentPolicy, DatasetManifest, DatasetManifestInput};
+    use crate::core::strategy_intervention::{Intervention, InterventionAction, InterventionLog};
+    use crate::core::strategy_run::{
+        RunDatasetInput, assemble_verified_run, assemble_verified_run_with_intervention,
+    };
+    use crate::core::strategy_simulator::{
+        OrderRequest, OrderSide, SymbolId, VerifiedSimulationError, run_verified_simulation,
+        run_verified_simulation_with_intervention,
+    };
+
+    let mut definition = ir().definition().clone();
+    definition.session.enabled = false;
+    definition.news.enabled = false;
+    for indicator in &mut definition.indicators {
+        if matches!(indicator.kind, IndicatorKind::Custom { .. }) {
+            indicator.kind = IndicatorKind::Sma;
+            indicator.inputs = vec![
+                IndicatorInput::Price(PriceField::Close),
+                IndicatorInput::Constant(1.0),
+            ];
+        }
+    }
+    definition.trade_management = TradeManagement {
+        legs: vec![TradeLeg {
+            fraction_bps: 10_000,
+            stop: None,
+            target: None,
+            trailing: None,
+        }],
+        break_even_after: None,
+        max_bars_in_trade: None,
+    };
+    definition.sizing.rule = SizingRule::FixedUnits { units: 1.0 };
+    let strategy = StrategyIr::build(&definition).expect("executable strategy builds");
+    let config = StrategyExecutionConfig::build(&settings()).expect("config builds");
+    let (mut bars, original_dataset) =
+        run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::Raw);
+    bars.push(Bar {
+        timestamp: "2024-01-03T00:00:00Z".to_string(),
+        open: 10.5,
+        high: 12.0,
+        low: 10.0,
+        close: 11.5,
+        volume: 100.0,
+    });
+    let dataset = DatasetManifest::build(
+        &DatasetManifestInput {
+            symbol: original_dataset.symbol,
+            timeframe: original_dataset.timeframe,
+            provenance: original_dataset.provenance,
+            adjustment: original_dataset.adjustment,
+            calendar: original_dataset.calendar,
+            qa_policy: original_dataset.qa_policy,
+        },
+        &bars,
+    )
+    .expect("two-bar dataset manifest builds");
+    let input = RunDatasetInput {
+        input_id: "primary",
+        manifest: &dataset,
+        bars: &bars,
+    };
+    let action = |decision_index, note: &str| Intervention {
+        decision_index,
+        note: note.to_string(),
+        action: InterventionAction::Submit {
+            request: OrderRequest::market_on_close(SymbolId(0), OrderSide::Buy, 1.0),
+        },
+    };
+    let log =
+        InterventionLog::build(vec![action(0, "revealed manual entry")]).expect("valid log seals");
+    let mut hybrid_binding = binding();
+    hybrid_binding.datasets = vec![DatasetBinding {
+        input_id: "primary".to_string(),
+        dataset_id: dataset.dataset_id.clone(),
+    }];
+    hybrid_binding.strategy_id = strategy.strategy_id().to_string();
+    hybrid_binding.config_id = config.config_id().to_string();
+    hybrid_binding.intervention_log_id = Some(log.log_id().to_string());
+    let manifest = StrategyRunManifest::build(&hybrid_binding).expect("hybrid manifest builds");
+    let run = assemble_verified_run_with_intervention(
+        &strategy,
+        &config,
+        &manifest,
+        &[input],
+        Some(&log),
+    )
+    .expect("matching log assembles");
+
+    let first = run_verified_simulation_with_intervention(&run, Some(&log))
+        .expect("matching hybrid run executes");
+    let second = run_verified_simulation_with_intervention(&run, Some(&log))
+        .expect("matching hybrid replay repeats");
+    assert_eq!(
+        serde_json::to_vec(&first).expect("serializes"),
+        serde_json::to_vec(&second).expect("serializes"),
+        "verified hybrid replay must reproduce the exact ledger"
+    );
+    assert!(
+        !first.fills.is_empty(),
+        "the intervention must actually execute"
+    );
+
+    let foreign = InterventionLog::build(vec![action(0, "different content address")])
+        .expect("foreign log seals");
+    assert!(matches!(
+        run_verified_simulation_with_intervention(&run, Some(&foreign)),
+        Err(VerifiedSimulationError::InterventionLogIdMismatch { .. })
+    ));
+    assert!(matches!(
+        run_verified_simulation_with_intervention(&run, None),
+        Err(VerifiedSimulationError::MissingInterventionLog)
+    ));
+    assert!(matches!(
+        run_verified_simulation(&run),
+        Err(VerifiedSimulationError::UnexpectedInterventionLog)
+    ));
+
+    let mut automated_binding = hybrid_binding.clone();
+    automated_binding.intervention_log_id = None;
+    let automated_manifest =
+        StrategyRunManifest::build(&automated_binding).expect("automated manifest builds");
+    let automated_run = assemble_verified_run(&strategy, &config, &automated_manifest, &[input])
+        .expect("automated run assembles");
+    run_verified_simulation(&automated_run).expect("existing automated API still executes");
+    assert!(matches!(
+        run_verified_simulation_with_intervention(&automated_run, Some(&log)),
+        Err(VerifiedSimulationError::UnexpectedInterventionLog)
+    ));
+
+    let trailing = InterventionLog::build(vec![action(10_000, "cannot be reached")])
+        .expect("ordered trailing log seals");
+    let mut trailing_binding = hybrid_binding;
+    trailing_binding.intervention_log_id = Some(trailing.log_id().to_string());
+    let trailing_manifest =
+        StrategyRunManifest::build(&trailing_binding).expect("trailing manifest builds");
+    let trailing_run = assemble_verified_run_with_intervention(
+        &strategy,
+        &config,
+        &trailing_manifest,
+        &[input],
+        Some(&trailing),
+    )
+    .expect("trailing identity still assembles");
+    assert!(matches!(
+        run_verified_simulation_with_intervention(&trailing_run, Some(&trailing)),
+        Err(VerifiedSimulationError::InterventionReplayIncomplete {
+            expected: 1,
+            applied: 0
+        })
+    ));
+}
+
+#[test]
 fn verified_run_assembly_binds_acknowledged_repaint_qa_fail_closed() {
     use crate::core::strategy_dataset::AdjustmentPolicy;
     use crate::core::strategy_repaint::{
