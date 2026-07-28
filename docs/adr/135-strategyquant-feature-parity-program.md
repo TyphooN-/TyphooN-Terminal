@@ -1087,6 +1087,23 @@ below remain authoritative; a checked foundation does **not** imply that its mil
 - `strategy_run.rs`: named dataset-input bindings and cross-artifact assembly that verifies the
   strategy, execution config, run manifest, dataset manifests, and actual bar content before a
   run can be treated as resolved.
+- `strategy_metrics.rs` (M2, partial): a versioned 43-metric registry where every entry carries
+  an id, written formula, units, periodicity, annualization rule and degenerate-case contract
+  (§9.1). Values are a typed `Defined`/`Undefined { reason }` pair — there is no `999.0`-style
+  sentinel and no NaN or infinity, because a non-finite result is converted to
+  `Undefined { ArithmeticOverflow }` at construction. Covers return/profit, risk/drawdown,
+  ratios (Sharpe, Sortino, Calmar, Sterling, equity-curve R², K-ratio), per-trade MAE/MFE and
+  capture efficiency, exposure/activity, distribution and tails (skew, excess kurtosis, streaks,
+  VaR/CVaR, tail ratio), stability concentration, real calendar resampling to daily/weekly ISO/
+  monthly/annual series, and a ledger cost/rejection diagnostic block. Uncertainty is typed
+  rather than omitted: the mean-trade standard error is reported and Monte-Carlo confidence
+  intervals are an explicit `UnavailableUntilM4` value instead of a silent absence.
+- `strategy_report.rs` (M2, partial): the sealed report artifact. `report_id` is domain-separated
+  over the schema version, verified run id, metrics version, and separate digests of the
+  simulator report and its event stream, with the analysis sealed in its exact JSON-wire
+  interpretation so a freshly built artifact still verifies after round-trip. Loading is byte-
+  bounded before decode, structurally validated against the registry, and fails closed on a
+  tampered body, an unsealed id, a foreign run, or a replay whose ledger digest differs.
 
 **M0 gate — passed (2026-07-27):**
 
@@ -1130,7 +1147,26 @@ submission delay are derived from the verified manifest and strategy IR, so no m
 silently disagree with the published run id. The raw simulator entry point remains available only
 as an explicitly non-identity-bearing kernel API for tests and exploratory callers.
 
-**M2–M8:** no later milestone gate has passed. Their remaining work is exactly the delivery and
+**M2 — gate NOT passed; metrics/report foundation landed.** The following M2 gate clauses now
+have test evidence:
+
+| M2 gate clause | Status | Evidence |
+| --- | --- | --- |
+| Every metric has a written definition | **Met** | `strategy_metrics.rs::REGISTRY` gives all 43 metrics an id/formula/units/periodicity/annualization/degenerate-case contract; `registry_defines_every_metric_contract_without_duplicate_ids` rejects blank fields and duplicate ids, and `registry_definitions_are_pinned_to_the_metrics_schema_version` digests the whole registry so a definition edit cannot ship without a `METRICS_SCHEMA_VERSION` bump |
+| …and a hand-verified golden test | **Partial** | `distribution_and_exposure_metrics_match_a_hand_computed_symmetric_ledger`, `tail_and_drawdown_metrics_match_hand_computed_exact_binary_returns`, `a_straight_line_equity_curve_fits_perfectly`, `hand_ledger_reconciles_profit_drawdown_underwater_and_calendar_closes` and `diagnostics_report_the_ledger_cost_breakdown_verbatim` pin hand-derived values on ledgers chosen so the arithmetic is binary-exact. Not every one of the 43 ids is individually hand-pinned yet |
+| No metric returns a magic sentinel | **Met** | `MetricValue` is a typed `Defined`/`Undefined { reason }` pair and `MetricValue::defined` converts any non-finite result to `Undefined { ArithmeticOverflow }`; `a_flat_curve_reports_typed_undefined_rather_than_a_fabricated_ratio` asserts the specific reason for nine degenerate ids and that no `-0.0` reaches the wire; `every_registered_metric_is_computed_rather_than_silently_defaulted` proves the id set is exactly the registry, so a typo cannot masquerade as "not enough data" |
+| Calendar equity reconciles exactly with the trade list | **Met** | `calendar_equity_reconciles_exactly_with_the_closed_trade_list` asserts summed daily changes equal summed closed-trade PnL equal `net_profit`; `every_calendar_granularity_reconciles_with_the_overall_equity_change` extends the identity to the weekly/monthly/annual series |
+| MAE/MFE verified against hand-computed excursions | **Met** | `long_and_short_mae_mfe_exclude_pre_entry_and_post_exit_bars` pins both directions and the capture ratio, and proves bars outside the holding window are excluded |
+| Reports round-trip through JSON without loss | **Met** | `report_artifact_round_trips_detects_tampering_and_rejects_replay_mismatch` round-trips, re-verifies, and rejects both a mutated metric value and a divergent replay ledger; `report_loader_is_byte_bounded_before_decode` and `an_unsealed_report_id_never_passes_verification` pin the fail-closed loader |
+| Replaying a recorded hybrid run reproduces its ledger bit-for-bit | **Not started** | No intervention log or hybrid replay path exists yet |
+| A synthetic repainting indicator is identified at the exact mutated bar/output | **Not started** | §11.5 diagnostic not implemented |
+| Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Not started** | Exits remain all-or-nothing; no partial-exit or protective-management lifecycle exists |
+
+Remaining M2 delivery beyond the gate: execution realism §6.6–§6.9 (partial fills/liquidity caps,
+sessions/timezones, corporate actions, sub-bar fidelity), the M1-deferred time-accrued financing,
+borrow, crypto funding and currency conversion, and the chart trade overlay.
+
+**M3–M8:** no later milestone gate has passed. Their remaining work is exactly the delivery and
 gate text below; they may now build on the completed M1 correctness foundation.
 
 ### M0 — Dataset foundation & QA — **gate passed 2026-07-27** (see §13.1)

@@ -73,6 +73,7 @@
 //! Raw input DTOs remain directly deserializable and must not be treated as
 //! validated artifacts.
 
+use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -98,8 +99,9 @@ pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 /// the legacy-compatibility switch, and venue fee-schedule commissions.
 pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 2;
 
-/// Wire-format version of [`StrategyRunManifest`].
-pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 2;
+/// Wire-format version of [`StrategyRunManifest`]. v3 binds the metrics
+/// schema into run identity; v2 manifests are intentionally not migrated.
+pub const STRATEGY_RUN_MANIFEST_SCHEMA_VERSION: u32 = 3;
 
 /// Maximum encoded JSON size accepted by the sealed-artifact loading APIs.
 /// Structural limits are then enforced while sealing the decoded DTO.
@@ -113,7 +115,7 @@ const STRATEGY_ID_DOMAIN: &str = "typhoon.strategy_ir.strategy_id.v1";
 const CONFIG_ID_DOMAIN: &str = "typhoon.strategy_ir.config_id.v1";
 
 /// Domain-separation prefix for the run-id hash.
-const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v2";
+const RUN_ID_DOMAIN: &str = "typhoon.strategy_ir.run_id.v3";
 
 /// Longest root-to-leaf path allowed in one [`Condition`] tree, counting the
 /// leaf. Bounds both validation recursion and the future interpreter's.
@@ -400,6 +402,11 @@ pub enum StrategyIrError {
         found: u32,
         supported: u32,
     },
+    /// A run requested a metric contract this build cannot reproduce.
+    UnsupportedMetricsVersion {
+        found: String,
+        supported: &'static str,
+    },
     /// The recomputed id does not match the recorded one — the artifact was
     /// edited after it was sealed.
     IdentityMismatch {
@@ -484,6 +491,10 @@ impl std::fmt::Display for StrategyIrError {
                 f,
                 "{} schema version {found} is unsupported (this build supports {supported})",
                 artifact.as_str()
+            ),
+            Self::UnsupportedMetricsVersion { found, supported } => write!(
+                f,
+                "metrics schema `{found}` is unsupported (this build supports `{supported}`)"
             ),
             Self::IdentityMismatch {
                 artifact,
@@ -1595,6 +1606,8 @@ pub struct RunBinding {
     /// Root seed for every derived RNG stream (§6.10).
     pub seed: u64,
     pub engine_version: String,
+    /// Exact metric definitions used to interpret this run's ledger.
+    pub metrics_version: String,
     /// Present only for hybrid runs that recorded operator interventions.
     pub intervention_log_id: Option<String>,
 }
@@ -3259,6 +3272,7 @@ fn compute_validated_run_id(binding: &RunBinding) -> String {
     digest.tagged_text("config_id", &binding.config_id);
     digest.tagged_u64("seed", binding.seed);
     digest.tagged_text("engine_version", &binding.engine_version);
+    digest.tagged_text("metrics_version", &binding.metrics_version);
     digest.begin_option("intervention_log_id", binding.intervention_log_id.is_some());
     if let Some(intervention_log_id) = &binding.intervention_log_id {
         digest.tagged_text("intervention_log_id", intervention_log_id);
@@ -3307,7 +3321,19 @@ fn validate_binding(binding: &RunBinding) -> Result<(), StrategyIrError> {
         "binding.engine_version",
         &binding.engine_version,
         MAX_TEXT_LEN,
-    )
+    )?;
+    check_text(
+        "binding.metrics_version",
+        &binding.metrics_version,
+        MAX_TEXT_LEN,
+    )?;
+    if binding.metrics_version != METRICS_SCHEMA_VERSION {
+        return Err(StrategyIrError::UnsupportedMetricsVersion {
+            found: binding.metrics_version.clone(),
+            supported: METRICS_SCHEMA_VERSION,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

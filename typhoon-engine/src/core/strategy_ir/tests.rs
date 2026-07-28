@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use std::collections::BTreeSet;
 
 const CUSTOM_IMPLEMENTATION_ID: &str =
@@ -266,6 +267,7 @@ fn binding() -> RunBinding {
         config_id: hex_id('d'),
         seed: 42,
         engine_version: "typhoon-engine/0.1.0".to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: Some(hex_id('e')),
     }
 }
@@ -365,7 +367,7 @@ fn current_schema_identity_vectors_are_stable() {
     );
     assert_eq!(
         run_id_of(&binding()),
-        "16083203295aa30f05d0d87dbac47e0d22298c97b323516f090a7c61e58367b6"
+        "949a83a27b3986027594ce1b930f8df6b8b72e12297de434380a0797955b7772"
     );
 }
 
@@ -2093,6 +2095,33 @@ fn blank_engine_version_is_rejected() {
 }
 
 #[test]
+fn unsupported_metrics_version_is_rejected_fail_closed() {
+    let mut invalid = binding();
+    invalid.metrics_version = "strategy-metrics/v0".to_string();
+    assert!(matches!(
+        StrategyRunManifest::build(&invalid),
+        Err(StrategyIrError::UnsupportedMetricsVersion { .. })
+    ));
+}
+
+#[test]
+fn pre_metrics_manifest_json_is_rejected_instead_of_silently_migrated() {
+    let built = StrategyRunManifest::build(&binding()).expect("builds");
+    let mut json = serde_json::to_value(&built).expect("serializes");
+    json["schema_version"] = serde_json::json!(2);
+    json["binding"]
+        .as_object_mut()
+        .expect("binding object")
+        .remove("metrics_version");
+
+    let bytes = serde_json::to_vec(&json).expect("serializes legacy shape");
+    assert!(matches!(
+        StrategyRunManifest::from_json_slice(&bytes),
+        Err(ArtifactLoadError::InvalidJson { .. })
+    ));
+}
+
+#[test]
 fn a_manifest_binds_a_real_strategy_and_config() {
     let built_ir = ir();
     let config = StrategyExecutionConfig::build(&settings()).expect("builds");
@@ -2105,6 +2134,7 @@ fn a_manifest_binds_a_real_strategy_and_config() {
         config_id: config.config_id.clone(),
         seed: 7,
         engine_version: "typhoon-engine/0.1.0".to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: None,
     })
     .expect("binding built from real ids is valid");
@@ -2196,6 +2226,7 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
         config_id: config.config_id().to_string(),
         seed: 7,
         engine_version: "0.1.0-test".to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: None,
     })
     .expect("run manifest builds");
@@ -2252,6 +2283,7 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
             config_id: config.config_id().to_string(),
             seed: 7,
             engine_version: "0.1.0-test".to_string(),
+            metrics_version: METRICS_SCHEMA_VERSION.to_string(),
             intervention_log_id: None,
         })
         .expect("timed manifest builds");
@@ -2345,6 +2377,7 @@ fn verified_run_assembly_rejects_missing_duplicate_and_mixed_policy_inputs() {
         config_id: config.config_id().to_string(),
         seed: 9,
         engine_version: "0.1.0-test".to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
         intervention_log_id: None,
     })
     .expect("manifest builds");
