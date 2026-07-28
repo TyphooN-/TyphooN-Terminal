@@ -695,6 +695,24 @@ pub struct TyphooNApp {
     pub(crate) bt_result: Option<backtest::TradeReport>,
     pub(crate) bt_trades: Vec<backtest::Trade>,
     pub(crate) bt_equity_curve: Vec<f64>,
+    /// Identity-verified, bounded M2 report presentation prepared off the render thread.
+    pub(crate) strategy_result_view: Option<crate::app::strategy_report_view::StrategyResultView>,
+    /// Chart tab whose immutable timeline was used to prepare the current result.
+    pub(crate) strategy_result_chart_tab: Option<usize>,
+    pub(crate) strategy_result_selected_trade: Option<usize>,
+    pub(crate) strategy_result_status: String,
+    pub(crate) strategy_result_load_rx: Option<
+        std::sync::mpsc::Receiver<
+            Result<
+                (
+                    usize,
+                    u64,
+                    crate::app::strategy_report_view::StrategyResultView,
+                ),
+                String,
+            >,
+        >,
+    >,
 
     // ── optimizer state ──────────────────────────────────────────────────
     pub(crate) opt_fast_range: String,

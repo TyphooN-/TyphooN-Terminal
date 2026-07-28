@@ -1,7 +1,107 @@
 use super::*;
 
 impl TyphooNApp {
+    fn drain_strategy_result_load(&mut self) {
+        let received =
+            self.strategy_result_load_rx
+                .as_ref()
+                .and_then(|receiver| match receiver.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err(
+                        "strategy report loader stopped unexpectedly".to_string(),
+                    )),
+                });
+        let Some(result) = received else {
+            return;
+        };
+        self.strategy_result_load_rx = None;
+        match result {
+            Ok((chart_index, bars_generation, view)) => {
+                let chart_is_current = self.charts.get(chart_index).is_some_and(|chart| {
+                    chart.bars_generation == bars_generation
+                        && chart.bars.len() == view.chart_bar_count
+                        && chart.symbol_matches(&view.symbol)
+                });
+                if !chart_is_current {
+                    self.strategy_result_status =
+                        "Error: the selected chart changed while the report was loading".into();
+                    return;
+                }
+                self.strategy_result_selected_trade =
+                    strategy_report_view::clamp_selected_trade(None, view.trades.len());
+                self.replay_active = false;
+                self.replay_playing = false;
+                self.replay_bar_idx = strategy_report_view::reset_replay_bar(view.chart_bar_count);
+                self.strategy_result_status = format!(
+                    "Loaded and verified report {} for run {}",
+                    view.report_id.get(..8).unwrap_or(&view.report_id),
+                    view.run_id.get(..8).unwrap_or(&view.run_id)
+                );
+                self.strategy_result_chart_tab = Some(chart_index);
+                self.strategy_result_view = Some(view);
+                if let Some(chart) = self.charts.get_mut(chart_index) {
+                    chart.cached_trade_overlay_frame = 0;
+                }
+            }
+            Err(error) => {
+                self.strategy_result_status = format!("Error: {error}");
+            }
+        }
+    }
+
+    fn start_strategy_result_load(&mut self, ctx: &egui::Context) {
+        let Some(paths) = rfd::FileDialog::new()
+            .set_title("Select the sealed report artifact and paired SimulationReport JSON")
+            .add_filter("JSON report pair", &["json"])
+            .pick_files()
+        else {
+            return;
+        };
+        if paths.len() != 2 {
+            self.strategy_result_status =
+                "Error: select exactly two files: one artifact and one SimulationReport JSON"
+                    .into();
+            return;
+        }
+        let Some(chart) = self.charts.get(self.active_tab) else {
+            self.strategy_result_status = "Error: no active chart is available".into();
+            return;
+        };
+        if chart.bars.is_empty() {
+            self.strategy_result_status = "Error: the active chart has no timeline".into();
+            return;
+        }
+        let chart_index = self.active_tab;
+        let bars_generation = chart.bars_generation;
+        let chart_symbol = chart.symbol.clone();
+        let chart_bar_times_ms: Vec<_> = chart.bars.iter().map(|bar| bar.ts_ms).collect();
+
+        self.replay_active = false;
+        self.replay_playing = false;
+        self.strategy_result_view = None;
+        self.strategy_result_chart_tab = None;
+        self.strategy_result_selected_trade = None;
+        for chart in &mut self.charts {
+            chart.cached_trade_overlay_frame = 0;
+        }
+
+        let paths = [paths[0].clone(), paths[1].clone()];
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.strategy_result_load_rx = Some(receiver);
+        self.strategy_result_status = "Loading and verifying report pair…".into();
+        let repaint = ctx.clone();
+        std::thread::spawn(move || {
+            let result =
+                strategy_report_view::load_prepared_pair(paths, &chart_symbol, &chart_bar_times_ms)
+                    .map(|view| (chart_index, bars_generation, view));
+            let _ = sender.send(result);
+            repaint.request_repaint();
+        });
+    }
+
     pub(super) fn render_backtest_window(&mut self, ctx: &egui::Context) {
+        self.drain_strategy_result_load();
         if !self.show_backtest {
             return;
         }
@@ -24,6 +124,44 @@ impl TyphooNApp {
                     ui.label("Bars:");
                     ui.label(egui::RichText::new(format!("{}", n_bars)).strong());
                 });
+                ui.horizontal(|ui| {
+                    let loading = self.strategy_result_load_rx.is_some();
+                    if ui
+                        .add_enabled(
+                            !loading && n_bars > 0,
+                            egui::Button::new("Load verified report pair…"),
+                        )
+                        .on_hover_text(
+                            "Select one sealed StrategyReport artifact and its paired SimulationReport JSON",
+                        )
+                        .clicked()
+                    {
+                        self.start_strategy_result_load(ctx);
+                    }
+                    if loading {
+                        ui.spinner();
+                    }
+                    if let Some(chart_tab) = self.strategy_result_chart_tab
+                        && chart_tab != self.active_tab
+                        && ui.button("Focus report chart").clicked()
+                    {
+                        self.active_tab = chart_tab;
+                    }
+                });
+                if !self.strategy_result_status.is_empty() {
+                    let color = if self.strategy_result_status.starts_with("Error:") {
+                        DOWN
+                    } else if self.strategy_result_load_rx.is_some() {
+                        egui::Color32::from_rgb(255, 200, 50)
+                    } else {
+                        UP
+                    };
+                    ui.label(
+                        egui::RichText::new(&self.strategy_result_status)
+                            .color(color)
+                            .small(),
+                    );
+                }
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
                     ui.label("Strategy:");
@@ -219,6 +357,30 @@ impl TyphooNApp {
                                         });
                                 });
                         });
+                    }
+                }
+
+                if let Some(view) = self.strategy_result_view.as_ref() {
+                    let report_chart_is_active =
+                        self.strategy_result_chart_tab == Some(self.active_tab);
+                    if report_chart_is_active {
+                        strategy_report_view::render_prepared_result(
+                            ui,
+                            view,
+                            &mut self.strategy_result_selected_trade,
+                            &mut self.replay_active,
+                            &mut self.replay_bar_idx,
+                            &mut self.replay_playing,
+                            &mut self.replay_speed,
+                        );
+                    } else {
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(
+                                "The verified result remains installed on its source chart; focus that chart to inspect or replay it.",
+                            )
+                            .color(egui::Color32::from_rgb(255, 200, 50)),
+                        );
                     }
                 }
             });

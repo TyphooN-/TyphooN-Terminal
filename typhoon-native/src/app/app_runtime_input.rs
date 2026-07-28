@@ -339,11 +339,19 @@ impl TyphooNApp {
 
             // Replay mode controls
             if self.replay_active {
-                let total_bars = self
+                let chart_bar_count = self
                     .charts
                     .get(self.active_tab)
-                    .map(|c| c.bars.len())
+                    .map(|chart| chart.bars.len())
                     .unwrap_or(0);
+                let prepared_bar_count = self
+                    .strategy_result_view
+                    .as_ref()
+                    .filter(|_| self.strategy_result_chart_tab == Some(self.active_tab))
+                    .map(|view| view.chart_bar_count);
+                let total_bars = prepared_bar_count
+                    .map(|count| count.min(chart_bar_count))
+                    .unwrap_or(chart_bar_count);
                 if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
                     self.replay_playing = !self.replay_playing;
                 }

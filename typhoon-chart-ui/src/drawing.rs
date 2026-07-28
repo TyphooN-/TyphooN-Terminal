@@ -560,6 +560,12 @@ pub struct PositionLine {
     pub volume: f64, // aggregated lots at this price
     pub is_buy: bool,
     pub line_type: u8, // 0=entry, 1=SL, 2=TP
+    /// First chart bar where this level is known. Zero for timeless live broker rows.
+    pub start_bar: usize,
+    /// Last chart bar where this level is valid (inclusive). `usize::MAX` stays live.
+    pub end_bar: usize,
+    /// Optional identity-bearing label supplied by a prepared strategy result.
+    pub label: Option<String>,
 }
 
 /// Open limit/stop order line for chart overlay.

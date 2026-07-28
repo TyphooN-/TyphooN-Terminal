@@ -1983,6 +1983,9 @@ impl TyphooNApp {
                 volume: pos.qty,
                 is_buy,
                 line_type: 0, // entry
+                start_bar: 0,
+                end_bar: usize::MAX,
+                label: None,
             });
         }
 
@@ -2019,6 +2022,9 @@ impl TyphooNApp {
                     volume: *qty,
                     is_buy: true,
                     line_type: 0,
+                    start_bar: 0,
+                    end_bar: usize::MAX,
+                    label: None,
                 });
             }
         }
@@ -2043,8 +2049,39 @@ impl TyphooNApp {
                     volume: vol,
                     is_buy,
                     line_type: lt,
+                    start_bar: 0,
+                    end_bar: usize::MAX,
+                    label: None,
                 })
                 .collect();
+        }
+
+        // Merge the already-prepared simulation overlay into this chart cache.
+        // Digest verification and ledger scans happened on the load worker; this
+        // periodic cache rebuild only clones bounded presentation vectors.
+        if let Some(view) = self
+            .strategy_result_view
+            .as_ref()
+            .filter(|view| chart.symbol_matches(&view.symbol))
+        {
+            overlay.markers.extend(view.overlay.markers.iter().cloned());
+            overlay
+                .position_lines
+                .extend(view.overlay.position_lines.iter().cloned());
+            overlay.markers.sort_by(|left, right| {
+                left.bar_idx
+                    .cmp(&right.bar_idx)
+                    .then_with(|| left.ticker.cmp(&right.ticker))
+                    .then_with(|| left.price.total_cmp(&right.price))
+                    .then_with(|| left.is_buy.cmp(&right.is_buy))
+            });
+            overlay.position_lines.sort_by(|left, right| {
+                left.start_bar
+                    .cmp(&right.start_bar)
+                    .then_with(|| left.line_type.cmp(&right.line_type))
+                    .then_with(|| left.price.total_cmp(&right.price))
+                    .then_with(|| left.label.cmp(&right.label))
+            });
         }
 
         overlay

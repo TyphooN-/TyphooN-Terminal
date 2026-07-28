@@ -1040,10 +1040,18 @@ impl TyphooNApp {
             // restored after draw_chart — same trick as the MTF grid above. Avoids
             // cloning Vec<TradeMarker> (with String tickers) every frame.
 
-            // Replay mode: clamp view to only show replay_bar_idx bars
+            // Replay mode: clamp view to the selected prepared timeline when one is installed.
             if self.replay_active {
+                let prepared_bar_count = self
+                    .strategy_result_view
+                    .as_ref()
+                    .filter(|_| self.strategy_result_chart_tab == Some(self.active_tab))
+                    .map(|view| view.chart_bar_count);
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    let count = self.replay_bar_idx.max(1).min(chart.bars.len());
+                    let timeline_len = prepared_bar_count
+                        .map(|count| count.min(chart.bars.len()))
+                        .unwrap_or(chart.bars.len());
+                    let count = self.replay_bar_idx.max(1).min(timeline_len);
                     chart.view_offset = count.saturating_sub(1);
                     chart.visible_bars = chart.visible_bars.min(count);
                 }

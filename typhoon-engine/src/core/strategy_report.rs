@@ -184,19 +184,15 @@ impl StrategyReportArtifact {
         Ok(())
     }
 
-    pub fn verify_against(
+    /// Verify that this sealed artifact and a completed simulation report are
+    /// the exact identity-bound pair. Native presentation can call this after
+    /// the run worker has already verified the manifest; it does not need to
+    /// rebuild or scan the run inputs just to consume the result.
+    pub fn verify_simulation_report(
         &self,
-        manifest: &StrategyRunManifest,
         simulator_report: &SimulationReport,
     ) -> Result<(), ReportArtifactError> {
         self.verify()?;
-        verify_manifest(manifest)?;
-        if manifest.run_id() != self.run_id {
-            return Err(ReportArtifactError::RunIdMismatch {
-                expected: self.run_id.clone(),
-                actual: manifest.run_id().to_string(),
-            });
-        }
         let report_digest = digest_json(SIMULATOR_REPORT_DOMAIN, simulator_report)?;
         if report_digest != self.simulator_report_digest {
             return Err(ReportArtifactError::SimulatorDigestMismatch {
@@ -209,6 +205,22 @@ impl StrategyReportArtifact {
             return Err(ReportArtifactError::EventDigestMismatch {
                 expected: self.simulator_event_digest.clone(),
                 actual: event_digest,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn verify_against(
+        &self,
+        manifest: &StrategyRunManifest,
+        simulator_report: &SimulationReport,
+    ) -> Result<(), ReportArtifactError> {
+        self.verify_simulation_report(simulator_report)?;
+        verify_manifest(manifest)?;
+        if manifest.run_id() != self.run_id {
+            return Err(ReportArtifactError::RunIdMismatch {
+                expected: self.run_id.clone(),
+                actual: manifest.run_id().to_string(),
             });
         }
         Ok(())
@@ -383,6 +395,9 @@ mod tests {
         restored
             .verify_against(&manifest, &simulator)
             .expect("replay verifies");
+        restored
+            .verify_simulation_report(&simulator)
+            .expect("completed simulation output verifies without rebuilding the manifest");
 
         let mut tampered: serde_json::Value = serde_json::from_slice(&json).expect("json");
         tampered["analysis"]["metrics"][0]["value"]["value"] = serde_json::json!(99.0);

@@ -15,6 +15,9 @@ pub(crate) fn draw_broker_trade_overlays(
     // ── Broker trade markers (buy/sell arrows + position lines) ────────
     // Position entry/SL/TP lines
     for pl in &trade_overlay.position_lines {
+        if !position_line_visible(pl, start_idx, end_idx) {
+            continue;
+        }
         let y = price_to_y(pl.price);
         if y >= chart_rect.top() && y <= chart_rect.bottom() {
             let (color, label_prefix) = match pl.line_type {
@@ -44,7 +47,9 @@ pub(crate) fn draw_broker_trade_overlays(
             // Entry lines (BUY/SELL) show size + average entry ("BUY 11155 @ 0.1058");
             // SL/TP lines just show the price level. Quantity is trimmed of trailing
             // zeros so whole-share lots read cleanly.
-            let label = if pl.line_type == 0 {
+            let label = if let Some(label) = &pl.label {
+                format!("{} {:.4}", label, pl.price)
+            } else if pl.line_type == 0 {
                 let qty_str = if pl.volume.fract().abs() < 1e-9 {
                     format!("{:.0}", pl.volume)
                 } else {
@@ -306,6 +311,10 @@ pub(crate) fn draw_broker_trade_overlays(
     }
 }
 
+fn position_line_visible(line: &PositionLine, start_idx: usize, end_idx: usize) -> bool {
+    line.start_bar < end_idx && line.end_bar >= start_idx
+}
+
 fn signed_money(value: f64) -> String {
     if value >= 0.0 {
         format!("+${:.2}", value.abs())
@@ -382,5 +391,22 @@ mod tests {
             order_line_label(&line, &|p| format!("{p:.2}")),
             "Alpaca BUY LMT 12.5 @ 9.95 -$124.38 -1.24% -5p"
         );
+    }
+
+    #[test]
+    fn time_bounded_position_lines_never_reveal_future_levels() {
+        let line = PositionLine {
+            price: 95.0,
+            volume: 1.0,
+            is_buy: true,
+            line_type: 1,
+            start_bar: 5,
+            end_bar: 9,
+            label: Some("SIM deadbeef SL".to_string()),
+        };
+        assert!(!position_line_visible(&line, 0, 5));
+        assert!(position_line_visible(&line, 0, 6));
+        assert!(position_line_visible(&line, 7, 9));
+        assert!(!position_line_visible(&line, 10, 12));
     }
 }

@@ -111,6 +111,7 @@ mod settings;
 mod ssr_scan;
 mod state;
 mod storage;
+mod strategy_report_view;
 mod strategy_windows;
 mod style_scope;
 mod symbol_investigation;
@@ -459,6 +460,11 @@ impl TyphooNApp {
             bt_result: None,
             bt_trades: Vec::new(),
             bt_equity_curve: Vec::new(),
+            strategy_result_view: None,
+            strategy_result_chart_tab: None,
+            strategy_result_selected_trade: None,
+            strategy_result_status: String::new(),
+            strategy_result_load_rx: None,
             opt_fast_range: "5-50".to_string(),
             opt_slow_range: "20-200".to_string(),
             opt_results: Vec::new(),
