@@ -13,13 +13,15 @@
 
 use super::*;
 use crate::app::dataset_inspector_model::{
-    DATASET_INSPECTOR_PAGE_SIZES, DatasetInspectorRow, DatasetInspectorState, clamp_page_size,
-    last_page_offset, next_page_offset, previous_page_offset,
+    DATASET_INSPECTOR_PAGE_SIZES, DatasetInspectorRow, DatasetInspectorState, MaterializationDraft,
+    MaterializationIdentity, MaterializationPump, clamp_page_size, last_page_offset,
+    next_page_offset, previous_page_offset,
 };
 use typhoon_engine::core::strategy_dataset::{
     AdjustmentPolicy, CalendarPolicy, DatasetManifestInput, DatasetProvenance, DatasetQaPolicy,
     DatasetQaSeverity,
 };
+use typhoon_engine::core::strategy_dataset_store::MAX_STORED_BARS;
 use typhoon_engine::core::strategy_dataset_worker::{DatasetJob, DatasetWorker};
 
 /// Row height for the virtualized bar table.
@@ -82,11 +84,28 @@ impl TyphooNApp {
         });
     }
 
-    /// Materialize the active chart's in-memory bars as an immutable dataset.
-    ///
-    /// The bars are already in RAM for rendering, so this copies them and hands
-    /// them to the worker — it does not read the cache on the render thread.
-    fn materialize_active_chart_dataset(&mut self) {
+    fn active_chart_materialization_identity(&self) -> Option<MaterializationIdentity> {
+        let chart = self.charts.get(self.active_tab)?;
+        Some(MaterializationIdentity {
+            chart_index: self.active_tab,
+            symbol: chart.symbol.trim().to_string(),
+            timeframe: chart.timeframe.cache_suffix().to_string(),
+            source: if chart.primary_source.is_empty() {
+                "unknown".to_string()
+            } else {
+                chart.primary_source.to_string()
+            },
+            bars_generation: chart.bars_generation,
+            len: chart.bars.len(),
+            first_ts_ms: chart.bars.first().map(|bar| bar.ts_ms),
+            last_ts_ms: chart.bars.last().map(|bar| bar.ts_ms),
+        })
+    }
+
+    /// Start an O(1) chart snapshot. Conversion is pumped into independently
+    /// bounded chunks on later frames; those chunks move into one worker job
+    /// and are flattened only on the worker thread.
+    fn start_active_chart_materialization(&mut self) {
         let Some(chart) = self.charts.get(self.active_tab) else {
             self.dataset_inspector.status = "No active chart.".to_string();
             return;
@@ -96,34 +115,25 @@ impl TyphooNApp {
             return;
         }
 
-        let symbol = chart.symbol.trim().to_string();
+        if chart.bars.len() as u64 > MAX_STORED_BARS {
+            self.dataset_inspector.status = format!(
+                "Active chart has {} bars; dataset limit is {MAX_STORED_BARS}.",
+                chart.bars.len()
+            );
+            return;
+        }
+        let identity = self
+            .active_chart_materialization_identity()
+            .expect("active chart was just resolved");
+        let symbol = identity.symbol.clone();
         if symbol.is_empty() {
             self.dataset_inspector.status = "Active chart has no symbol.".to_string();
             return;
         }
-        let source = if chart.primary_source.is_empty() {
-            "unknown"
-        } else {
-            chart.primary_source
-        };
-        let bars: Vec<EngineBar> = chart
-            .bars
-            .iter()
-            .map(|b| EngineBar {
-                timestamp: chrono::DateTime::from_timestamp_millis(b.ts_ms)
-                    .unwrap_or_default()
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                open: b.open,
-                high: b.high,
-                low: b.low,
-                close: b.close,
-                volume: b.volume,
-            })
-            .collect();
-
+        let source = identity.source.as_str();
         let input = DatasetManifestInput {
             symbol: symbol.clone(),
-            timeframe: chart.timeframe.cache_suffix().to_string(),
+            timeframe: identity.timeframe.clone(),
             provenance: DatasetProvenance {
                 source: source.to_string(),
                 venue: source.to_string(),
@@ -136,13 +146,59 @@ impl TyphooNApp {
             qa_policy: DatasetQaPolicy::default(),
         };
 
-        let request_id = self.dataset_inspector.begin_request();
-        self.dataset_inspector.status = format!("Materializing {} bar(s)…", bars.len());
-        self.submit_dataset_job(DatasetJob::Build {
-            request_id,
-            input,
-            bars,
+        self.dataset_inspector.status =
+            format!("Preparing bounded snapshot of {} bar(s)…", identity.len);
+        self.dataset_inspector.materialization = Some(MaterializationDraft::start(identity, input));
+    }
+
+    fn pump_active_chart_materialization(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.dataset_inspector.materialization.take() else {
+            return;
+        };
+        let Some(identity) = self.active_chart_materialization_identity() else {
+            self.dataset_inspector.status =
+                "Materialization cancelled: active chart closed.".to_string();
+            return;
+        };
+        let chart = &self.charts[identity.chart_index];
+        let result = draft.pump(&identity, |index| {
+            let bar = &chart.bars[index];
+            EngineBar {
+                timestamp: chrono::DateTime::from_timestamp_millis(bar.ts_ms)
+                    .unwrap_or_default()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: bar.volume,
+            }
         });
+        match result {
+            MaterializationPump::Pending => {
+                self.dataset_inspector.status = format!(
+                    "Preparing chart snapshot: {} / {} bars…",
+                    draft.cursor(),
+                    draft.total_len()
+                );
+                self.dataset_inspector.materialization = Some(draft);
+                ctx.request_repaint();
+            }
+            MaterializationPump::Changed => {
+                self.dataset_inspector.status =
+                    "Materialization cancelled: chart changed while snapshotting.".to_string();
+            }
+            MaterializationPump::Complete { input, bars } => {
+                let request_id = self.dataset_inspector.begin_request();
+                self.dataset_inspector.status =
+                    format!("Building immutable dataset from {} bar(s)…", bars.len());
+                self.submit_dataset_job(DatasetJob::BuildChunked {
+                    request_id,
+                    input,
+                    bars,
+                });
+            }
+        }
     }
 
     /// Drain the worker's bounded event batch. Safe to call every frame: it is
@@ -161,6 +217,7 @@ impl TyphooNApp {
         // closed still needs its reply consumed, or the worker parks on a full
         // event queue.
         self.pump_dataset_worker();
+        self.pump_active_chart_materialization(ctx);
         if !self.show_dataset_inspector {
             return;
         }
@@ -402,7 +459,8 @@ impl TyphooNApp {
             self.request_dataset_list();
         }
         if pending_build {
-            self.materialize_active_chart_dataset();
+            self.start_active_chart_materialization();
+            ctx.request_repaint();
         }
         if let Some((dataset_id, offset)) = pending_page {
             self.request_dataset_page(dataset_id, offset);

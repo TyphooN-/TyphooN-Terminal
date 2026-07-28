@@ -1047,7 +1047,8 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   weekend/holiday/out-of-session bars — under a versioned four-variant calendar policy
   (`Continuous24x7`, `WeekdaysOnly`, `UsEquityRegular`, `XStock24x5`, reusing the ADR-110
   holiday rules) and a versioned, identity-bearing `DatasetQaPolicy`. Identity is split in
-  two: `dataset_id` addresses the bar data, and `manifest_id` seals it together with the
+  two: `dataset_id` addresses the exact persisted bar bytes (including signed-zero bits), and
+  `manifest_id` seals it together with the
   calendar policy, the QA policy, and the QA report hash (§11.1). Findings are capped by the
   policy and report their own truncation.
 - `strategy_dataset_store.rs`: the filesystem storage boundary — a content-addressed record
@@ -1056,6 +1057,11 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   timestamps, carries a trailing offset index for O(1)-ish paged reads, and is digest-verified
   on open. Loading is bounded on every axis (bar count, artifact bytes, page size, listing
   size, timestamp length) and dataset ids are validated before any path is built from them.
+  Linux store traversal is descriptor-relative and fail-closed through `openat2` beneath/no-follow
+  constraints; publication synchronizes the layout, staging record, shard, and layout metadata in
+  crash-durable order, including first-shard creation. Other targets retain the same compiling API
+  but `FileDatasetStore::open` returns `UnsupportedPlatform` until an equivalent hardened boundary
+  is implemented.
 - `strategy_dataset_worker.rs`: dataset construction, QA, storage, and paged reads on a
   dedicated thread behind bounded job/event queues, non-blocking submission with explicit
   backpressure, stage-granular cancellation, error delivery as events, and a bounded
@@ -1064,7 +1070,11 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   `floating_windows/dataset_inspector.rs`): a graphical tabular browser over stored datasets
   showing manifest, provenance, calendar/QA policy ids, QA counts, and per-bar QA flags. The
   render path draws only the page the worker delivered, virtualized by `show_rows`; it opens
-  no store, walks no database, and aggregates nothing.
+  no store, walks no database, and aggregates nothing. Active-chart snapshot conversion allocates
+  at most one fixed-size chunk per frame; the chunked snapshot transfers without flattening or
+  input-sized copying on render and is flattened only by the worker. An O(1) bars generation is
+  advanced on production replacements, appends, and in-place OHLCV updates, so same-length,
+  same-timestamp chart mutations cancel materialization fail-closed.
 - `strategy_ir.rs`: canonical strategy IR, semantic/type/resource validation, content-addressed
   strategy and execution identities, bounded persisted-artifact loading, and stable identity
   vectors.

@@ -18,15 +18,14 @@
 //! Floats are hashed via [`f64::to_bits`], never via a decimal rendering, and
 //! identity performs no floating-point arithmetic.
 //!
-//! Two normalizations are applied, and only these two:
+//! One normalization is applied, and only this one:
 //!
-//! 1. **Negative zero.** `-0.0` is hashed as `+0.0`. The two are numerically
-//!    equal, so treating them as different datasets would be a false negative
-//!    on every reproducibility check. See
-//!    [`canonical_f64_bits`].
-//! 2. **Derived fields are not hashed twice.** `bar_count`, `first_timestamp`,
-//!    and `last_timestamp` are implied by the framed bar sequence.
-//!    [`DatasetManifest::verify`] re-derives and compares them explicitly, so
+//! 1. **No NaN normalization.** NaN and infinities are rejected before hashing;
+//!    accepting their many payloads and then choosing a canonical NaN would
+//!    hide corrupt market data.
+//!
+//! Finite floats, including `+0.0` and `-0.0`, retain their exact bits so the
+//! identity agrees with the byte-identical payload persisted by the store.
 //!    tampering with them is still detected.
 //!
 //! Inputs that cannot be encoded unambiguously are **rejected**, not hashed:
@@ -66,7 +65,7 @@ use sha2::{Digest, Sha256};
 
 /// Wire-format version of [`DatasetManifest`]. Bump on any change to the
 /// hashed encoding or the manifest's field set.
-pub const DATASET_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const DATASET_MANIFEST_SCHEMA_VERSION: u32 = 3;
 
 /// Wire-format version of [`DatasetQaReport`].
 pub const DATASET_QA_SCHEMA_VERSION: u32 = 2;
@@ -76,7 +75,7 @@ pub const DATASET_QA_POLICY_SCHEMA_VERSION: u32 = 1;
 
 /// Domain-separation prefix for the dataset-id hash. Any change to the framing
 /// rules must change this string *and* the manifest schema version.
-const DATASET_ID_DOMAIN: &str = "typhoon.strategy_dataset.id.v2";
+const DATASET_ID_DOMAIN: &str = "typhoon.strategy_dataset.id.v3";
 
 /// Domain-separation prefix for the QA-report hash.
 const DATASET_QA_DOMAIN: &str = "typhoon.strategy_dataset.qa.v1";
@@ -928,18 +927,13 @@ fn expect_optional_field(
 
 // ── Canonical encoding ─────────────────────────────────────────────
 
-/// Bit pattern of `-0.0`, normalized to `+0.0` before hashing.
-const NEGATIVE_ZERO_BITS: u64 = 0x8000_0000_0000_0000;
-
 /// Exact, platform-independent bits for a finite `f64`.
 ///
-/// `-0.0` maps onto `+0.0` (the one documented numeric normalization); every
-/// other value keeps its exact IEEE-754 bit pattern. This is pure integer
-/// work — no floating-point arithmetic participates in identity. Callers must
-/// reject non-finite values first.
+/// Every value, including either zero sign, keeps its exact IEEE-754 bit
+/// pattern. This is pure integer work — no floating-point arithmetic
+/// participates in identity. Callers must reject non-finite values first.
 fn canonical_f64_bits(value: f64) -> u64 {
-    let bits = value.to_bits();
-    if bits == NEGATIVE_ZERO_BITS { 0 } else { bits }
+    value.to_bits()
 }
 
 /// Length-prefixed, domain-separated SHA-256 writer.

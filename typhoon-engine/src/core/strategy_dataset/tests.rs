@@ -208,12 +208,12 @@ fn framing_prevents_adjacent_field_collisions() {
 // ── Identity: numeric encoding decisions ───────────────────────────
 
 #[test]
-fn negative_zero_is_normalized_to_positive_zero_in_identity() {
-    // Documented normalization: -0.0 and +0.0 are numerically equal, so they
-    // must not produce two different dataset ids for the same data.
+fn byte_distinct_positive_and_negative_zero_have_distinct_dataset_ids() {
+    // Storage preserves raw IEEE-754 bits, so byte identity must distinguish
+    // the sign bit too. Otherwise first publication wins for two payloads.
     let positive = vec![bar("2024-01-01T00:00:00Z", 10.0, 11.0, 9.5, 10.5, 0.0)];
     let negative = vec![bar("2024-01-01T00:00:00Z", 10.0, 11.0, 9.5, 10.5, -0.0)];
-    assert_eq!(id_of(&input(), &positive), id_of(&input(), &negative));
+    assert_ne!(id_of(&input(), &positive), id_of(&input(), &negative));
 
     // ...and -0.0 volume is not a "negative volume" QA defect either.
     let report = run_dataset_qa("1Day", CalendarPolicy::Continuous24x7, &negative);

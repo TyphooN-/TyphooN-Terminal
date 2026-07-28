@@ -4414,6 +4414,7 @@ dependencies = [
  "futures-util",
  "hmac 0.13.0",
  "keyring-core",
+ "libc",
  "pbkdf2",
  "rand",
  "reqwest",

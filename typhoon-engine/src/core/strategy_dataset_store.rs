@@ -55,8 +55,15 @@ use crate::core::strategy_dataset::{
     DatasetError, DatasetManifest, DatasetManifestInput, DatasetQaFinding, DatasetQaReport,
 };
 use sha2::{Digest, Sha256};
-use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(any(target_os = "linux", test))]
+use std::collections::BinaryHeap;
+#[cfg(target_os = "linux")]
+use std::ffi::{CStr, CString};
+use std::io::Write;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// On-disk layout version. A change to the directory shape or the payload
 /// format lands under a new directory, so old records stay readable by the
@@ -107,6 +114,8 @@ const STAGING_DIR: &str = ".staging";
 /// Everything that can go wrong at the storage boundary.
 #[derive(Debug)]
 pub enum DatasetStoreError {
+    /// The hardened filesystem boundary is not implemented for this target.
+    UnsupportedPlatform { platform: &'static str },
     /// A dataset id was not a 64-character lowercase hex string. Rejected
     /// before any path is built from it, so a traversal attempt never reaches
     /// the filesystem.
@@ -149,6 +158,10 @@ pub enum DatasetStoreError {
 impl std::fmt::Display for DatasetStoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnsupportedPlatform { platform } => write!(
+                f,
+                "strategy dataset storage is supported only on Linux (current target: {platform})"
+            ),
             Self::InvalidDatasetId { found } => {
                 write!(f, "`{found}` is not a valid dataset id")
             }
@@ -492,9 +505,25 @@ pub struct DatasetPage {
 }
 
 /// A filesystem-backed dataset store rooted at one directory.
+#[derive(Debug)]
+struct SecureDir {
+    file: Arc<std::fs::File>,
+    label: PathBuf,
+}
+
+impl Clone for SecureDir {
+    fn clone(&self) -> Self {
+        Self {
+            file: Arc::clone(&self.file),
+            label: self.label.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FileDatasetStore {
     root: PathBuf,
+    layout: SecureDir,
 }
 
 /// Monotonic suffix for staging directory names. Combined with the process id
@@ -506,9 +535,26 @@ impl FileDatasetStore {
     /// Open (creating if needed) a store rooted at `root`.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, DatasetStoreError> {
         let root = root.as_ref().to_path_buf();
-        let layout = root.join(DATASET_STORE_LAYOUT_VERSION);
-        std::fs::create_dir_all(&layout).map_err(|e| io_error(&layout, "create store root", e))?;
-        Ok(Self { root })
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = root;
+            Err(DatasetStoreError::UnsupportedPlatform {
+                platform: std::env::consts::OS,
+            })
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let root_dir = secure_bootstrap_absolute_dir(&root)?;
+            let created_layout = secure_mkdir(&root_dir, DATASET_STORE_LAYOUT_VERSION)?;
+            if created_layout {
+                root_dir
+                    .file
+                    .sync_all()
+                    .map_err(|e| io_error(&root, "fsync store root", e))?;
+            }
+            let layout = secure_open_dir(&root_dir, DATASET_STORE_LAYOUT_VERSION)?;
+            Ok(Self { root, layout })
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -538,7 +584,10 @@ impl FileDatasetStore {
     /// Whether a record with this id is present.
     pub fn contains(&self, dataset_id: &str) -> Result<bool, DatasetStoreError> {
         validate_dataset_id(dataset_id)?;
-        Ok(self.record_dir(dataset_id).join(MANIFEST_FILE).is_file())
+        let Some(record) = self.open_record_dir_optional(dataset_id)? else {
+            return Ok(false);
+        };
+        Ok(secure_open_file_optional(&record, MANIFEST_FILE)?.is_some())
     }
 
     /// Build a manifest and QA report for `bars` and publish all three files.
@@ -583,8 +632,7 @@ impl FileDatasetStore {
         manifest.verify(bars)?;
         manifest.verify_qa_report(qa)?;
 
-        let destination = self.record_dir(&manifest.dataset_id);
-        if destination.join(MANIFEST_FILE).is_file() {
+        if self.contains(&manifest.dataset_id)? {
             return self.verify_existing_record(manifest, qa);
         }
 
@@ -600,22 +648,19 @@ impl FileDatasetStore {
                 message: error.to_string(),
             })?;
 
-        let staging_root = self.staging_dir();
-        std::fs::create_dir_all(&staging_root)
-            .map_err(|e| io_error(&staging_root, "create staging root", e))?;
+        secure_mkdir(&self.layout, STAGING_DIR)?;
+        let staging_root = secure_open_dir(&self.layout, STAGING_DIR)?;
         self.sweep_staging(&staging_root);
 
         let ticket = STAGING_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let staging = staging_root.join(format!("{}-{ticket}", std::process::id()));
-        // A leftover from an earlier crash with the same pid+ticket would make
-        // the publish ambiguous; start from a clean directory.
-        let _ = std::fs::remove_dir_all(&staging);
-        std::fs::create_dir_all(&staging)
-            .map_err(|e| io_error(&staging, "create staging directory", e))?;
+        let staging_name = format!("{}-{ticket}", std::process::id());
+        secure_mkdir(&staging_root, &staging_name)?;
+        let staging = secure_open_dir(&staging_root, &staging_name)?;
 
         let published = self.publish(
+            &staging_root,
             &staging,
-            &destination,
+            &staging_name,
             manifest,
             qa,
             &manifest_json,
@@ -623,15 +668,16 @@ impl FileDatasetStore {
             &payload,
         );
         if published.is_err() {
-            let _ = std::fs::remove_dir_all(&staging);
+            let _ = secure_remove_record_dir(&staging_root, &staging_name);
         }
         published
     }
 
     fn publish(
         &self,
-        staging: &Path,
-        destination: &Path,
+        staging_root: &SecureDir,
+        staging: &SecureDir,
+        staging_name: &str,
         manifest: &DatasetManifest,
         qa: &DatasetQaReport,
         manifest_json: &[u8],
@@ -643,28 +689,39 @@ impl FileDatasetStore {
             (QA_FILE, qa_json),
             (PAYLOAD_FILE, payload),
         ] {
-            write_durably(&staging.join(name), bytes)?;
+            write_durably(staging, name, bytes)?;
         }
+        trace_publication("sync(staging)");
         sync_dir(staging)?;
 
-        let shard = destination
-            .parent()
-            .ok_or_else(|| corrupt("record path has no shard directory"))?;
-        std::fs::create_dir_all(shard).map_err(|e| io_error(shard, "create shard directory", e))?;
+        let shard_name = &manifest.dataset_id[..2];
+        let created_shard = secure_mkdir(&self.layout, shard_name)?;
+        trace_publication("create(shard)");
+        if created_shard {
+            trace_publication("sync(layout)");
+            sync_dir(&self.layout)?;
+        }
+        let shard = secure_open_dir(&self.layout, shard_name)?;
 
-        match std::fs::rename(staging, destination) {
+        trace_publication("rename(record)");
+        match secure_rename_dir(staging_root, staging_name, &shard, &manifest.dataset_id) {
             Ok(()) => {
-                sync_dir(shard)?;
+                trace_publication("sync(shard)");
+                sync_dir(&shard)?;
                 Ok(DatasetPutOutcome::Stored)
             }
             Err(error) => {
                 // Another writer published the same content first. Content
                 // addressing makes that a no-op, not a conflict.
-                if destination.join(MANIFEST_FILE).is_file() {
-                    let _ = std::fs::remove_dir_all(staging);
+                if self.contains(&manifest.dataset_id)? {
+                    let _ = secure_remove_record_dir(staging_root, staging_name);
                     self.verify_existing_record(manifest, qa)
                 } else {
-                    Err(io_error(destination, "publish record", error))
+                    Err(io_error(
+                        &self.record_dir(&manifest.dataset_id),
+                        "publish record",
+                        error,
+                    ))
                 }
             }
         }
@@ -694,13 +751,26 @@ impl FileDatasetStore {
     /// a previous run gets cleaned up, and the worst case for a second process
     /// putting concurrently is that its own put fails at the rename — a
     /// content-addressed retry, never a corrupt or partial record.
-    fn sweep_staging(&self, staging_root: &Path) {
-        let Ok(entries) = std::fs::read_dir(staging_root) else {
+    fn sweep_staging(&self, staging_root: &SecureDir) {
+        let Ok(entries) = secure_read_dir(staging_root) else {
             return;
         };
         for entry in entries.flatten() {
-            let _ = std::fs::remove_dir_all(entry.path());
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let _ = secure_remove_record_dir(staging_root, &name);
+            }
         }
+    }
+
+    fn open_record_dir_optional(
+        &self,
+        dataset_id: &str,
+    ) -> Result<Option<SecureDir>, DatasetStoreError> {
+        let Some(shard) = secure_open_dir_optional(&self.layout, &dataset_id[..2])? else {
+            return Ok(None);
+        };
+        secure_open_dir_optional(&shard, dataset_id)
     }
 
     /// Open a stored record: manifest and QA report decoded and cross-checked,
@@ -710,15 +780,16 @@ impl FileDatasetStore {
     /// bounded [`DatasetRecord::read_page`].
     pub fn open_record(&self, dataset_id: &str) -> Result<DatasetRecord, DatasetStoreError> {
         validate_dataset_id(dataset_id)?;
-        let dir = self.record_dir(dataset_id);
-        if !dir.join(MANIFEST_FILE).is_file() {
+        let Some(dir) = self.open_record_dir_optional(dataset_id)? else {
             return Err(DatasetStoreError::NotFound {
                 dataset_id: dataset_id.to_string(),
             });
-        }
+        };
 
+        let manifest_file = secure_open_file(&dir, MANIFEST_FILE)?;
         let manifest: DatasetManifest = read_json_artifact(
-            &dir.join(MANIFEST_FILE),
+            &manifest_file,
+            &dir.label.join(MANIFEST_FILE),
             MANIFEST_FILE,
             MAX_MANIFEST_JSON_BYTES,
         )?;
@@ -733,12 +804,18 @@ impl FileDatasetStore {
             });
         }
 
-        let qa: DatasetQaReport =
-            read_json_artifact(&dir.join(QA_FILE), QA_FILE, MAX_QA_JSON_BYTES)?;
+        let qa_file = secure_open_file(&dir, QA_FILE)?;
+        let qa: DatasetQaReport = read_json_artifact(
+            &qa_file,
+            &dir.label.join(QA_FILE),
+            QA_FILE,
+            MAX_QA_JSON_BYTES,
+        )?;
         manifest.verify_qa_report(&qa)?;
 
-        let payload_path = dir.join(PAYLOAD_FILE);
-        let layout = verify_payload_file(&payload_path)?;
+        let payload_file = secure_open_file(&dir, PAYLOAD_FILE)?;
+        let payload_label = dir.label.join(PAYLOAD_FILE);
+        let layout = verify_payload_file(&payload_file, &payload_label)?;
         if layout.bar_count != manifest.bar_count {
             return Err(corrupt(format!(
                 "payload holds {} bars, manifest records {}",
@@ -749,7 +826,8 @@ impl FileDatasetStore {
         Ok(DatasetRecord {
             manifest,
             qa,
-            payload_path,
+            payload_file: Arc::new(payload_file),
+            payload_label,
             layout,
         })
     }
@@ -772,22 +850,36 @@ impl FileDatasetStore {
             return Ok(summaries);
         }
 
-        for shard in sorted_dir_names(&self.layout_dir())? {
-            if shard.len() != 2 || !shard.bytes().all(is_lower_hex) {
-                continue;
-            }
-            let shard_dir = self.layout_dir().join(&shard);
-            for name in sorted_dir_names(&shard_dir)? {
-                if validate_dataset_id(&name).is_err() || !name.starts_with(&shard) {
+        for shard in sorted_dir_names(&self.layout, 256, |name| {
+            name.len() == 2 && name.bytes().all(is_lower_hex)
+        })? {
+            let shard_dir = secure_open_dir(&self.layout, &shard)?;
+            for name in sorted_dir_names(&shard_dir, limit - summaries.len(), |name| {
+                validate_dataset_id(name).is_ok() && name.starts_with(&shard)
+            })? {
+                let Some(record_dir) = secure_open_dir_optional(&shard_dir, &name)? else {
                     continue;
-                }
-                let manifest_path = shard_dir.join(&name).join(MANIFEST_FILE);
-                if !manifest_path.is_file() {
+                };
+                let Some(manifest_file) = secure_open_file_optional(&record_dir, MANIFEST_FILE)?
+                else {
                     continue;
-                }
-                let manifest: DatasetManifest =
-                    read_json_artifact(&manifest_path, MANIFEST_FILE, MAX_MANIFEST_JSON_BYTES)?;
+                };
+                let manifest: DatasetManifest = read_json_artifact(
+                    &manifest_file,
+                    &record_dir.label.join(MANIFEST_FILE),
+                    MANIFEST_FILE,
+                    MAX_MANIFEST_JSON_BYTES,
+                )?;
                 manifest.verify_seal()?;
+                if manifest.dataset_id != name {
+                    return Err(DatasetStoreError::InvalidArtifact {
+                        artifact: MANIFEST_FILE,
+                        message: format!(
+                            "stored under `{name}` but claims `{}`",
+                            manifest.dataset_id
+                        ),
+                    });
+                }
                 summaries.push(DatasetRecordSummary::from_manifest(&manifest));
                 if summaries.len() >= limit {
                     return Ok(summaries);
@@ -804,7 +896,8 @@ impl FileDatasetStore {
 pub struct DatasetRecord {
     manifest: DatasetManifest,
     qa: DatasetQaReport,
-    payload_path: PathBuf,
+    payload_file: Arc<std::fs::File>,
+    payload_label: PathBuf,
     layout: PayloadLayout,
 }
 
@@ -850,10 +943,8 @@ impl DatasetRecord {
             .min(self.layout.bar_count);
         let count = (end - offset) as usize;
 
-        let mut file = std::fs::File::open(&self.payload_path)
-            .map_err(|e| io_error(&self.payload_path, "open payload", e))?;
-        let start_byte = self.read_index_entry(&mut file, offset)?;
-        let end_byte = self.read_index_entry(&mut file, end)?;
+        let start_byte = self.read_index_entry(offset)?;
+        let end_byte = self.read_index_entry(end)?;
         if end_byte < start_byte || end_byte > self.layout.index_offset {
             return Err(corrupt("offset index entries are not monotonic"));
         }
@@ -870,10 +961,8 @@ impl DatasetRecord {
         }
         let span = span as usize;
         let mut window = vec![0u8; span];
-        file.seek(SeekFrom::Start(start_byte))
-            .map_err(|e| io_error(&self.payload_path, "seek payload", e))?;
-        file.read_exact(&mut window)
-            .map_err(|e| io_error(&self.payload_path, "read payload window", e))?;
+        read_exact_at(&self.payload_file, &mut window, start_byte)
+            .map_err(|e| io_error(&self.payload_label, "read payload window", e))?;
 
         let mut bars = Vec::with_capacity(count);
         let mut cursor = 0usize;
@@ -894,17 +983,11 @@ impl DatasetRecord {
         })
     }
 
-    fn read_index_entry(
-        &self,
-        file: &mut std::fs::File,
-        index: u64,
-    ) -> Result<u64, DatasetStoreError> {
+    fn read_index_entry(&self, index: u64) -> Result<u64, DatasetStoreError> {
         let at = self.layout.index_entry_offset(index);
-        file.seek(SeekFrom::Start(at))
-            .map_err(|e| io_error(&self.payload_path, "seek offset index", e))?;
         let mut buffer = [0u8; 8];
-        file.read_exact(&mut buffer)
-            .map_err(|e| io_error(&self.payload_path, "read offset index", e))?;
+        read_exact_at(&self.payload_file, &mut buffer, at)
+            .map_err(|e| io_error(&self.payload_label, "read offset index", e))?;
         let offset = u64::from_be_bytes(buffer);
         if offset < PAYLOAD_HEADER_BYTES || offset > self.layout.index_offset {
             return Err(corrupt(format!(
@@ -921,7 +1004,12 @@ impl DatasetRecord {
     /// records, so a payload that decodes cleanly but is not *this* dataset is
     /// still refused.
     pub fn load_bars(&self) -> Result<Vec<Bar>, DatasetStoreError> {
-        let bytes = read_bounded(&self.payload_path, PAYLOAD_FILE, MAX_BAR_PAYLOAD_BYTES)?;
+        let bytes = read_bounded_file(
+            &self.payload_file,
+            &self.payload_label,
+            PAYLOAD_FILE,
+            MAX_BAR_PAYLOAD_BYTES,
+        )?;
         let bars = decode_bar_payload(&bytes)?;
         let recomputed = self.manifest.recompute_dataset_id(&bars)?;
         if recomputed != self.manifest.dataset_id {
@@ -955,45 +1043,45 @@ fn validate_dataset_id(dataset_id: &str) -> Result<(), DatasetStoreError> {
     }
 }
 
-fn sorted_dir_names(dir: &Path) -> Result<Vec<String>, DatasetStoreError> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(io_error(dir, "list directory", error)),
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect();
-    names.sort_unstable();
-    Ok(names)
-}
-
 /// Write `bytes` and `fsync` before returning, so a later directory rename
 /// cannot publish a file whose contents are still in the page cache.
-fn write_durably(path: &Path, bytes: &[u8]) -> Result<(), DatasetStoreError> {
-    let mut file = std::fs::File::create(path).map_err(|e| io_error(path, "create file", e))?;
+fn write_durably(dir: &SecureDir, name: &str, bytes: &[u8]) -> Result<(), DatasetStoreError> {
+    let path = dir.label.join(name);
+    let mut file = secure_create_file(dir, name)?;
     file.write_all(bytes)
-        .map_err(|e| io_error(path, "write file", e))?;
-    file.sync_all().map_err(|e| io_error(path, "fsync file", e))
+        .map_err(|e| io_error(&path, "write file", e))?;
+    file.sync_all()
+        .map_err(|e| io_error(&path, "fsync file", e))
 }
 
-fn sync_dir(dir: &Path) -> Result<(), DatasetStoreError> {
-    let handle = std::fs::File::open(dir).map_err(|e| io_error(dir, "open directory", e))?;
-    handle
+fn sync_dir(dir: &SecureDir) -> Result<(), DatasetStoreError> {
+    dir.file
         .sync_all()
-        .map_err(|e| io_error(dir, "fsync directory", e))
+        .map_err(|e| io_error(&dir.label, "fsync directory", e))
 }
 
-/// Read a file whose length is checked against `limit` *before* any of it is
-/// pulled into memory.
-fn read_bounded(
+/// Read at most `limit + 1` bytes from the same already-open handle that was
+/// statted. The extra byte detects concurrent growth without unbounded reserve.
+fn read_bounded_file(
+    file: &std::fs::File,
     path: &Path,
     artifact: &'static str,
     limit: u64,
 ) -> Result<Vec<u8>, DatasetStoreError> {
-    let metadata = std::fs::metadata(path).map_err(|e| io_error(path, "stat artifact", e))?;
+    read_bounded_file_impl(file, path, artifact, limit, || {}, None)
+}
+
+fn read_bounded_file_impl(
+    file: &std::fs::File,
+    path: &Path,
+    artifact: &'static str,
+    limit: u64,
+    after_stat: impl FnOnce(),
+    observed: Option<&std::sync::atomic::AtomicU64>,
+) -> Result<Vec<u8>, DatasetStoreError> {
+    let metadata = file
+        .metadata()
+        .map_err(|e| io_error(path, "stat artifact", e))?;
     if metadata.len() > limit {
         return Err(DatasetStoreError::ArtifactTooLarge {
             artifact,
@@ -1001,13 +1089,37 @@ fn read_bounded(
             found: metadata.len(),
         });
     }
-    std::fs::read(path).map_err(|e| io_error(path, "read artifact", e))
+    after_stat();
+    let ceiling = limit.saturating_add(1);
+    let mut bytes = Vec::with_capacity(metadata.len().min(ceiling) as usize);
+    let mut chunk = [0u8; 8_192];
+    while (bytes.len() as u64) < ceiling {
+        let want = (ceiling - bytes.len() as u64).min(chunk.len() as u64) as usize;
+        let read = read_at(file, &mut chunk[..want], bytes.len() as u64)
+            .map_err(|e| io_error(path, "read artifact", e))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if let Some(observed) = observed {
+            observed.store(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    if bytes.len() as u64 > limit {
+        return Err(DatasetStoreError::ArtifactTooLarge {
+            artifact,
+            limit,
+            found: bytes.len() as u64,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Decode a stored JSON artifact strictly: size-bounded, unknown fields
 /// refused by the type's `deny_unknown_fields`, and re-serialization compared
 /// against the original so a field the decoder ignored cannot slip through.
 fn read_json_artifact<T>(
+    file: &std::fs::File,
     path: &Path,
     artifact: &'static str,
     limit: u64,
@@ -1015,7 +1127,7 @@ fn read_json_artifact<T>(
 where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
-    let bytes = read_bounded(path, artifact, limit)?;
+    let bytes = read_bounded_file(file, path, artifact, limit)?;
     let original: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|error| DatasetStoreError::InvalidArtifact {
             artifact,
@@ -1043,8 +1155,13 @@ where
 
 /// Validate a payload file's header/trailer and stream-verify its digest in
 /// bounded chunks — never loading the whole payload to authenticate it.
-fn verify_payload_file(path: &Path) -> Result<PayloadLayout, DatasetStoreError> {
-    let metadata = std::fs::metadata(path).map_err(|e| io_error(path, "stat payload", e))?;
+fn verify_payload_file(
+    source: &std::fs::File,
+    path: &Path,
+) -> Result<PayloadLayout, DatasetStoreError> {
+    let metadata = source
+        .metadata()
+        .map_err(|e| io_error(path, "stat payload", e))?;
     let total = metadata.len();
     if total > MAX_BAR_PAYLOAD_BYTES {
         return Err(DatasetStoreError::ArtifactTooLarge {
@@ -1057,32 +1174,518 @@ fn verify_payload_file(path: &Path) -> Result<PayloadLayout, DatasetStoreError> 
         return Err(corrupt("shorter than an empty payload"));
     }
 
-    let mut file = std::fs::File::open(path).map_err(|e| io_error(path, "open payload", e))?;
     let mut header = [0u8; PAYLOAD_HEADER_BYTES as usize];
-    file.read_exact(&mut header)
-        .map_err(|e| io_error(path, "read payload header", e))?;
+    read_exact_at(source, &mut header, 0).map_err(|e| io_error(path, "read payload header", e))?;
     let layout = parse_payload_header(&header, total)?;
 
     let signed_len = total - PAYLOAD_DIGEST_BYTES;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| io_error(path, "rewind payload", e))?;
     let mut hasher = Sha256::new();
     let mut remaining = signed_len;
+    let mut position = 0u64;
     let mut chunk = vec![0u8; PAYLOAD_STREAM_CHUNK];
     while remaining > 0 {
         let want = remaining.min(PAYLOAD_STREAM_CHUNK as u64) as usize;
-        file.read_exact(&mut chunk[..want])
+        read_exact_at(source, &mut chunk[..want], position)
             .map_err(|e| io_error(path, "read payload", e))?;
         hasher.update(&chunk[..want]);
         remaining -= want as u64;
+        position += want as u64;
     }
     let mut recorded = [0u8; PAYLOAD_DIGEST_BYTES as usize];
-    file.read_exact(&mut recorded)
+    read_exact_at(source, &mut recorded, signed_len)
         .map_err(|e| io_error(path, "read payload digest", e))?;
     if hasher.finalize()[..] != recorded[..] {
         return Err(corrupt("digest mismatch"));
     }
+    let final_len = source
+        .metadata()
+        .map_err(|e| io_error(path, "restat payload", e))?
+        .len();
+    if final_len != total {
+        return Err(corrupt("payload length changed while it was verified"));
+    }
     Ok(layout)
+}
+
+#[cfg(unix)]
+fn read_at(file: &std::fs::File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    file.read_at(buffer, offset)
+}
+
+#[cfg(windows)]
+fn read_at(file: &std::fs::File, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+    file.seek_read(buffer, offset)
+}
+
+#[cfg(any(unix, windows))]
+fn read_exact_at(
+    file: &std::fs::File,
+    mut buffer: &mut [u8],
+    mut offset: u64,
+) -> std::io::Result<()> {
+    while !buffer.is_empty() {
+        let read = read_at(file, buffer, offset)?;
+        if read == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        offset = offset.saturating_add(read as u64);
+        buffer = &mut buffer[read..];
+    }
+    Ok(())
+}
+
+// ── Linux descriptor-relative filesystem boundary ─────────────────
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+#[cfg(target_os = "linux")]
+const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+#[cfg(target_os = "linux")]
+const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+#[cfg(target_os = "linux")]
+const RESOLVE_BENEATH: u64 = 0x08;
+
+#[cfg(target_os = "linux")]
+fn openat2_file(
+    dirfd: RawFd,
+    path: &CStr,
+    flags: i32,
+    mode: u32,
+    beneath: bool,
+) -> std::io::Result<std::fs::File> {
+    let resolve =
+        RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | if beneath { RESOLVE_BENEATH } else { 0 };
+    let how = OpenHow {
+        flags: flags as u64,
+        mode: mode as u64,
+        resolve,
+    };
+    // SAFETY: `path` and `how` are valid for the duration of the syscall. On
+    // success the returned descriptor is uniquely transferred into `File`.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            dirfd,
+            path.as_ptr(),
+            &how as *const OpenHow,
+            std::mem::size_of::<OpenHow>(),
+        ) as i32
+    };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        // SAFETY: `openat2` returned a new owned descriptor.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn c_name(name: &str, label: &Path) -> Result<CString, DatasetStoreError> {
+    if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+        return Err(io_error(
+            label,
+            "validate path component",
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid path component"),
+        ));
+    }
+    CString::new(name).map_err(|error| {
+        io_error(
+            label,
+            "validate path component",
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, error),
+        )
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn secure_bootstrap_absolute_dir(path: &Path) -> Result<SecureDir, DatasetStoreError> {
+    use std::path::Component;
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| io_error(path, "resolve store root", e))?
+            .join(path)
+    };
+    let root_file = std::fs::File::open("/")
+        .map_err(|e| io_error(Path::new("/"), "open filesystem root", e))?;
+    let mut current = SecureDir {
+        file: Arc::new(root_file),
+        label: PathBuf::from("/"),
+    };
+    for component in absolute.components() {
+        let Component::Normal(component) = component else {
+            if matches!(component, Component::RootDir) {
+                continue;
+            }
+            return Err(io_error(
+                &absolute,
+                "validate store root",
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "store root must not contain parent or platform-prefix components",
+                ),
+            ));
+        };
+        let name = component.to_str().ok_or_else(|| {
+            io_error(
+                &absolute,
+                "validate store root",
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "non-UTF-8 path component"),
+            )
+        })?;
+        if secure_open_dir_optional(&current, name)?.is_none() {
+            secure_mkdir(&current, name)?;
+            current
+                .file
+                .sync_all()
+                .map_err(|e| io_error(&current.label, "fsync bootstrap parent", e))?;
+        }
+        current = secure_open_dir(&current, name)?;
+    }
+    current.label = path.to_path_buf();
+    Ok(current)
+}
+
+#[cfg(target_os = "linux")]
+fn secure_open_dir_optional(
+    parent: &SecureDir,
+    name: &str,
+) -> Result<Option<SecureDir>, DatasetStoreError> {
+    let label = parent.label.join(name);
+    let name = c_name(name, &label)?;
+    match openat2_file(
+        parent.file.as_raw_fd(),
+        &name,
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY,
+        0,
+        true,
+    ) {
+        Ok(file) => Ok(Some(SecureDir {
+            file: Arc::new(file),
+            label,
+        })),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(&label, "open directory without symlinks", error)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn secure_open_dir(parent: &SecureDir, name: &str) -> Result<SecureDir, DatasetStoreError> {
+    secure_open_dir_optional(parent, name)?.ok_or_else(|| {
+        io_error(
+            &parent.label.join(name),
+            "open directory without symlinks",
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        )
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn secure_open_file_optional(
+    parent: &SecureDir,
+    name: &str,
+) -> Result<Option<std::fs::File>, DatasetStoreError> {
+    let label = parent.label.join(name);
+    let name = c_name(name, &label)?;
+    match openat2_file(
+        parent.file.as_raw_fd(),
+        &name,
+        libc::O_RDONLY | libc::O_CLOEXEC,
+        0,
+        true,
+    ) {
+        Ok(file) => {
+            let metadata = file
+                .metadata()
+                .map_err(|e| io_error(&label, "stat file", e))?;
+            if !metadata.file_type().is_file() {
+                return Err(io_error(
+                    &label,
+                    "validate regular file",
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "not a regular file"),
+                ));
+            }
+            Ok(Some(file))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(&label, "open file without symlinks", error)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn secure_open_file(parent: &SecureDir, name: &str) -> Result<std::fs::File, DatasetStoreError> {
+    secure_open_file_optional(parent, name)?.ok_or_else(|| {
+        io_error(
+            &parent.label.join(name),
+            "open file without symlinks",
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        )
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn secure_create_file(parent: &SecureDir, name: &str) -> Result<std::fs::File, DatasetStoreError> {
+    let label = parent.label.join(name);
+    let name = c_name(name, &label)?;
+    openat2_file(
+        parent.file.as_raw_fd(),
+        &name,
+        libc::O_WRONLY | libc::O_CLOEXEC | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+        true,
+    )
+    .map_err(|e| io_error(&label, "create file without symlinks", e))
+}
+
+#[cfg(target_os = "linux")]
+fn secure_mkdir(parent: &SecureDir, name: &str) -> Result<bool, DatasetStoreError> {
+    let label = parent.label.join(name);
+    let name = c_name(name, &label)?;
+    // SAFETY: parent fd and NUL-terminated component are valid.
+    let result = unsafe { libc::mkdirat(parent.file.as_raw_fd(), name.as_ptr(), 0o700) };
+    if result == 0 {
+        Ok(true)
+    } else {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Ok(false)
+        } else {
+            Err(io_error(&label, "create directory", error))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn secure_rename_dir(
+    source_parent: &SecureDir,
+    source: &str,
+    destination_parent: &SecureDir,
+    destination: &str,
+) -> std::io::Result<()> {
+    let source = CString::new(source).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    let destination = CString::new(destination).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    // SAFETY: both parent descriptors and component strings are valid.
+    let result = unsafe {
+        libc::renameat(
+            source_parent.file.as_raw_fd(),
+            source.as_ptr(),
+            destination_parent.file.as_raw_fd(),
+            destination.as_ptr(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn secure_read_dir(dir: &SecureDir) -> Result<std::fs::ReadDir, DatasetStoreError> {
+    let proc_path = PathBuf::from(format!("/proc/self/fd/{}", dir.file.as_raw_fd()));
+    std::fs::read_dir(&proc_path).map_err(|e| io_error(&dir.label, "list opened directory", e))
+}
+
+#[cfg(target_os = "linux")]
+fn secure_remove_record_dir(parent: &SecureDir, name: &str) -> Result<(), DatasetStoreError> {
+    let dir = secure_open_dir(parent, name)?;
+    for entry in secure_read_dir(&dir)?.flatten() {
+        let child = entry.file_name();
+        use std::os::unix::ffi::OsStrExt;
+        let child = CString::new(child.as_bytes()).map_err(|error| {
+            io_error(
+                &dir.label,
+                "validate cleanup entry",
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error),
+            )
+        })?;
+        // No AT_REMOVEDIR: staging records contain files only. Nested hostile
+        // directories fail closed and leave residue rather than escaping.
+        let result = unsafe { libc::unlinkat(dir.file.as_raw_fd(), child.as_ptr(), 0) };
+        if result != 0 {
+            return Err(io_error(
+                &dir.label,
+                "remove staging file",
+                std::io::Error::last_os_error(),
+            ));
+        }
+    }
+    let name = c_name(name, &parent.label.join(name))?;
+    let result =
+        unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io_error(
+            &parent.label,
+            "remove staging directory",
+            std::io::Error::last_os_error(),
+        ))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unsupported_store() -> DatasetStoreError {
+    DatasetStoreError::UnsupportedPlatform {
+        platform: std::env::consts::OS,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_open_dir_optional(
+    _: &SecureDir,
+    _: &str,
+) -> Result<Option<SecureDir>, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_open_dir(_: &SecureDir, _: &str) -> Result<SecureDir, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_open_file_optional(
+    _: &SecureDir,
+    _: &str,
+) -> Result<Option<std::fs::File>, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_open_file(_: &SecureDir, _: &str) -> Result<std::fs::File, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_create_file(_: &SecureDir, _: &str) -> Result<std::fs::File, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_mkdir(_: &SecureDir, _: &str) -> Result<bool, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_rename_dir(_: &SecureDir, _: &str, _: &SecureDir, _: &str) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "strategy dataset storage is supported only on Linux",
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_read_dir(_: &SecureDir) -> Result<std::fs::ReadDir, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn secure_remove_record_dir(_: &SecureDir, _: &str) -> Result<(), DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn retain_smallest_names(
+    names: impl IntoIterator<Item = String>,
+    limit: usize,
+    high_water: &std::sync::atomic::AtomicUsize,
+) -> Vec<String> {
+    let mut heap = BinaryHeap::with_capacity(limit);
+    for name in names {
+        if limit == 0 {
+            break;
+        }
+        heap.push(name);
+        if heap.len() > limit {
+            heap.pop();
+        }
+        high_water.fetch_max(heap.len(), std::sync::atomic::Ordering::Relaxed);
+    }
+    let mut retained = heap.into_vec();
+    retained.sort_unstable();
+    retained
+}
+
+#[cfg(target_os = "linux")]
+fn sorted_dir_names(
+    dir: &SecureDir,
+    limit: usize,
+    is_candidate: impl Fn(&str) -> bool,
+) -> Result<Vec<String>, DatasetStoreError> {
+    let high_water = std::sync::atomic::AtomicUsize::new(0);
+    let names = secure_read_dir(dir)?.filter_map(|entry| {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_dir() {
+            return None;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        is_candidate(&name).then_some(name)
+    });
+    Ok(retain_smallest_names(names, limit, &high_water))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sorted_dir_names(
+    _: &SecureDir,
+    _: usize,
+    _: impl Fn(&str) -> bool,
+) -> Result<Vec<String>, DatasetStoreError> {
+    Err(unsupported_store())
+}
+
+#[cfg(test)]
+thread_local! {
+    static PUBLICATION_TRACE: std::cell::RefCell<Option<Vec<&'static str>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn trace_publication(event: &'static str) {
+    #[cfg(test)]
+    PUBLICATION_TRACE.with(|trace| {
+        if let Some(events) = trace.borrow_mut().as_mut() {
+            events.push(event);
+        }
+    });
+    #[cfg(not(test))]
+    let _ = event;
+}
+
+#[cfg(test)]
+fn publication_trace_begin() {
+    PUBLICATION_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+}
+
+#[cfg(test)]
+fn publication_trace_end() -> Vec<&'static str> {
+    PUBLICATION_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
+}
+
+#[cfg(test)]
+fn read_bounded_file_with_hook(
+    file: &std::fs::File,
+    artifact: &'static str,
+    limit: u64,
+    after_stat: impl FnOnce(),
+    observed: &std::sync::atomic::AtomicU64,
+) -> Result<Vec<u8>, DatasetStoreError> {
+    read_bounded_file_impl(
+        file,
+        Path::new("<test handle>"),
+        artifact,
+        limit,
+        after_stat,
+        Some(observed),
+    )
 }
 
 // ── Tests ──────────────────────────────────────────────────────────

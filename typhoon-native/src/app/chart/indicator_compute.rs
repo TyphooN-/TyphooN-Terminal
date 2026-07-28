@@ -33,6 +33,7 @@ impl ChartIndicatorCompute for ChartState {
         // (KAMA, RSI, MACD, ATR, ...) intentionally fall through to the next
         // structural change (new closed bar) for full GPU dispatch.
         if forming_bar_dirty_at_entry && n > 1 {
+            let mut bars_mutated = false;
             if let Some(last) = self.bars.last_mut() {
                 let mut close = last.close;
 
@@ -49,6 +50,7 @@ impl ChartIndicatorCompute for ChartState {
                     last.high = last.high.max(mid);
                     last.low = last.low.min(mid);
                     close = mid;
+                    bars_mutated = true;
                 }
 
                 if let Some(gpu) = gpu {
@@ -86,6 +88,9 @@ impl ChartIndicatorCompute for ChartState {
                 if let (Some(last_ema), Some(prev)) = (self.ema21.last_mut(), prev_ema) {
                     *last_ema = Some(close * k + prev * (1.0 - k));
                 }
+            }
+            if bars_mutated {
+                self.mark_bars_mutated();
             }
             self.forming_bar_dirty = false; // consumed
             return;

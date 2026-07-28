@@ -979,6 +979,91 @@ fn market_depth_and_volume_profile_render_helpers_are_callable() {
 }
 
 #[test]
+fn forming_bar_ohlcv_mutation_advances_bar_generation_without_changing_timestamp_or_length() {
+    let mut chart = ChartState::new("TEST", Timeframe::M1);
+    chart.bars.push(Bar {
+        ts_ms: 1_000,
+        open: 100.0,
+        high: 101.0,
+        low: 99.0,
+        close: 100.0,
+        volume: 10.0,
+    });
+    let len = chart.bars.len();
+    let timestamp = chart.bars[0].ts_ms;
+    let generation = chart.bars_generation;
+
+    assert!(chart.apply_forming_trade(102.0, 3.0, Some(timestamp)));
+    assert_eq!(chart.bars.len(), len);
+    assert_eq!(chart.bars[0].ts_ms, timestamp);
+    assert_eq!(chart.bars[0].close, 102.0);
+    assert_eq!(chart.bars[0].volume, 13.0);
+    assert_ne!(chart.bars_generation, generation);
+}
+
+#[test]
+fn replacing_same_length_same_timestamp_bars_advances_bar_generation() {
+    let mut chart = ChartState::new("TEST", Timeframe::M1);
+    chart.replace_bars(vec![Bar {
+        ts_ms: 1_000,
+        open: 100.0,
+        high: 101.0,
+        low: 99.0,
+        close: 100.0,
+        volume: 10.0,
+    }]);
+    let generation = chart.bars_generation;
+
+    chart.replace_bars(vec![Bar {
+        ts_ms: 1_000,
+        open: 100.0,
+        high: 103.0,
+        low: 98.0,
+        close: 102.0,
+        volume: 25.0,
+    }]);
+
+    assert_eq!(chart.bars.len(), 1);
+    assert_eq!(chart.bars[0].ts_ms, 1_000);
+    assert_eq!(chart.bars[0].close, 102.0);
+    assert_ne!(chart.bars_generation, generation);
+}
+
+#[test]
+fn indicator_fast_path_live_mid_advances_bar_generation() {
+    let mut chart = ChartState::new("TEST", Timeframe::M1);
+    chart.replace_bars(vec![
+        Bar {
+            ts_ms: 1_000,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            volume: 10.0,
+        },
+        Bar {
+            ts_ms: 2_000,
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            volume: 10.0,
+        },
+    ]);
+    chart.live_bid = 103.0;
+    chart.live_ask = 105.0;
+    chart.forming_bar_dirty = true;
+    let generation = chart.bars_generation;
+
+    chart.compute_indicators();
+
+    assert_eq!(chart.bars.len(), 2);
+    assert_eq!(chart.bars[1].ts_ms, 2_000);
+    assert_eq!(chart.bars[1].close, 104.0);
+    assert_ne!(chart.bars_generation, generation);
+}
+
+#[test]
 fn forming_bar_helpers_test() {
     let mut chart = ChartState::new("TEST", Timeframe::M1);
     chart.bars.push(Bar {

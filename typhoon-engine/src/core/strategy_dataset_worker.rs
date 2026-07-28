@@ -63,6 +63,52 @@ const EVENT_PARK: std::time::Duration = std::time::Duration::from_millis(1);
 
 // ── Jobs and events ────────────────────────────────────────────────
 
+/// Worker-bound chart snapshot stored as independently allocated bounded
+/// chunks. Moving this through the bounded job queue never flattens or copies
+/// the complete snapshot on the render thread.
+#[derive(Debug, Default)]
+pub struct DatasetBarChunks {
+    chunks: std::collections::LinkedList<Box<[Bar]>>,
+    len: usize,
+    allocation_high_water: usize,
+}
+
+impl DatasetBarChunks {
+    pub fn push_chunk(&mut self, chunk: Vec<Bar>) {
+        self.allocation_high_water = self.allocation_high_water.max(chunk.capacity());
+        self.len = self.len.saturating_add(chunk.len());
+        self.chunks.push_back(chunk.into_boxed_slice());
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
+    pub fn max_chunk_len(&self) -> usize {
+        self.chunks
+            .iter()
+            .map(|chunk| chunk.len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn allocation_high_water(&self) -> usize {
+        self.allocation_high_water
+    }
+
+    fn into_vec(self) -> Vec<Bar> {
+        let mut bars = Vec::with_capacity(self.len);
+        for chunk in self.chunks {
+            bars.extend(chunk.into_vec());
+        }
+        bars
+    }
+}
+
 /// Work the GUI can ask for. Every variant carries a caller-chosen
 /// `request_id` so a reply can be matched to the request that is still wanted.
 #[derive(Debug)]
@@ -72,6 +118,12 @@ pub enum DatasetJob {
         request_id: u64,
         input: DatasetManifestInput,
         bars: Vec<Bar>,
+    },
+    /// Build from independently bounded chunks produced by a frame pump.
+    BuildChunked {
+        request_id: u64,
+        input: DatasetManifestInput,
+        bars: DatasetBarChunks,
     },
     /// Summaries of stored datasets, up to `limit`.
     List { request_id: u64, limit: usize },
@@ -88,6 +140,7 @@ impl DatasetJob {
     pub fn request_id(&self) -> u64 {
         match self {
             Self::Build { request_id, .. }
+            | Self::BuildChunked { request_id, .. }
             | Self::List { request_id, .. }
             | Self::ReadPage { request_id, .. } => *request_id,
         }
@@ -532,6 +585,20 @@ fn execute(
             input,
             bars,
         } => {
+            let stored = store.build_and_put(&input, &bars)?;
+            Ok(DatasetWorkerEvent::Built {
+                request_id,
+                summary: DatasetRecordSummary::from_manifest(&stored.manifest),
+                outcome: stored.outcome,
+            })
+        }
+        DatasetJob::BuildChunked {
+            request_id,
+            input,
+            bars,
+        } => {
+            // Deliberately worker-side: no input-sized flattening occurs in a frame.
+            let bars = bars.into_vec();
             let stored = store.build_and_put(&input, &bars)?;
             Ok(DatasetWorkerEvent::Built {
                 request_id,

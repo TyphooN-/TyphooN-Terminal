@@ -840,6 +840,7 @@ impl TyphooNApp {
                                             volume: v,
                                         })
                                         .collect();
+                                    chart.mark_bars_mutated();
                                     chart.view_offset =
                                         chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                                     chart.switch_symbol(bare_symbol_from_key(&key));

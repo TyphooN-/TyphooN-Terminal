@@ -91,6 +91,8 @@ pub struct ChartState {
     pub bars_prev_daily_close: f64,
     /// Raw bar data loaded from cache.
     pub bars: Vec<Bar>,
+    /// O(1) revision of `bars`, advanced by every production mutation.
+    pub bars_generation: u64,
     /// Reusable buffers for full GPU upload path (avoids repeated allocations).
     #[allow(dead_code)]
     pub upload_opens: Vec<f32>,
@@ -460,6 +462,7 @@ impl ChartState {
         } else {
             price
         };
+        self.bars_generation = self.bars_generation.wrapping_add(1);
 
         // Live update "Cur" levels for Previous Candle Levels so they reflect
         // new highs/lows inside the forming higher-timeframe bar (D1/W1/MN1).
@@ -519,6 +522,7 @@ impl ChartState {
                         bar.ts_ms = ts;
                     }
                 }
+                self.bars_generation = self.bars_generation.wrapping_add(1);
             }
         }
         // Manual camera (free-look) preservation: forming live updates (price + vol from trades) only dirty the bar,
@@ -624,6 +628,7 @@ impl ChartState {
             prev_daily_close: 0.0,
             bars_prev_daily_close: 0.0,
             bars: Vec::new(),
+            bars_generation: 0,
             upload_opens: Vec::new(),
             upload_closes: Vec::new(),
             upload_highs: Vec::new(),
@@ -800,6 +805,7 @@ impl ChartState {
         } else {
             self.bars.push(bar);
         }
+        self.bars_generation = self.bars_generation.wrapping_add(1);
         self.forming_bar_dirty = true;
         self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
         // Reset live trade snapshot on new bar so previous forming trade doesn't bleed
@@ -817,9 +823,21 @@ impl ChartState {
     /// Call when a closed bar is added or the visible range structurally changes.
     #[allow(dead_code)]
     pub fn mark_structural_change(&mut self) {
+        self.bars_generation = self.bars_generation.wrapping_add(1);
         self.visible_bars_gen = self.visible_bars_gen.wrapping_add(1);
         self.forming_bar_dirty = false;
         self.last_visible_bar_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
         self.live_trade_vol = 0.0; // clear live trade from prior forming bar
+    }
+
+    /// Replace all chart bars and advance the materialization revision.
+    pub fn replace_bars(&mut self, bars: Vec<Bar>) {
+        self.bars = bars;
+        self.bars_generation = self.bars_generation.wrapping_add(1);
+    }
+
+    /// Mark a production mutation performed by a chart extension module.
+    pub fn mark_bars_mutated(&mut self) {
+        self.bars_generation = self.bars_generation.wrapping_add(1);
     }
 }

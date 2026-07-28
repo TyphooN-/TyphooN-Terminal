@@ -11,12 +11,15 @@
 //! one optional QA summary. The bars themselves live on disk; the inspector
 //! never has more than one window of them in memory.
 
-use typhoon_engine::core::strategy_dataset::{DatasetQaIssue, DatasetQaSeverity};
+use typhoon_engine::broker::alpaca::Bar as EngineBar;
+use typhoon_engine::core::strategy_dataset::{
+    DatasetManifestInput, DatasetQaIssue, DatasetQaSeverity,
+};
 use typhoon_engine::core::strategy_dataset_store::{
     DatasetPage, DatasetRecordSummary, MAX_LISTED_RECORDS, MAX_PAGE_BARS,
 };
 use typhoon_engine::core::strategy_dataset_worker::{
-    DatasetQaSummary, DatasetSubmitError, DatasetWorkerEvent,
+    DatasetBarChunks, DatasetQaSummary, DatasetSubmitError, DatasetWorkerEvent,
 };
 
 /// Page sizes offered in the UI. Every entry must be a legal engine page
@@ -29,6 +32,109 @@ pub(crate) const DEFAULT_DATASET_PAGE_SIZE: usize = 100;
 /// Record summaries the window will hold. Bounded independently of what the
 /// store returns, so a large store cannot grow the window's memory.
 pub(crate) const DATASET_LIST_LIMIT: usize = 256;
+
+/// Maximum chart bars converted during one egui frame. Snapshot production is
+/// incremental; hashing, QA, and persistence begin only after the bounded
+/// chunks have produced one stable worker-bound snapshot.
+pub(crate) const MATERIALIZE_BARS_PER_FRAME: usize = 256;
+
+/// O(1) identity captured when chart materialization starts. Edge timestamps
+/// catch same-length reloads without scanning the chart on every pump.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MaterializationIdentity {
+    pub(crate) chart_index: usize,
+    pub(crate) symbol: String,
+    pub(crate) timeframe: String,
+    pub(crate) source: String,
+    pub(crate) bars_generation: u64,
+    pub(crate) len: usize,
+    pub(crate) first_ts_ms: Option<i64>,
+    pub(crate) last_ts_ms: Option<i64>,
+}
+
+#[derive(Debug)]
+pub(crate) struct MaterializationDraft {
+    identity: MaterializationIdentity,
+    input: Option<DatasetManifestInput>,
+    cursor: usize,
+    bars: DatasetBarChunks,
+}
+
+#[derive(Debug)]
+pub(crate) enum MaterializationPump {
+    Pending,
+    Changed,
+    Complete {
+        input: DatasetManifestInput,
+        bars: DatasetBarChunks,
+    },
+}
+
+impl MaterializationDraft {
+    pub(crate) fn start(identity: MaterializationIdentity, input: DatasetManifestInput) -> Self {
+        Self {
+            identity,
+            input: Some(input),
+            cursor: 0,
+            // Do not reserve the chart length here: clicking the button must
+            // remain O(1) in both work and allocation.
+            bars: DatasetBarChunks::default(),
+        }
+    }
+
+    pub(crate) fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    #[cfg(test)]
+    pub(crate) fn produced_len(&self) -> usize {
+        self.bars.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn max_chunk_len(&self) -> usize {
+        self.bars.max_chunk_len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn allocation_high_water(&self) -> usize {
+        self.bars.allocation_high_water()
+    }
+
+    pub(crate) fn total_len(&self) -> usize {
+        self.identity.len
+    }
+
+    pub(crate) fn pump(
+        &mut self,
+        current: &MaterializationIdentity,
+        mut bar_at: impl FnMut(usize) -> EngineBar,
+    ) -> MaterializationPump {
+        if current != &self.identity {
+            return MaterializationPump::Changed;
+        }
+        let end = self
+            .cursor
+            .saturating_add(MATERIALIZE_BARS_PER_FRAME)
+            .min(self.identity.len);
+        let mut chunk = Vec::with_capacity(end - self.cursor);
+        while self.cursor < end {
+            chunk.push(bar_at(self.cursor));
+            self.cursor += 1;
+        }
+        if !chunk.is_empty() {
+            self.bars.push_chunk(chunk);
+        }
+        if self.cursor < self.identity.len {
+            MaterializationPump::Pending
+        } else {
+            MaterializationPump::Complete {
+                input: self.input.take().expect("completed draft owns its input"),
+                bars: std::mem::take(&mut self.bars),
+            }
+        }
+    }
+}
 
 /// Clamp a requested page size into the engine's accepted range.
 pub(crate) fn clamp_page_size(requested: usize) -> usize {
@@ -161,6 +267,10 @@ pub(crate) struct DatasetInspectorState {
     /// The one in-flight request. A reply for any other id is stale.
     pub(crate) pending: Option<u64>,
     pub(crate) status: String,
+    /// Incrementally produced chart snapshot. At most one bounded chunk is
+    /// allocated per frame; the chunks move into one worker job without a
+    /// render-thread flatten/copy.
+    pub(crate) materialization: Option<MaterializationDraft>,
     next_request_id: u64,
 }
 

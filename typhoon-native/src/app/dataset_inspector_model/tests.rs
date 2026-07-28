@@ -374,3 +374,142 @@ fn backpressure_is_reported_and_does_not_strand_the_pending_slot() {
     assert_ne!(state.status, String::new());
     let _ = request_id;
 }
+
+// ── Bounded chart snapshot production ─────────────────────────────
+
+fn materialization_identity(len: usize) -> MaterializationIdentity {
+    MaterializationIdentity {
+        chart_index: 2,
+        symbol: "BTC/USD".to_string(),
+        timeframe: "1Day".to_string(),
+        source: "kraken".to_string(),
+        bars_generation: 7,
+        len,
+        first_ts_ms: Some(1_000),
+        last_ts_ms: Some(1_000 + len.saturating_sub(1) as i64),
+    }
+}
+
+fn materialization_input() -> typhoon_engine::core::strategy_dataset::DatasetManifestInput {
+    use typhoon_engine::core::strategy_dataset::{
+        CalendarPolicy, DatasetManifestInput, DatasetProvenance, DatasetQaPolicy,
+    };
+    DatasetManifestInput {
+        symbol: "BTC/USD".to_string(),
+        timeframe: "1Day".to_string(),
+        provenance: DatasetProvenance {
+            source: "kraken".to_string(),
+            venue: "kraken".to_string(),
+            pipeline: "chart-window/v1".to_string(),
+        },
+        adjustment: AdjustmentPolicy::Raw,
+        calendar: CalendarPolicy::Continuous24x7,
+        qa_policy: DatasetQaPolicy::default(),
+    }
+}
+
+#[test]
+fn starting_materialization_does_not_visit_chart_bars() {
+    let draft =
+        MaterializationDraft::start(materialization_identity(10_000), materialization_input());
+    assert_eq!(draft.cursor(), 0);
+    assert_eq!(draft.produced_len(), 0);
+}
+
+#[test]
+fn each_materialization_pump_visits_at_most_the_fixed_frame_budget() {
+    for len in [1usize, MATERIALIZE_BARS_PER_FRAME, 100_000] {
+        let identity = materialization_identity(len);
+        let mut draft = MaterializationDraft::start(identity.clone(), materialization_input());
+        let mut visits = 0usize;
+        let result = draft.pump(&identity, |index| {
+            visits += 1;
+            bar(index as u64)
+        });
+        assert!(visits <= MATERIALIZE_BARS_PER_FRAME);
+        assert_eq!(visits, len.min(MATERIALIZE_BARS_PER_FRAME));
+        assert!(draft.max_chunk_len() <= MATERIALIZE_BARS_PER_FRAME);
+        assert!(draft.allocation_high_water() <= MATERIALIZE_BARS_PER_FRAME);
+        assert_eq!(
+            matches!(result, MaterializationPump::Complete { .. }),
+            len <= MATERIALIZE_BARS_PER_FRAME
+        );
+    }
+}
+
+#[test]
+fn changed_chart_identity_cancels_a_partial_snapshot_without_visiting_more_bars() {
+    let identity = materialization_identity(MATERIALIZE_BARS_PER_FRAME * 2);
+    let mut draft = MaterializationDraft::start(identity.clone(), materialization_input());
+    assert!(matches!(
+        draft.pump(&identity, |index| bar(index as u64)),
+        MaterializationPump::Pending
+    ));
+    for changed in [
+        MaterializationIdentity {
+            symbol: "ETH/USD".to_string(),
+            ..identity.clone()
+        },
+        MaterializationIdentity {
+            timeframe: "1Hour".to_string(),
+            ..identity.clone()
+        },
+        MaterializationIdentity {
+            len: identity.len + 1,
+            ..identity.clone()
+        },
+        MaterializationIdentity {
+            last_ts_ms: Some(99),
+            ..identity.clone()
+        },
+        MaterializationIdentity {
+            bars_generation: identity.bars_generation.wrapping_add(1),
+            ..identity.clone()
+        },
+    ] {
+        let mut visits = 0;
+        assert!(matches!(
+            draft.pump(&changed, |_| {
+                visits += 1;
+                bar(0)
+            }),
+            MaterializationPump::Changed
+        ));
+        assert_eq!(visits, 0);
+    }
+}
+
+#[test]
+fn completed_materialization_hands_bounded_chunks_to_the_worker() {
+    let identity = materialization_identity(3);
+    let mut draft = MaterializationDraft::start(identity.clone(), materialization_input());
+    let MaterializationPump::Complete { bars, .. } =
+        draft.pump(&identity, |index| bar(index as u64))
+    else {
+        panic!("short snapshot should complete");
+    };
+    assert_eq!(bars.len(), 3);
+    assert_eq!(bars.chunk_count(), 1);
+    assert!(bars.max_chunk_len() <= MATERIALIZE_BARS_PER_FRAME);
+}
+
+#[test]
+fn unchanged_length_and_timestamps_with_new_ohlcv_generation_cancels_snapshot() {
+    let identity = materialization_identity(MATERIALIZE_BARS_PER_FRAME * 2);
+    let mut draft = MaterializationDraft::start(identity.clone(), materialization_input());
+    assert!(matches!(
+        draft.pump(&identity, |index| bar(index as u64)),
+        MaterializationPump::Pending
+    ));
+
+    let changed = MaterializationIdentity {
+        bars_generation: identity.bars_generation.wrapping_add(1),
+        ..identity
+    };
+    assert!(matches!(
+        draft.pump(&changed, |_| panic!(
+            "changed generation must cancel before reading"
+        )),
+        MaterializationPump::Changed
+    ));
+}

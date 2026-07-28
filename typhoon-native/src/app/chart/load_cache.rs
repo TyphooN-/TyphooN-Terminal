@@ -134,6 +134,7 @@ impl ChartDataLoad for ChartState {
         }
         self.gap_fill_timestamps.clear();
         self.bars = (*entry.bars).clone();
+        self.mark_bars_mutated();
         self.primary_source = entry.primary_source;
         self.primary_first_ts = self.bars.first().map(|b| b.ts_ms).unwrap_or(0);
         self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
@@ -357,6 +358,7 @@ impl ChartDataLoad for ChartState {
                 };
                 if rebuilt_ratio < 20.0 {
                     self.bars = rebuilt;
+                    self.mark_bars_mutated();
                     self.primary_source = source;
                     self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
                     self.gap_fill_timestamps.clear();
@@ -373,6 +375,7 @@ impl ChartDataLoad for ChartState {
         };
         if self.bars.is_empty() {
             self.bars.push(quote);
+            self.mark_bars_mutated();
             self.primary_source = "kraken-equities";
             return true;
         }
@@ -394,6 +397,7 @@ impl ChartDataLoad for ChartState {
         } else {
             self.bars.push(quote);
         }
+        self.mark_bars_mutated();
         true
     }
 
@@ -566,6 +570,7 @@ impl ChartDataLoad for ChartState {
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
+                self.mark_bars_mutated();
                 chart_apply_live_tick_anchor(self, log);
                 self.primary_source = "merged";
                 self.source_override = source_override;
@@ -581,6 +586,7 @@ impl ChartDataLoad for ChartState {
                 self.compute_indicators_gpu(gpu);
             } else {
                 self.bars.clear();
+                self.mark_bars_mutated();
                 self.primary_source = "";
                 self.source_override = source_override;
                 self.gap_fill_timestamps.clear();
@@ -627,6 +633,7 @@ impl ChartDataLoad for ChartState {
                         volume: v,
                     })
                     .collect();
+                self.mark_bars_mutated();
                 self.primary_source = if self.bars.is_empty() {
                     ""
                 } else {
@@ -645,6 +652,7 @@ impl ChartDataLoad for ChartState {
                 self.compute_indicators_gpu(gpu);
             } else {
                 self.bars.clear();
+                self.mark_bars_mutated();
                 self.primary_source = "";
                 self.source_override = source_override;
                 self.gap_fill_timestamps.clear();
@@ -674,6 +682,7 @@ impl ChartDataLoad for ChartState {
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
+                self.mark_bars_mutated();
                 chart_apply_live_tick_anchor(self, log);
                 self.primary_source = "merged";
                 self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
@@ -774,6 +783,7 @@ impl ChartDataLoad for ChartState {
                     let monthly = Self::aggregate_daily_raw_to_monthly(raw);
                     if monthly.len() >= 2 {
                         self.bars = monthly;
+                        self.mark_bars_mutated();
                         self.primary_source = "merged";
                         self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
                         self.gap_fill_timestamps.clear();
@@ -816,6 +826,7 @@ impl ChartDataLoad for ChartState {
                     }
                 })
                 .collect();
+            self.mark_bars_mutated();
             self.primary_source = if self.bars.is_empty() {
                 ""
             } else {
@@ -972,6 +983,7 @@ impl ChartDataLoad for ChartState {
                 }
                 if gap_filled > 0 {
                     self.bars.sort_by_key(|b| b.ts_ms);
+                    self.mark_bars_mutated();
                 }
             }
 
@@ -1098,6 +1110,7 @@ impl ChartDataLoad for ChartState {
             if !merged.is_empty() {
                 self.gap_fill_timestamps.clear();
                 self.bars = merged;
+                self.mark_bars_mutated();
                 chart_apply_live_tick_anchor(self, log);
                 self.primary_source = "merged";
                 self.primary_first_ts = self.bars.first().map(|bar| bar.ts_ms).unwrap_or(0);
@@ -1151,10 +1164,12 @@ impl ChartDataLoad for ChartState {
                         volume: v,
                     })
                     .collect();
+                self.mark_bars_mutated();
                 self.primary_source = if self.bars.is_empty() { "" } else { key_source };
             }
             Ok(Some(_)) | Ok(None) => {
                 self.bars.clear();
+                self.mark_bars_mutated();
                 self.primary_source = "";
                 if tf == "1Month" {
                     for source in [
@@ -1172,6 +1187,7 @@ impl ChartDataLoad for ChartState {
                             let monthly = Self::aggregate_daily_raw_to_monthly(raw);
                             if monthly.len() >= 2 {
                                 self.bars = monthly;
+                                self.mark_bars_mutated();
                                 self.primary_source = "merged";
                                 break;
                             }
@@ -1184,6 +1200,7 @@ impl ChartDataLoad for ChartState {
             }
             Err(e) => {
                 self.bars.clear();
+                self.mark_bars_mutated();
                 self.primary_source = "";
                 log.push_back(LogEntry::err(format!("Cache read error: {e}")));
             }
@@ -1301,6 +1318,7 @@ impl ChartDataLoad for ChartState {
             // Sort merged bars by timestamp (sources may interleave)
             if !self.bars.is_empty() {
                 self.bars.sort_by_key(|b| b.ts_ms);
+                self.mark_bars_mutated();
             }
         }
 
@@ -1321,6 +1339,7 @@ impl ChartDataLoad for ChartState {
                     && b.ts_ms > 0
             });
             if self.bars.len() < pre_filter {
+                self.mark_bars_mutated();
                 log.push_back(LogEntry::warn(format!(
                     "  Filtered {} invalid bars (negative/zero/NaN/bad prices)",
                     pre_filter - self.bars.len()
@@ -1392,6 +1411,7 @@ impl ChartDataLoad for ChartState {
                                 close,
                                 volume,
                             });
+                            self.mark_bars_mutated();
                             log.push_back(LogEntry::info(format!(
                                 "  +1 forming bar from {} LTF bars",
                                 newer.len()

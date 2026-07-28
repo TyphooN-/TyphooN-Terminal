@@ -179,6 +179,53 @@ fn storing_the_same_dataset_twice_is_idempotent() {
 }
 
 #[test]
+fn positive_and_negative_zero_publish_and_recover_independently_in_both_orders() {
+    for negative_first in [false, true] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = store_at(temp.path());
+        let mut positive = clean_bars(1);
+        positive[0].volume = 0.0;
+        let mut negative = positive.clone();
+        negative[0].volume = -0.0;
+        let (first, second) = if negative_first {
+            (&negative, &positive)
+        } else {
+            (&positive, &negative)
+        };
+
+        let first_stored = store
+            .build_and_put(&input("ZERO/USD"), first)
+            .expect("first zero variant stores");
+        let second_stored = store
+            .build_and_put(&input("ZERO/USD"), second)
+            .expect("second zero variant stores");
+
+        assert_eq!(first_stored.outcome, DatasetPutOutcome::Stored);
+        assert_eq!(second_stored.outcome, DatasetPutOutcome::Stored);
+        assert_ne!(
+            first_stored.manifest.dataset_id,
+            second_stored.manifest.dataset_id
+        );
+        assert_ne!(
+            encode_bar_payload(first).expect("encode first"),
+            encode_bar_payload(second).expect("encode second")
+        );
+        let first_loaded = store
+            .open_record(&first_stored.manifest.dataset_id)
+            .expect("first opens")
+            .load_bars()
+            .expect("first loads");
+        let second_loaded = store
+            .open_record(&second_stored.manifest.dataset_id)
+            .expect("second opens")
+            .load_bars()
+            .expect("second loads");
+        assert_bit_identical(first, &first_loaded);
+        assert_bit_identical(second, &second_loaded);
+    }
+}
+
+#[test]
 fn an_existing_corrupt_record_is_not_reported_as_already_present() {
     let temp = tempfile::tempdir().expect("tempdir");
     let store = store_at(temp.path());
@@ -523,6 +570,221 @@ fn dataset_ids_are_validated_before_the_filesystem_is_touched() {
     assert!(!store.contains(&"0".repeat(64)).expect("contains"));
 }
 
+// ── Hostile filesystem boundary (Linux) ────────────────────────────
+
+#[cfg(target_os = "linux")]
+#[test]
+fn store_bootstrap_rejects_symlink_ancestor_without_creating_external_suffix() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let trusted = temp.path().join("trusted");
+    std::fs::create_dir(&trusted).expect("trusted parent");
+    symlink(outside.path(), trusted.join("escape")).expect("ancestor symlink");
+
+    let root = trusted.join("escape/new/leaf");
+    assert!(FileDatasetStore::open(&root).is_err());
+    assert!(
+        !outside.path().join("new").exists(),
+        "bootstrap followed an ancestor symlink and wrote outside its boundary"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn store_open_rejects_a_symlinked_layout_directory() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    symlink(
+        outside.path(),
+        temp.path().join(DATASET_STORE_LAYOUT_VERSION),
+    )
+    .expect("symlink");
+    assert!(FileDatasetStore::open(temp.path()).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn put_rejects_a_symlinked_shard_without_writing_outside_root() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let store = store_at(temp.path());
+    let bars = clean_bars(3);
+    let manifest = DatasetManifest::build(&input("LINK/USD"), &bars).expect("manifest");
+    symlink(
+        outside.path(),
+        temp.path()
+            .join(DATASET_STORE_LAYOUT_VERSION)
+            .join(&manifest.dataset_id[..2]),
+    )
+    .expect("shard symlink");
+
+    assert!(store.build_and_put(&input("LINK/USD"), &bars).is_err());
+    assert_eq!(
+        std::fs::read_dir(outside.path())
+            .expect("outside list")
+            .count(),
+        0
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn open_rejects_a_symlinked_record_directory() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside");
+    let store = store_at(temp.path());
+    let id = "ab".to_string() + &"0".repeat(62);
+    let shard = temp.path().join(DATASET_STORE_LAYOUT_VERSION).join("ab");
+    std::fs::create_dir(&shard).expect("shard");
+    symlink(outside.path(), shard.join(&id)).expect("record symlink");
+    assert!(store.open_record(&id).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn open_rejects_symlinked_manifest_qa_and_payload_files() {
+    use std::os::unix::fs::symlink;
+    for artifact in [MANIFEST_FILE, QA_FILE, PAYLOAD_FILE] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        let store = store_at(temp.path());
+        let stored = store
+            .build_and_put(&input("LINK/USD"), &clean_bars(3))
+            .expect("put");
+        let artifact_path = store.record_dir(&stored.manifest.dataset_id).join(artifact);
+        let outside_path = outside.path().join(artifact);
+        std::fs::rename(&artifact_path, &outside_path).expect("move artifact");
+        symlink(&outside_path, &artifact_path).expect("artifact symlink");
+        assert!(
+            store.open_record(&stored.manifest.dataset_id).is_err(),
+            "symlinked {artifact} was accepted"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bounded_read_uses_one_handle_when_the_path_is_replaced_after_open() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = store_at(temp.path());
+    let first_bars = clean_bars(3);
+    let first = store
+        .build_and_put(&input("FIRST/USD"), &first_bars)
+        .expect("first put");
+    let record = store
+        .open_record(&first.manifest.dataset_id)
+        .expect("open first");
+
+    let mut replacement_bars = first_bars.clone();
+    replacement_bars[0].open += 10.0;
+    let replacement = encode_bar_payload(&replacement_bars).expect("replacement payload");
+    let payload_path = store
+        .record_dir(&first.manifest.dataset_id)
+        .join(PAYLOAD_FILE);
+    std::fs::rename(&payload_path, payload_path.with_extension("old")).expect("move old");
+    std::fs::write(&payload_path, replacement).expect("write replacement");
+
+    let page = record.read_page(0, 3).expect("page stays on opened inode");
+    assert_bit_identical(&first_bars, &page.bars);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn post_open_path_swap_hook_reads_only_the_descriptor_pinned_inode() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("artifact");
+    std::fs::write(&path, b"pinned").expect("seed");
+    let file = std::fs::File::open(&path).expect("open before swap");
+    let observed = std::sync::atomic::AtomicU64::new(0);
+    let bytes = read_bounded_file_with_hook(
+        &file,
+        "test",
+        32,
+        || {
+            std::fs::rename(&path, temp.path().join("opened-inode")).expect("move opened inode");
+            std::fs::write(&path, b"replacement").expect("install replacement");
+        },
+        &observed,
+    )
+    .expect("read pinned descriptor");
+    assert_eq!(bytes, b"pinned");
+    assert_eq!(std::fs::read(&path).expect("replacement"), b"replacement");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_that_grows_during_bounded_read_never_reads_past_limit_plus_one() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("growing");
+    std::fs::write(&path, b"1234").expect("seed");
+    let file = std::fs::File::open(&path).expect("open");
+    let observed = std::sync::atomic::AtomicU64::new(0);
+    let result = read_bounded_file_with_hook(
+        &file,
+        "test",
+        4,
+        || std::fs::write(&path, vec![b'x'; 128]).expect("grow"),
+        &observed,
+    );
+    assert!(matches!(
+        result,
+        Err(DatasetStoreError::ArtifactTooLarge { .. })
+    ));
+    assert!(observed.load(std::sync::atomic::Ordering::Relaxed) <= 5);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn listing_retains_at_most_the_requested_number_of_candidate_names() {
+    let names = (0..10_000).map(|index| format!("{index:064x}"));
+    let high_water = std::sync::atomic::AtomicUsize::new(0);
+    let retained = retain_smallest_names(names, 7, &high_water);
+    assert_eq!(retained.len(), 7);
+    assert!(high_water.load(std::sync::atomic::Ordering::Relaxed) <= 7);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn first_publication_syncs_layout_before_publishing_and_shard_after_rename() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = store_at(temp.path());
+    publication_trace_begin();
+    let stored = store
+        .build_and_put(&input("DURABLE/USD"), &clean_bars(3))
+        .expect("put");
+    assert_eq!(stored.outcome, DatasetPutOutcome::Stored);
+    let trace = publication_trace_end();
+    let staging_sync = trace
+        .iter()
+        .position(|event| *event == "sync(staging)")
+        .unwrap();
+    let shard_create = trace
+        .iter()
+        .position(|event| *event == "create(shard)")
+        .unwrap();
+    let layout_sync = trace
+        .iter()
+        .position(|event| *event == "sync(layout)")
+        .unwrap();
+    let rename = trace
+        .iter()
+        .position(|event| *event == "rename(record)")
+        .unwrap();
+    let shard_sync = trace
+        .iter()
+        .position(|event| *event == "sync(shard)")
+        .unwrap();
+    assert!(staging_sync < shard_create);
+    assert!(shard_create < layout_sync);
+    assert!(layout_sync < rename);
+    assert!(rename < shard_sync);
+}
+
 // ── Bounded paging ─────────────────────────────────────────────────
 
 #[test]
@@ -681,7 +943,35 @@ fn listing_is_bounded_and_deterministically_ordered() {
     assert!(!summary.qa_findings_truncated);
 }
 
-// ── Encoding ───────────────────────────────────────────────────────
+#[test]
+fn listing_rejects_a_manifest_stored_under_a_different_dataset_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = store_at(temp.path());
+    let stored = store
+        .build_and_put(&input("BOUND/USD"), &clean_bars(3))
+        .expect("put");
+    let wrong_id = if stored.manifest.dataset_id.starts_with("00") {
+        format!("ff{}", &stored.manifest.dataset_id[2..])
+    } else {
+        format!("00{}", &stored.manifest.dataset_id[2..])
+    };
+    let wrong_dir = store.record_dir(&wrong_id);
+    std::fs::create_dir_all(&wrong_dir).expect("wrong record directory");
+    std::fs::copy(
+        store
+            .record_dir(&stored.manifest.dataset_id)
+            .join(MANIFEST_FILE),
+        wrong_dir.join(MANIFEST_FILE),
+    )
+    .expect("copy sealed manifest");
+
+    assert!(matches!(
+        store.list(MAX_LISTED_RECORDS),
+        Err(DatasetStoreError::InvalidArtifact { .. })
+    ));
+}
+
+// ── Encoding ────────────────────────────────────────────────────────
 
 #[test]
 fn the_payload_encoder_refuses_input_it_cannot_represent() {

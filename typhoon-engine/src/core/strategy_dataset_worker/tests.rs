@@ -97,6 +97,66 @@ fn deferred_store_open_and_dataset_build_run_on_the_worker_thread() {
 }
 
 #[test]
+fn dataset_bar_chunks_bound_each_allocation_and_preserve_order() {
+    let mut chunks = DatasetBarChunks::default();
+    let source = bars(17);
+    for chunk in source.chunks(8) {
+        chunks.push_chunk(chunk.to_vec());
+    }
+
+    assert_eq!(chunks.len(), 17);
+    assert_eq!(chunks.chunk_count(), 3);
+    assert_eq!(chunks.max_chunk_len(), 8);
+    assert_eq!(chunks.allocation_high_water(), 8);
+    let flattened = chunks.into_vec();
+    assert_eq!(flattened.len(), source.len());
+    assert_eq!(flattened[0].timestamp, source[0].timestamp);
+    assert_eq!(flattened[16].timestamp, source[16].timestamp);
+}
+
+#[test]
+fn build_chunked_flattens_and_persists_on_the_worker() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = FileDatasetStore::open(temp.path()).expect("store");
+    let worker = DatasetWorker::spawn(store.clone()).expect("worker spawns");
+    let source = bars(17);
+    let mut chunks = DatasetBarChunks::default();
+    for chunk in source.chunks(8) {
+        chunks.push_chunk(chunk.to_vec());
+    }
+
+    worker
+        .submit(DatasetJob::BuildChunked {
+            request_id: 8,
+            input: input("BTC/USD"),
+            bars: chunks,
+        })
+        .expect("submit chunked build");
+    let mut seen = Vec::new();
+    let summary = match wait_for(&worker, &mut seen, is_terminal) {
+        DatasetWorkerEvent::Built {
+            request_id,
+            summary,
+            ..
+        } => {
+            assert_eq!(request_id, 8);
+            assert_eq!(summary.bar_count, 17);
+            summary
+        }
+        other => panic!("expected Built, got {other:?}"),
+    };
+    let page = store
+        .open_record(&summary.dataset_id)
+        .expect("open chunked record")
+        .read_page(0, 17)
+        .expect("read chunked record");
+    assert_eq!(page.bars.len(), source.len());
+    assert_eq!(page.bars[0].timestamp, source[0].timestamp);
+    assert_eq!(page.bars[16].timestamp, source[16].timestamp);
+    worker.shutdown();
+}
+
+#[test]
 fn dataset_work_runs_off_the_submitting_thread() {
     let temp = tempfile::tempdir().expect("tempdir");
     let store = FileDatasetStore::open(temp.path()).expect("store");
