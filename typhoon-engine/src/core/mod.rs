@@ -29,6 +29,7 @@ pub mod strategy_interpreter;
 pub mod strategy_ir;
 pub mod strategy_metrics;
 pub mod strategy_protective;
+pub mod strategy_repaint;
 pub mod strategy_report;
 pub mod strategy_run;
 pub mod strategy_simulator;
