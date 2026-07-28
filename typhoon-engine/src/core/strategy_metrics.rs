@@ -1674,12 +1674,15 @@ pub(crate) mod tests {
             symbol: SymbolId(0),
             side,
             quantity,
+            remaining_quantity: 0.0,
             reference_price: price,
             quoted_price: price,
             fill_price: price,
             spread_cost: 0.0,
             slippage_cost: 0.0,
             commission: 0.0,
+            conversion_rate: 1.0,
+            conversion_cost: 0.0,
             realized_pnl,
             cash_after: 1_000.0,
             position_units_after,
@@ -1710,10 +1713,14 @@ pub(crate) mod tests {
                     equity: *value,
                 })
                 .collect(),
+            financing_charges: vec![],
+            corporate_actions: vec![],
             final_cash: equity.last().map_or(1_000.0, |point| point.1),
             final_equity: equity.last().map_or(1_000.0, |point| point.1),
             final_realized_pnl: 0.0,
             total_commission: 0.0,
+            total_conversion_cost: 0.0,
+            total_financing_cost: 0.0,
         }
     }
 

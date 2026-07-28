@@ -86,6 +86,22 @@ pub use crate::core::strategy_fees::{
     FeeVenue, LiquidityAssumption, VolumeTier,
 };
 
+/// The M2 execution-realism types are re-exported for the same reason: an
+/// execution config binds a calendar, a financing policy, a corporate-action
+/// schedule and an instrument registry by value.
+pub use crate::core::strategy_calendar::{
+    CalendarError, ClosedReason, EarlyCloseRule, ExchangeTimeZone, LocalSessionWindow, SessionRule,
+    SessionStatus, TradingCalendar, TradingCalendarSpec,
+};
+pub use crate::core::strategy_corporate::{
+    CorporateAction, CorporateActionError, CorporateActionKind, CorporateActionSchedule,
+};
+pub use crate::core::strategy_financing::{
+    AccrualInterval, CurrencyConversion, CurrencyRate, DayCount, FinancingCharge, FinancingError,
+    FinancingModel, FinancingPolicy, RateProvenance, RateSource,
+};
+pub use crate::core::strategy_instrument::{InstrumentError, InstrumentRegistry, InstrumentSpec};
+
 // ── Versions and bounds ────────────────────────────────────────────
 
 /// Wire-format version of [`StrategyIr`]. Bump on any change to the hashed
@@ -97,7 +113,14 @@ pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 /// v2 added the execution-realism fields of ADR-135 §6.3–§6.5 and §6.9:
 /// fidelity level, latency model, margin policy, price tick, warm-up boundary,
 /// the legacy-compatibility switch, and venue fee-schedule commissions.
-pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 2;
+///
+/// v3 adds the M2 richer-execution semantics: the bar-volume participation cap
+/// and partial-fill behaviour (§6.6), the per-instrument registry carrying
+/// trading calendars, quote currencies and time-accrued financing with the
+/// out-of-session order policy (§6.3, §6.7), the corporate-action schedule
+/// (§6.8), the currency-conversion table (§6.3), and sub-bar fidelity (§6.9).
+/// Every one of them changes what a run means, so none is a silent default.
+pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 3;
 
 /// Wire-format version of [`StrategyRunManifest`]. v4 binds acknowledged
 /// repaint QA artifacts into run identity; older manifests are intentionally
@@ -177,6 +200,10 @@ pub const MAX_LATENCY_NS: i64 = 3_600_000_000_000;
 /// Largest execution-side warm-up, in bars. Sized to match [`MAX_BARS_AGO`],
 /// which bounds how far a strategy may look back in the first place.
 pub const MAX_WARMUP_BARS: u32 = MAX_BARS_AGO;
+
+/// Longest sub-bar timeframe accepted for §6.9 level-3 fidelity — one week.
+/// A finer path that is coarser than that is not a path.
+pub const MAX_SUB_BAR_SECONDS: u32 = 604_800;
 
 /// Minutes in a day. Session windows are expressed in UTC minutes from
 /// midnight and may run to, but not past, this bound.
@@ -394,6 +421,14 @@ pub enum StrategyIrError {
     /// A nested venue schedule was malformed, including when serde populated
     /// private fields without going through its checked constructor.
     InvalidFeeSchedule(FeeScheduleError),
+    /// A nested trading calendar was malformed (§6.7).
+    InvalidCalendar(CalendarError),
+    /// A nested financing policy or currency table was malformed (§6.3).
+    InvalidFinancing(FinancingError),
+    /// A nested instrument registry was malformed (§6.3, §6.7).
+    InvalidInstrument(InstrumentError),
+    /// A nested corporate-action schedule was malformed (§6.8).
+    InvalidCorporateAction(CorporateActionError),
     /// A field that must hold a content-addressed id (64 lowercase hex
     /// characters) does not.
     MalformedDigestId { field: String, value: String },
@@ -480,6 +515,14 @@ impl std::fmt::Display for StrategyIrError {
                 write!(f, "execution settings are inconsistent: {detail}")
             }
             Self::InvalidFeeSchedule(error) => write!(f, "fee schedule is invalid: {error}"),
+            Self::InvalidCalendar(error) => write!(f, "trading calendar is invalid: {error}"),
+            Self::InvalidFinancing(error) => write!(f, "financing policy is invalid: {error}"),
+            Self::InvalidInstrument(error) => {
+                write!(f, "instrument registry is invalid: {error}")
+            }
+            Self::InvalidCorporateAction(error) => {
+                write!(f, "corporate-action schedule is invalid: {error}")
+            }
             Self::MalformedDigestId { field, value } => write!(
                 f,
                 "field `{field}` must be 64 lowercase hex characters, got `{value}`"
@@ -1253,9 +1296,13 @@ impl CommissionModel {
     }
 }
 
-/// How much of the intrabar path the simulator claims to know (§6.9). Levels
-/// beyond `BarOhlc` need data TyphooN does not store yet (§11.3), so they are
-/// not representable rather than silently approximated.
+/// How much of the intrabar path the simulator claims to know (§6.9).
+///
+/// Level 4 — true tick replay — is **not representable**. ADR-135 §11.3 records
+/// the blocker honestly: TyphooN retains no versioned tick corpus, so a `Tick`
+/// variant here would be a promise the data cannot keep. Sub-bar is the highest
+/// honest fidelity today, and the ladder is shaped so tick drops in beside it
+/// when a corpus exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FidelityLevel {
@@ -1266,6 +1313,16 @@ pub enum FidelityLevel {
     /// Level 2 — resting orders resolve against the bar's OHLC under the
     /// [`OhlcAmbiguityPolicy`], and a gapped trigger fills at the open.
     BarOhlc,
+    /// Level 3 — a finer timeframe supplies the intrabar path. Each sub-bar is
+    /// resolved in time order under the same level-2 rules, so the *sequence*
+    /// of two levels inside one bar is observed rather than assumed: the
+    /// ambiguity policy is consulted only for a tie inside one sub-bar.
+    ///
+    /// `sub_bar_seconds` names the finer timeframe. It is part of the config
+    /// identity because it decides which bound dataset becomes the path, and a
+    /// run resolved against 1-minute bars is not the same run as one resolved
+    /// against 5-minute bars.
+    SubBar { sub_bar_seconds: u32 },
 }
 
 impl FidelityLevel {
@@ -1273,6 +1330,79 @@ impl FidelityLevel {
         match self {
             Self::BarClose => "bar_close",
             Self::BarOhlc => "bar_ohlc",
+            Self::SubBar { .. } => "sub_bar",
+        }
+    }
+
+    /// Whether the bar's own range resolves triggers. Both level 2 and the
+    /// per-sub-bar resolution of level 3 use the same rule.
+    pub const fn resolves_intrabar(self) -> bool {
+        matches!(self, Self::BarOhlc | Self::SubBar { .. })
+    }
+
+    /// The finer timeframe supplying the intrabar path, when there is one.
+    pub const fn sub_bar_seconds(self) -> Option<u32> {
+        match self {
+            Self::SubBar { sub_bar_seconds } => Some(sub_bar_seconds),
+            _ => None,
+        }
+    }
+}
+
+/// How much of a bar's traded volume one run may take (§6.6).
+///
+/// The cap is shared across every order executing in the same bar phase, so a
+/// strategy cannot route around it by splitting one order into ten. What is not
+/// filled rests, retries on the next bar, or dies with its time-in-force.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParticipationModel {
+    /// No liquidity cap: an order takes whatever size it asks for. Valid, and
+    /// stamped on the run — it is the assumption that the market absorbs any
+    /// order without moving, which is only safe for small size.
+    Unlimited,
+    /// Fills are capped at `fraction` of the executing bar's volume.
+    BarVolumeFraction { fraction: f64 },
+}
+
+impl ParticipationModel {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Unlimited => "unlimited",
+            Self::BarVolumeFraction { .. } => "bar_volume_fraction",
+        }
+    }
+
+    /// Size available to the whole bar, or `None` when uncapped.
+    pub fn bar_capacity(self, bar_volume: f64) -> Option<f64> {
+        match self {
+            Self::Unlimited => None,
+            Self::BarVolumeFraction { fraction } => Some((bar_volume * fraction).max(0.0)),
+        }
+    }
+}
+
+/// What happens to an order submitted while the instrument's calendar says the
+/// venue is closed (§6.7). Under both policies it never fills out of session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutsideSessionPolicy {
+    /// The order rests until the calendar reopens. The conservative default: it
+    /// cannot invent a fill, and it cannot silently destroy an intent the
+    /// strategy expressed — which is exactly what a venue's good-til-cancelled
+    /// book does over a weekend.
+    #[default]
+    Queue,
+    /// The venue refuses out-of-session submissions. The order is rejected and
+    /// reported, never dropped.
+    Reject,
+}
+
+impl OutsideSessionPolicy {
+    fn wire_tag(self) -> &'static str {
+        match self {
+            Self::Queue => "queue",
+            Self::Reject => "reject",
         }
     }
 }
@@ -1479,6 +1609,28 @@ pub struct ExecutionSettings {
     /// before the boundary are *rejected and reported*, never dropped.
     pub warmup_bars: u32,
     pub compatibility: ExecutionCompatibility,
+    /// Liquidity cap on fills (§6.6). Uncapped by default, and stamped.
+    #[serde(default = "default_participation")]
+    pub participation: ParticipationModel,
+    /// Per-instrument calendars, currencies and financing (§6.3, §6.7). Empty
+    /// by default: no session gating, no accruals, no conversion.
+    #[serde(default)]
+    pub instruments: InstrumentRegistry,
+    /// What an out-of-session submission does, for instruments that have a
+    /// calendar (§6.7).
+    #[serde(default)]
+    pub outside_session: OutsideSessionPolicy,
+    /// Corporate actions applied as events at their effective time (§6.8).
+    #[serde(default)]
+    pub corporate_actions: CorporateActionSchedule,
+    /// How a non-account-currency instrument reaches the account currency
+    /// (§6.3). `None` refuses such an instrument rather than assuming parity.
+    #[serde(default)]
+    pub currency_conversion: CurrencyConversion,
+}
+
+const fn default_participation() -> ParticipationModel {
+    ParticipationModel::Unlimited
 }
 
 impl ExecutionSettings {
@@ -1501,6 +1653,15 @@ impl ExecutionSettings {
             price_tick: None,
             warmup_bars: 0,
             compatibility: ExecutionCompatibility::None,
+            // The M2 additions all default to "not modelled", which keeps the
+            // baseline honest: an unconfigured run reports no liquidity cap, no
+            // session gating, no accrual and no corporate action, and the
+            // report says so rather than implying they were accounted for.
+            participation: ParticipationModel::Unlimited,
+            instruments: InstrumentRegistry::empty(),
+            outside_session: OutsideSessionPolicy::Queue,
+            corporate_actions: CorporateActionSchedule::empty(),
+            currency_conversion: CurrencyConversion::None,
         }
     }
 }
@@ -2987,6 +3148,9 @@ pub fn compute_config_id(settings: &ExecutionSettings) -> Result<String, Strateg
     digest.tagged_text("tie_break", settings.tie_break.wire_tag());
 
     digest.tagged_text("fidelity", settings.fidelity.wire_tag());
+    if let Some(seconds) = settings.fidelity.sub_bar_seconds() {
+        digest.tagged_u32("fidelity.sub_bar_seconds", seconds);
+    }
     digest.tagged_text("latency", settings.latency.wire_tag());
     match settings.latency {
         LatencyModel::None => {}
@@ -3016,7 +3180,118 @@ pub fn compute_config_id(settings: &ExecutionSettings) -> Result<String, Strateg
     }
     digest.tagged_u32("warmup_bars", settings.warmup_bars);
     digest.tagged_text("compatibility", settings.compatibility.wire_tag());
+
+    digest.tagged_text("participation", settings.participation.wire_tag());
+    if let ParticipationModel::BarVolumeFraction { fraction } = settings.participation {
+        digest.tagged_f64("participation.fraction", fraction);
+    }
+    digest.tagged_text("outside_session", settings.outside_session.wire_tag());
+    digest_instruments(&mut digest, &settings.instruments);
+    digest_corporate_actions(&mut digest, &settings.corporate_actions);
+    digest_currency_conversion(&mut digest, &settings.currency_conversion);
     Ok(digest.finish_hex())
+}
+
+/// Canonically encode the per-instrument registry. Every field an operator
+/// chose — the calendar id, the quote currency, each rate and its provenance —
+/// is framed, so two runs that assumed different venues or different borrow
+/// costs can never share a config id.
+fn digest_instruments(digest: &mut CanonicalDigest, registry: &InstrumentRegistry) {
+    digest.begin_seq("instruments", registry.specs().len());
+    for spec in registry.specs() {
+        digest.tagged_text("instrument.symbol", &spec.symbol);
+        digest.tagged_text("instrument.currency", &spec.currency);
+        digest.begin_option("instrument.calendar", spec.calendar.is_some());
+        if let Some(calendar) = &spec.calendar {
+            // The calendar id is itself a framed digest over the whole spec, so
+            // naming it here is exact rather than a summary.
+            digest.tagged_u32("instrument.calendar.schema", calendar.schema_version());
+            digest.tagged_text("instrument.calendar.id", calendar.calendar_id());
+        }
+        digest.begin_option("instrument.price_tick", spec.price_tick.is_some());
+        if let Some(tick) = spec.price_tick {
+            digest.tagged_f64("instrument.price_tick.value", tick);
+        }
+        digest.tagged_text("instrument.financing", spec.financing.wire_id());
+        if let Some(policy) = spec.financing.policy() {
+            digest.tagged_text("financing.day_count", policy.day_count.wire_id());
+            digest.tagged_text("financing.accrual", policy.accrual.wire_id());
+            digest.tagged_u64("financing.accrual_seconds", policy.accrual.seconds() as u64);
+            for (tag, rate) in [
+                ("financing.long", &policy.long_financing_annual_percent),
+                ("financing.short", &policy.short_financing_annual_percent),
+                ("financing.borrow", &policy.short_borrow_annual_percent),
+                ("financing.funding", &policy.funding_interval_percent),
+            ] {
+                digest_rate_source(digest, tag, rate);
+            }
+        }
+    }
+}
+
+fn digest_rate_source(digest: &mut CanonicalDigest, tag: &str, rate: &RateSource) {
+    digest.tagged_text(tag, rate.wire_id());
+    match rate {
+        RateSource::NotApplicable => {}
+        RateSource::Unavailable { reason } => digest.tagged_text("rate.reason", reason),
+        RateSource::Declared {
+            percent,
+            provenance,
+        } => {
+            digest.tagged_f64("rate.percent", *percent);
+            digest_rate_provenance(digest, provenance);
+        }
+    }
+}
+
+fn digest_rate_provenance(digest: &mut CanonicalDigest, provenance: &RateProvenance) {
+    digest.tagged_text("rate.provenance", provenance.wire_id());
+    match provenance {
+        RateProvenance::OperatorAssumption { note } => digest.tagged_text("rate.note", note),
+        RateProvenance::VendorPublished {
+            source,
+            retrieved_date,
+        } => {
+            digest.tagged_text("rate.source", source);
+            digest.tagged_text("rate.retrieved_date", retrieved_date);
+        }
+    }
+}
+
+fn digest_corporate_actions(digest: &mut CanonicalDigest, schedule: &CorporateActionSchedule) {
+    digest.begin_seq("corporate_actions", schedule.actions().len());
+    for action in schedule.actions() {
+        digest.tagged_text("action.symbol", &action.symbol);
+        digest.tagged_i64("action.effective_time_ns", action.effective_time_ns);
+        digest.tagged_text("action.kind", action.kind.wire_id());
+        match &action.kind {
+            CorporateActionKind::Split {
+                numerator,
+                denominator,
+            } => {
+                digest.tagged_u32("action.numerator", *numerator);
+                digest.tagged_u32("action.denominator", *denominator);
+            }
+            CorporateActionKind::CashDividend { amount_per_unit } => {
+                digest.tagged_f64("action.amount_per_unit", *amount_per_unit);
+            }
+            CorporateActionKind::SymbolChange { new_symbol } => {
+                digest.tagged_text("action.new_symbol", new_symbol);
+            }
+            CorporateActionKind::Delisting => {}
+        }
+    }
+}
+
+fn digest_currency_conversion(digest: &mut CanonicalDigest, conversion: &CurrencyConversion) {
+    digest.tagged_text("currency_conversion", conversion.wire_id());
+    digest.begin_seq("currency_conversion.rates", conversion.rates().len());
+    for rate in conversion.rates() {
+        digest.tagged_text("currency.code", &rate.currency);
+        digest.tagged_f64("currency.account_per_unit", rate.account_per_unit);
+        digest.tagged_f64("currency.spread_percent", rate.spread_percent);
+        digest_rate_provenance(digest, &rate.provenance);
+    }
 }
 
 /// Canonically encode a bound fee schedule. Every field an operator chose —
@@ -3194,7 +3469,59 @@ fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError
                 detail: "legacy same-bar-close compatibility requires zero latency",
             });
         }
+        // The bridge exists to reproduce one number. Anything that changes what
+        // that number means would make the comparison meaningless, so the
+        // richer-execution machinery is refused rather than quietly ignored.
+        if settings.participation != ParticipationModel::Unlimited
+            || !settings.instruments.is_empty()
+            || !settings.corporate_actions.is_empty()
+            || settings.currency_conversion != CurrencyConversion::None
+        {
+            return Err(StrategyIrError::InconsistentExecution {
+                detail: "legacy same-bar-close compatibility excludes participation caps, \
+                         instrument specs, corporate actions and currency conversion",
+            });
+        }
     }
+    validate_realism(settings)
+}
+
+/// The M2 execution-realism half of settings validation (§6.3, §6.6–§6.9).
+fn validate_realism(settings: &ExecutionSettings) -> Result<(), StrategyIrError> {
+    if let FidelityLevel::SubBar { sub_bar_seconds } = settings.fidelity
+        && (sub_bar_seconds == 0 || sub_bar_seconds > MAX_SUB_BAR_SECONDS)
+    {
+        return Err(StrategyIrError::OutOfRange {
+            field: "settings.fidelity.sub_bar_seconds".to_string(),
+            value: sub_bar_seconds.to_string(),
+            expected: "a positive sub-bar timeframe within MAX_SUB_BAR_SECONDS",
+        });
+    }
+    if let ParticipationModel::BarVolumeFraction { fraction } = settings.participation {
+        check_finite_in(
+            "settings.participation.fraction",
+            fraction,
+            fraction > 0.0 && fraction <= 1.0,
+            "a participation fraction in (0, 1]",
+        )?;
+    }
+
+    settings
+        .currency_conversion
+        .validate(&settings.account_currency)
+        .map_err(StrategyIrError::InvalidFinancing)?;
+    settings
+        .instruments
+        .validate_shape()
+        .map_err(StrategyIrError::InvalidInstrument)?;
+    settings
+        .instruments
+        .validate_against_account(&settings.account_currency, &settings.currency_conversion)
+        .map_err(StrategyIrError::InvalidInstrument)?;
+    settings
+        .corporate_actions
+        .validate()
+        .map_err(StrategyIrError::InvalidCorporateAction)?;
     Ok(())
 }
 

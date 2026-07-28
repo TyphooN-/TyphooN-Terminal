@@ -15,17 +15,24 @@
 //! | priority | what happens |
 //! |---|---|
 //! | 0  | `BarOpen` — the bar's open price becomes the current reference |
-//! | 1  | `OrderActivate` — an order reaches the exchange |
-//! | 2  | `OrderCancel` / `OrderModify` — a request takes effect |
-//! | 3  | `OrderExpire` — a time-in-force runs out |
-//! | 4  | `StopTriggered`, `Fill` — execution against the open or the intrabar path |
-//! | 5  | `BarClose` — the bar commits and becomes visible history |
-//! | 6  | `Fill` — execution at the close (market-on-close, bar-close fidelity) |
-//! | 7  | `OrderCancel` — an OCO sibling withdrawn because its partner filled |
-//! | 8  | `Decision` — the strategy runs |
-//! | 9  | `OrderSubmit` — an intent becomes an order |
-//! | 10 | `OrderReject` — an order or request is refused |
-//! | 11 | `MarkToMarket` — equity is sampled |
+//! | 1  | `CorporateAction` — a split, dividend, rename or delisting takes effect |
+//! | 2  | `OrderActivate` — an order reaches the exchange |
+//! | 3  | `OrderCancel` / `OrderModify` — a request takes effect |
+//! | 4  | `OrderExpire` — a time-in-force runs out |
+//! | 5  | `StopTriggered`, `Fill`, `PartialFill` — execution against the open or the intrabar path |
+//! | 6  | `BarClose` — the bar commits and becomes visible history |
+//! | 7  | `Fill` — execution at the close (market-on-close, bar-close fidelity) |
+//! | 8  | `OrderCancel` — an OCO sibling withdrawn because its partner filled |
+//! | 9  | `Decision` — the strategy runs |
+//! | 10 | `OrderSubmit` — an intent becomes an order |
+//! | 11 | `OrderReject` — an order or request is refused |
+//! | 12 | `FundingCharge` — a financing/borrow/funding accrual boundary |
+//! | 13 | `MarkToMarket` — equity is sampled |
+//!
+//! A corporate action sits directly after the bar opens and before anything
+//! executes, because a split that resized the position must have resized it
+//! before a stop set in the old prices is tested. An accrual sits directly
+//! before the mark, so the equity sample already carries the charge.
 //!
 //! Ties inside one `(time, priority)` resolve by a scheduling counter assigned
 //! deterministically: bar events by symbol-table order, order events by
@@ -66,10 +73,37 @@
 //! - `BarOhlc` — the bar's range resolves triggers, an order gapped through at
 //!   the open fills at the open, and two levels reachable in the same bar
 //!   resolve under the [`OhlcAmbiguityPolicy`].
+//! - `SubBar` — a finer timeframe supplies the path. Each sub-bar is resolved
+//!   in time order under the `BarOhlc` rules, so when a stop and a target are
+//!   both reachable inside the parent bar the *earlier sub-bar wins* and the
+//!   ambiguity policy is consulted only for a tie inside one sub-bar. A sub-bar
+//!   is also its own eligibility boundary, so an order that arrived mid-bar can
+//!   claim the sub-bars that started after it.
 //!
 //! A level the bar *gapped through at its open* always resolves before the
 //! ambiguity policy is consulted: the first observable price of the bar already
 //! went through it, so no assumption about the path is needed.
+//!
+//! ## What a fill may take
+//!
+//! A [`ParticipationModel`] caps how much of a bar's traded volume one run may
+//! consume. The cap belongs to the **parent bar** and is shared by every
+//! execution inside it — both phases and every sub-bar — so splitting one order
+//! into ten cannot route around it. What the cap refuses is not lost: the order
+//! keeps its remainder and re-attempts on the next bar, unless its
+//! time-in-force says otherwise. A fill-or-kill that cannot take its whole size
+//! is cancelled rather than partially filled.
+//!
+//! ## Sessions, corporate actions, and what a position costs to hold
+//!
+//! An instrument may carry a [`TradingCalendar`]. Nothing fills while its venue
+//! is closed, and an out-of-session submission either queues or is rejected per
+//! [`OutsideSessionPolicy`] — never silently filled. Splits, dividends, symbol
+//! changes and delistings arrive as events at their effective instant and
+//! adjust the position and cash that exist then, rather than by rewriting price
+//! history underneath a live stop. Financing, borrow and funding accrue at
+//! declared boundaries; a rate the policy calls unavailable **fails the run**
+//! instead of accruing zero.
 //!
 //! ## Rejections
 //!
@@ -79,11 +113,15 @@
 //! submission that ran off the end of the stream, a request naming an order
 //! that no longer exists. None of these is a silent drop.
 
+use crate::core::strategy_calendar::{SessionStatus, TradingCalendar};
+use crate::core::strategy_corporate::{CorporateAction, CorporateActionKind};
+use crate::core::strategy_financing::{AccrualBreakdown, FinancingCharge, FinancingPolicy, accrue};
 use crate::core::strategy_interpreter::{CanonicalIrStrategy, InterpreterError};
 use crate::core::strategy_ir::{
     CommissionModel, DecisionTiming, ExecutionCompatibility, FeeSide, FidelityLevel, LatencyModel,
     MAX_PRE_CLOSE_OFFSET_SECONDS, MAX_SUBMIT_DELAY_BARS, MarginPolicy, OhlcAmbiguityPolicy,
-    SlippageModel, SpreadModel, StrategyExecutionConfig, StrategyIrError, TieBreakPolicy,
+    OutsideSessionPolicy, SlippageModel, SpreadModel, StrategyExecutionConfig, StrategyIrError,
+    TieBreakPolicy,
 };
 use crate::core::strategy_run::VerifiedRun;
 use serde::{Deserialize, Serialize};
@@ -103,8 +141,16 @@ pub const MAX_TOTAL_ORDERS: usize = 1_000_000;
 pub const MAX_LIVE_ORDERS_PER_SYMBOL: usize = 4_096;
 /// Events one run may record.
 pub const MAX_EVENTS: usize = 8_000_000;
+/// Sub-bars one run may carry across every symbol (§6.9 level 3). Bounds the
+/// prebuilt clock exactly as [`MAX_TOTAL_BARS`] does for the execution stream.
+pub const MAX_TOTAL_SUB_BARS: usize = 2_000_000;
+/// Accrual boundaries one run may schedule (§6.3). A run whose financing
+/// interval is so short that it would exceed this is refused rather than
+/// silently truncated.
+pub const MAX_ACCRUAL_BOUNDARIES: usize = 200_000;
 
 const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SymbolId(pub usize);
@@ -128,6 +174,18 @@ pub struct SimBar {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SymbolStream {
+    pub symbol: String,
+    pub bars: Vec<SimBar>,
+}
+
+/// The finer-timeframe path for one symbol at [`FidelityLevel::SubBar`].
+///
+/// Kept beside the execution stream rather than inside it, because a sub-bar
+/// path is a property of the *run's fidelity*, not of the instrument: the same
+/// stream is a complete input at levels 1 and 2 and would carry a dead field
+/// there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubBarPath {
     pub symbol: String,
     pub bars: Vec<SimBar>,
 }
@@ -405,17 +463,29 @@ pub enum SimEventKind {
     OrderExpire,
     StopTriggered,
     Fill,
+    /// A fill that took less than the order's remaining quantity because the
+    /// participation cap refused the rest (§6.6).
+    PartialFill,
     BarClose,
     Decision,
     OrderSubmit,
     OrderReject,
+    /// A split, dividend, symbol change or delisting took effect (§6.8).
+    CorporateAction,
+    /// A financing, borrow or funding accrual boundary (§6.3).
+    FundingCharge,
     MarkToMarket,
 }
 
 /// Explicit ordering slots. The same kind can occur in two phases of a bar, so
 /// the phase — not the kind — decides the order.
 mod priority {
+    // Keep the M1 priority values stable: they are serialized ledger semantics.
+    // Richer-execution events share the adjacent legacy slot where no integer
+    // exists between phases; task insertion order is canonical, and sequence is
+    // the final deterministic tie-break.
     pub const BAR_OPEN: u8 = 0;
+    pub const CORPORATE: u8 = 1;
     pub const ACTIVATE: u8 = 1;
     pub const REQUEST: u8 = 2;
     pub const EXPIRE: u8 = 3;
@@ -426,6 +496,7 @@ mod priority {
     pub const DECISION: u8 = 8;
     pub const SUBMIT: u8 = 9;
     pub const REJECT: u8 = 10;
+    pub const ACCRUAL: u8 = 11;
     pub const MARK: u8 = 11;
 }
 
@@ -447,7 +518,13 @@ pub struct FillRecord {
     pub sequence: u64,
     pub symbol: SymbolId,
     pub side: OrderSide,
+    /// Size this execution took. Under a participation cap it may be less than
+    /// the order asked for; `remaining_quantity` carries what is still working.
     pub quantity: f64,
+    /// Order quantity still live after this execution. Zero for a complete
+    /// fill, positive for a partial one.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub remaining_quantity: f64,
     /// The mid the execution was resolved against.
     pub reference_price: f64,
     /// The reference plus the half-spread on the taker's side.
@@ -456,14 +533,66 @@ pub struct FillRecord {
     pub spread_cost: f64,
     pub slippage_cost: f64,
     pub commission: f64,
+    /// Account-currency units per unit of the instrument's quote currency.
+    /// `1.0` when the instrument is already quoted in the account currency.
+    #[serde(
+        default = "identity_conversion_rate",
+        skip_serializing_if = "is_identity_conversion_rate"
+    )]
+    pub conversion_rate: f64,
+    /// Currency-conversion cost charged on this fill, in account currency.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub conversion_cost: f64,
+    /// Realized profit in **account** currency.
     pub realized_pnl: f64,
     pub cash_after: f64,
     pub position_units_after: f64,
+    /// Volume-weighted entry in the **instrument's** quote currency — it is a
+    /// price, and converting it would make it comparable to nothing.
     pub avg_entry_after: f64,
 }
 
+/// One accrual boundary's charges for one symbol (§6.3), in account currency.
+/// Positive is a debit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinancingChargeRecord {
+    pub time_ns: i64,
+    pub sequence: u64,
+    pub symbol: SymbolId,
+    /// Signed units held across the boundary.
+    pub units: f64,
+    /// Mark the charge was computed against.
+    pub mark_price: f64,
+    pub seconds_accrued: i64,
+    pub financing: f64,
+    pub borrow: f64,
+    pub funding: f64,
+    pub total: f64,
+    pub cash_after: f64,
+}
+
+/// One applied corporate action (§6.8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorporateActionRecord {
+    pub time_ns: i64,
+    pub sequence: u64,
+    pub symbol: SymbolId,
+    /// Stable action tag — `split`, `cash_dividend`, `symbol_change`,
+    /// `delisting`.
+    pub kind: String,
+    pub units_before: f64,
+    pub units_after: f64,
+    pub avg_entry_before: f64,
+    pub avg_entry_after: f64,
+    /// Cash the action paid (positive) or charged (negative), account currency.
+    pub cash_delta: f64,
+    /// Resting orders withdrawn because their prices no longer mean what they
+    /// meant.
+    pub orders_cancelled: usize,
+}
+
 /// Why an order or request was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RejectionReason {
     /// The symbol has not closed enough bars yet (§6.9 warm-up).
@@ -484,6 +613,11 @@ pub enum RejectionReason {
     UnknownOrder,
     /// A modify named a field the order's kind does not have.
     ModifyNotApplicable,
+    /// The instrument's calendar says the venue is closed and the run's policy
+    /// is to refuse rather than queue (§6.7).
+    SessionClosed { reason: String },
+    /// The symbol stopped trading at a delisting event (§6.8).
+    InstrumentDelisted,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -505,6 +639,14 @@ pub enum CancelReason {
     Expired,
     /// Its bracket partner filled.
     OcoSibling,
+    /// Fill-or-kill: the participation cap could not supply the whole size, so
+    /// nothing was taken (§6.6).
+    FillOrKillUnfilled,
+    /// A bracket sibling filled part of its size, leaving this order with
+    /// nothing left to protect (§6.6).
+    OcoSiblingConsumed,
+    /// A corporate action changed what the order's prices mean (§6.8).
+    CorporateAction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,6 +665,10 @@ pub struct PendingOrderRecord {
     pub symbol: SymbolId,
     pub side: OrderSide,
     pub quantity: f64,
+    /// Quantity already taken by partial fills, so a pending record shows what
+    /// is genuinely still working rather than the original size.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub filled_quantity: f64,
     pub kind: OrderKind,
     pub time_in_force: TimeInForce,
 }
@@ -555,10 +701,34 @@ pub struct SimulationReport {
     pub pending_orders: Vec<PendingOrderRecord>,
     pub positions: Vec<PositionRecord>,
     pub equity_curve: Vec<EquityPoint>,
+    /// Accrual boundaries that charged something (§6.3), in run order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub financing_charges: Vec<FinancingChargeRecord>,
+    /// Corporate actions applied (§6.8), in effective-time order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corporate_actions: Vec<CorporateActionRecord>,
     pub final_cash: f64,
     pub final_equity: f64,
     pub final_realized_pnl: f64,
     pub total_commission: f64,
+    /// Total currency-conversion cost charged across every fill.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub total_conversion_cost: f64,
+    /// Total financing + borrow + funding charged across every accrual.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub total_financing_cost: f64,
+}
+
+const fn identity_conversion_rate() -> f64 {
+    1.0
+}
+
+fn is_identity_conversion_rate(value: &f64) -> bool {
+    *value == identity_conversion_rate()
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 // ── Errors ─────────────────────────────────────────────────────────
@@ -690,6 +860,57 @@ pub enum SimulationError {
     NonFiniteAccounting {
         field: &'static str,
     },
+    /// Sub-bar fidelity was selected but a symbol has no finer path.
+    MissingSubBarPath {
+        symbol: String,
+    },
+    /// A sub-bar path was supplied for a symbol the run does not trade.
+    UnknownSubBarSymbol {
+        symbol: String,
+    },
+    /// A sub-bar path was supplied at a fidelity that does not consume one.
+    UnexpectedSubBarPath {
+        symbol: String,
+    },
+    TooManySubBars {
+        limit: usize,
+        found: usize,
+    },
+    /// A sub-bar does not fit inside the parent bar it claims — in time or in
+    /// price. Accepting it would let a fill happen at a price the execution
+    /// stream never printed.
+    SubBarNotContained {
+        symbol: String,
+        index: usize,
+    },
+    /// A parent bar has no sub-bars, so its intrabar path is unknown while the
+    /// run claims to know it.
+    SubBarGap {
+        symbol: String,
+        index: usize,
+    },
+    /// A corporate action names a symbol the run does not trade.
+    UnknownCorporateActionSymbol {
+        symbol: String,
+    },
+    /// A delisting fell before any bar of the symbol had closed, so there is no
+    /// mark to cash the position out at.
+    DelistingWithoutMark {
+        symbol: String,
+    },
+    /// A symbol-change event does not match the stream it names.
+    SymbolChangeMismatch {
+        symbol: String,
+    },
+    /// A position would accrue a charge whose rate the policy calls
+    /// unavailable. The run fails rather than accruing zero (§6.3, §14).
+    FinancingRateUnavailable {
+        symbol: String,
+        charge: &'static str,
+    },
+    TooManyAccrualBoundaries {
+        limit: usize,
+    },
 }
 
 impl fmt::Display for SimulationError {
@@ -752,6 +973,49 @@ impl fmt::Display for SimulationError {
             Self::Strategy { time_ns, error } => write!(f, "strategy failed at {time_ns}: {error}"),
             Self::NonFiniteAccounting { field } => {
                 write!(f, "accounting produced a non-finite `{field}` value")
+            }
+            Self::MissingSubBarPath { symbol } => {
+                write!(
+                    f,
+                    "symbol `{symbol}` has no sub-bar path for sub-bar fidelity"
+                )
+            }
+            Self::UnknownSubBarSymbol { symbol } => {
+                write!(f, "sub-bar path names unknown symbol `{symbol}`")
+            }
+            Self::UnexpectedSubBarPath { symbol } => write!(
+                f,
+                "sub-bar path for `{symbol}` supplied at a fidelity that does not use one"
+            ),
+            Self::TooManySubBars { limit, found } => {
+                write!(f, "simulation has {found} sub-bars, limit {limit}")
+            }
+            Self::SubBarNotContained { symbol, index } => write!(
+                f,
+                "symbol `{symbol}` sub-bar {index} is not contained in a parent bar"
+            ),
+            Self::SubBarGap { symbol, index } => {
+                write!(f, "symbol `{symbol}` bar {index} has no sub-bars")
+            }
+            Self::UnknownCorporateActionSymbol { symbol } => {
+                write!(f, "corporate action names unknown symbol `{symbol}`")
+            }
+            Self::DelistingWithoutMark { symbol } => write!(
+                f,
+                "symbol `{symbol}` is delisted before any bar closed, so it has no cash-out mark"
+            ),
+            Self::SymbolChangeMismatch { symbol } => {
+                write!(f, "symbol change for `{symbol}` does not match its stream")
+            }
+            Self::FinancingRateUnavailable { symbol, charge } => write!(
+                f,
+                "symbol `{symbol}` holds exposure needing a `{charge}` rate the policy calls unavailable"
+            ),
+            Self::TooManyAccrualBoundaries { limit } => {
+                write!(
+                    f,
+                    "simulation would schedule more than {limit} accrual boundaries"
+                )
             }
         }
     }
@@ -1007,6 +1271,7 @@ pub struct DecisionContext<'a> {
     market: MarketView<'a>,
     positions: &'a [PositionState],
     orders: &'a [Order],
+    session: Option<SessionStatus>,
 }
 
 impl DecisionContext<'_> {
@@ -1024,6 +1289,17 @@ impl DecisionContext<'_> {
     /// closed-bar decision, where the next bar has not started.
     pub const fn forming_bar(&self) -> Option<FormingBar> {
         self.forming
+    }
+
+    /// What the deciding instrument's venue is doing right now (§6.7), or
+    /// `None` when the instrument declares no calendar.
+    ///
+    /// This is how a session-relative rule — "no entries in the first fifteen
+    /// minutes" — is expressible without the strategy owning a time zone: the
+    /// minutes are counted from the venue's own open, projected through its
+    /// exchange clock with correct daylight-saving behaviour.
+    pub const fn session(&self) -> Option<SessionStatus> {
+        self.session
     }
 
     /// Exposure held on `symbol` as of this decision. Unknown symbols read as
@@ -1099,6 +1375,16 @@ struct Order {
     state: OrderState,
     /// Set once an IOC/FOK order has had its one execution opportunity.
     had_opportunity: bool,
+    /// Size already taken by partial fills (§6.6).
+    filled_quantity: f64,
+}
+
+impl Order {
+    /// Size still working. Clamped at zero so accumulated rounding can never
+    /// make a fully-filled order look like it has a sliver left.
+    fn remaining(&self) -> f64 {
+        stable_decimal(self.quantity - self.filled_quantity).max(0.0)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1150,16 +1436,56 @@ impl Recorder {
 /// A scheduled unit of work. Order-driven tasks carry an arena index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Task {
-    BarOpen { symbol: usize, bar: usize },
-    ExecuteOpen { symbol: usize, bar: usize },
-    BarClose { symbol: usize, bar: usize },
-    ExecuteClose { symbol: usize, bar: usize },
-    Decision { symbol: usize, bar: usize },
-    Mark { symbol: usize, bar: usize },
-    Submit { order: usize },
-    Activate { order: usize },
-    Expire { order: usize },
-    ApplyRequest { request: usize },
+    BarOpen {
+        symbol: usize,
+        bar: usize,
+    },
+    ExecuteOpen {
+        symbol: usize,
+        bar: usize,
+    },
+    /// One step of the §6.9 level-3 intrabar path.
+    ExecuteSubBar {
+        symbol: usize,
+        bar: usize,
+        sub: usize,
+    },
+    BarClose {
+        symbol: usize,
+        bar: usize,
+    },
+    ExecuteClose {
+        symbol: usize,
+        bar: usize,
+    },
+    Decision {
+        symbol: usize,
+        bar: usize,
+    },
+    Mark {
+        symbol: usize,
+        bar: usize,
+    },
+    Submit {
+        order: usize,
+    },
+    Activate {
+        order: usize,
+    },
+    Expire {
+        order: usize,
+    },
+    ApplyRequest {
+        request: usize,
+    },
+    /// A §6.8 event at its effective instant.
+    Corporate {
+        action: usize,
+    },
+    /// A §6.3 accrual boundary for one symbol.
+    Accrue {
+        symbol: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1285,12 +1611,20 @@ fn finite_accounting(field: &'static str, value: f64) -> Result<f64, SimulationE
         .ok_or(SimulationError::NonFiniteAccounting { field })
 }
 
+/// Apply one execution to a position and return the realized profit in
+/// **account** currency.
+///
+/// `conversion_rate` is account-currency units per unit of the instrument's
+/// quote currency. Prices — `avg_entry`, the high-water mark — stay in the
+/// instrument's currency, because they are prices and converting them would
+/// make them comparable to nothing. Only the realized amount crosses over.
 fn apply_fill(
     position: &mut PositionState,
     side: OrderSide,
     quantity: f64,
     price: f64,
     time_ns: i64,
+    conversion_rate: f64,
 ) -> f64 {
     let delta = side.sign() * quantity;
     let old = position.units;
@@ -1309,11 +1643,12 @@ fn apply_fill(
         return 0.0;
     }
     let closed = old.abs().min(quantity);
-    let realized = if old > 0.0 {
+    let realized_instrument = if old > 0.0 {
         (price - position.avg_entry) * closed
     } else {
         (position.avg_entry - price) * closed
     };
+    let realized = realized_instrument * conversion_rate;
     let new_units = old + delta;
     if new_units == 0.0 {
         position.avg_entry = 0.0;
@@ -1331,12 +1666,19 @@ fn apply_fill(
     stable_decimal(realized)
 }
 
-fn marked_equity(cash: f64, positions: &[PositionState], marks: &[Option<f64>]) -> f64 {
+fn marked_equity(
+    cash: f64,
+    positions: &[PositionState],
+    marks: &[Option<f64>],
+    instruments: &[InstrumentRuntime],
+) -> f64 {
     positions
         .iter()
         .zip(marks)
-        .fold(cash, |equity, (position, mark)| {
-            equity + mark.map_or(0.0, |price| position.units * price)
+        .enumerate()
+        .fold(cash, |equity, (index, (position, mark))| {
+            let rate = instruments.get(index).map_or(1.0, |i| i.conversion_rate);
+            equity + mark.map_or(0.0, |price| position.units * price * rate)
         })
 }
 
@@ -1747,11 +2089,35 @@ fn boundary_trigger(kind: OrderKind, side: OrderSide, mid: f64, half: f64) -> Op
 
 // ── Simulation ─────────────────────────────────────────────────────
 
+/// Everything the execution layer knows about one instrument (§6.3, §6.7).
+#[derive(Debug, Clone, Default)]
+struct InstrumentRuntime {
+    calendar: Option<TradingCalendar>,
+    financing: Option<FinancingPolicy>,
+    /// Account-currency units per unit of the instrument's quote currency.
+    conversion_rate: f64,
+    /// Conversion cost charged on the absolute converted amount, per fill.
+    conversion_spread_percent: f64,
+    /// Per-instrument tick lattice, overriding the run-wide one.
+    price_tick: Option<f64>,
+}
+
 struct Sim<'a> {
     config: &'a StrategyExecutionConfig,
     setup: &'a SimulationSetup,
     streams: Vec<SymbolStream>,
+    /// Finer-timeframe path per symbol; empty at levels 1–2.
+    sub_bars: Vec<Vec<SimBar>>,
+    /// `sub_index[symbol][bar]` is the half-open sub-bar range of that bar.
+    sub_index: Vec<Vec<(usize, usize)>>,
     symbol_count: usize,
+    instruments: Vec<InstrumentRuntime>,
+    /// Actions still to apply, in canonical order; `Task::Corporate` indexes it.
+    corporate: Vec<CorporateAction>,
+    /// Symbols whose delisting has taken effect. Nothing trades on them again.
+    delisted: Vec<bool>,
+    /// Last accrual boundary each symbol was charged at.
+    last_accrual_ns: Vec<i64>,
     recorder: Recorder,
     queue: Vec<ScheduledTask>,
     cursor: usize,
@@ -1763,12 +2129,21 @@ struct Sim<'a> {
     opened: Vec<Option<usize>>,
     marks: Vec<Option<f64>>,
     positions: Vec<PositionState>,
+    /// Participation consumed inside the parent bar currently open on a symbol,
+    /// and which bar that is (§6.6).
+    window_bar: Vec<Option<usize>>,
+    window_taken: Vec<f64>,
     fills: Vec<FillRecord>,
     rejections: Vec<RejectionRecord>,
     cancellations: Vec<CancelRecord>,
     equity_curve: Vec<EquityPoint>,
+    financing_charges: Vec<FinancingChargeRecord>,
+    corporate_records: Vec<CorporateActionRecord>,
     cash: f64,
     total_commission: f64,
+    total_conversion_cost: f64,
+    total_financing_cost: f64,
+    realized_pnl_account: f64,
     next_client_id: u64,
 }
 
@@ -1815,6 +2190,59 @@ impl Sim<'_> {
 
     fn half_spread(&self, reference: f64) -> f64 {
         stable_decimal(spread_width(&self.config.settings().spread, reference)) / 2.0
+    }
+
+    /// What the instrument's calendar says at `time_ns`. `None` when the
+    /// instrument declares no calendar, which means it is never gated.
+    fn session_status(&self, symbol: usize, time_ns: i64) -> Option<SessionStatus> {
+        self.instruments
+            .get(symbol)
+            .and_then(|runtime| runtime.calendar.as_ref())
+            .map(|calendar| calendar.status_at_ns(time_ns))
+    }
+
+    /// Whether the venue would accept an execution for `symbol` at `time_ns`.
+    /// An instrument with no calendar always would; a delisted one never does.
+    fn venue_open(&self, symbol: usize, time_ns: i64) -> bool {
+        if self.delisted[symbol] {
+            return false;
+        }
+        self.session_status(symbol, time_ns)
+            .is_none_or(SessionStatus::is_open)
+    }
+
+    fn conversion_rate(&self, symbol: usize) -> f64 {
+        self.instruments
+            .get(symbol)
+            .map_or(1.0, |runtime| runtime.conversion_rate)
+    }
+
+    /// Size the participation cap still allows inside the parent bar currently
+    /// open on `symbol`, or `None` when the run is uncapped.
+    fn window_available(&mut self, symbol: usize, bar: usize, bar_volume: f64) -> Option<f64> {
+        let capacity = self
+            .config
+            .settings()
+            .participation
+            .bar_capacity(bar_volume)?;
+        if self.window_bar[symbol] != Some(bar) {
+            self.window_bar[symbol] = Some(bar);
+            self.window_taken[symbol] = 0.0;
+        }
+        Some((capacity - self.window_taken[symbol]).max(0.0))
+    }
+
+    fn consume_window(&mut self, symbol: usize, quantity: f64) {
+        self.window_taken[symbol] = stable_decimal(self.window_taken[symbol] + quantity);
+    }
+
+    /// The tick lattice an order on `symbol` must sit on: the instrument's own
+    /// when it declares one, otherwise the run-wide setting.
+    fn price_tick(&self, symbol: usize) -> Option<f64> {
+        self.instruments
+            .get(symbol)
+            .and_then(|runtime| runtime.price_tick)
+            .or(self.config.settings().price_tick)
     }
 
     fn record_rejection(
@@ -2023,17 +2451,45 @@ pub fn run_simulation(
     streams: &[SymbolStream],
     strategy: &mut dyn ReferenceStrategy,
 ) -> Result<SimulationReport, SimulationError> {
+    run_simulation_with_paths(config, setup, streams, &[], strategy)
+}
+
+/// Run one deterministic simulation with an explicit §6.9 level-3 intrabar
+/// path.
+///
+/// The path is separate from the execution streams because it is a property of
+/// the run's declared fidelity, not of the instrument. A path supplied at a
+/// fidelity that does not consume one is an error rather than dead input, and a
+/// missing path at sub-bar fidelity is an error rather than a silent fall back
+/// to the coarser model.
+pub fn run_simulation_with_paths(
+    config: &StrategyExecutionConfig,
+    setup: &SimulationSetup,
+    streams: &[SymbolStream],
+    sub_bar_paths: &[SubBarPath],
+    strategy: &mut dyn ReferenceStrategy,
+) -> Result<SimulationReport, SimulationError> {
     config.verify().map_err(SimulationError::Config)?;
     validate_models(config)?;
     validate_setup(setup)?;
     let streams = validate_inputs(streams)?;
     let symbol_count = streams.len();
+    let settings = config.settings();
+    let (sub_bars, sub_index) = validate_sub_bars(&streams, sub_bar_paths, settings.fidelity)?;
+    let instruments = build_instruments(&streams, settings);
+    let corporate = resolve_corporate_actions(&streams, settings)?;
 
     let mut sim = Sim {
         config,
         setup,
         streams,
+        sub_bars,
+        sub_index,
         symbol_count,
+        instruments,
+        corporate,
+        delisted: vec![false; symbol_count],
+        last_accrual_ns: vec![i64::MIN; symbol_count],
         recorder: Recorder {
             sequence: 0,
             events: Vec::new(),
@@ -2048,16 +2504,25 @@ pub fn run_simulation(
         opened: vec![None; symbol_count],
         marks: vec![None; symbol_count],
         positions: vec![PositionState::default(); symbol_count],
+        window_bar: vec![None; symbol_count],
+        window_taken: vec![0.0; symbol_count],
         fills: Vec::new(),
         rejections: Vec::new(),
         cancellations: Vec::new(),
         equity_curve: Vec::new(),
-        cash: config.settings().initial_capital,
+        financing_charges: Vec::new(),
+        corporate_records: Vec::new(),
+        cash: settings.initial_capital,
         total_commission: 0.0,
+        total_conversion_cost: 0.0,
+        total_financing_cost: 0.0,
+        realized_pnl_account: 0.0,
         next_client_id: 0,
     };
 
     build_bar_schedule(&mut sim);
+    build_corporate_schedule(&mut sim);
+    build_accrual_schedule(&mut sim)?;
     sim.queue.sort_by_key(schedule_key);
     sim.schedule_tie = sim.queue.len() as u64;
 
@@ -2068,6 +2533,162 @@ pub fn run_simulation(
     }
 
     finish(sim)
+}
+
+/// Project the run's instrument registry onto the sorted symbol table.
+///
+/// A symbol with no spec keeps the M1 model exactly: no calendar, no accrual,
+/// parity conversion. That is the honest reading of "we did not say", and the
+/// report carries the registry so the omission is visible.
+fn build_instruments(
+    streams: &[SymbolStream],
+    settings: &crate::core::strategy_ir::ExecutionSettings,
+) -> Vec<InstrumentRuntime> {
+    streams
+        .iter()
+        .map(|stream| {
+            let Some(spec) = settings.instruments.get(&stream.symbol) else {
+                return InstrumentRuntime {
+                    conversion_rate: 1.0,
+                    ..InstrumentRuntime::default()
+                };
+            };
+            // Validation already proved every declared currency resolves, so a
+            // missing lookup here is impossible; parity is the only safe value
+            // if it ever were, and it matches the no-spec case.
+            let (rate, spread) = settings
+                .currency_conversion
+                .lookup(&spec.currency, &settings.account_currency)
+                .unwrap_or((1.0, 0.0));
+            InstrumentRuntime {
+                calendar: spec.calendar.clone(),
+                financing: spec.financing.policy().cloned(),
+                conversion_rate: rate,
+                conversion_spread_percent: spread,
+                price_tick: spec.price_tick,
+            }
+        })
+        .collect()
+}
+
+/// Resolve the schedule against the run's symbols. An action naming a symbol
+/// the run does not trade is refused rather than ignored: silently dropping it
+/// would let a config claim a split that never happened.
+fn resolve_corporate_actions(
+    streams: &[SymbolStream],
+    settings: &crate::core::strategy_ir::ExecutionSettings,
+) -> Result<Vec<CorporateAction>, SimulationError> {
+    let actions = settings.corporate_actions.actions();
+    for action in actions {
+        if !streams.iter().any(|stream| stream.symbol == action.symbol) {
+            return Err(SimulationError::UnknownCorporateActionSymbol {
+                symbol: action.symbol.clone(),
+            });
+        }
+        if let CorporateActionKind::SymbolChange { new_symbol } = &action.kind
+            && streams.iter().any(|stream| &stream.symbol == new_symbol)
+        {
+            // Both identities in one run would mean two streams for one
+            // instrument, which the symbol table cannot express.
+            return Err(SimulationError::SymbolChangeMismatch {
+                symbol: new_symbol.clone(),
+            });
+        }
+    }
+    Ok(actions.to_vec())
+}
+
+/// Bind each symbol's finer-timeframe path and prove it is a path *inside* the
+/// execution stream rather than a second, disagreeing series.
+type SubBarBinding = (Vec<Vec<SimBar>>, Vec<Vec<(usize, usize)>>);
+
+fn validate_sub_bars(
+    streams: &[SymbolStream],
+    paths: &[SubBarPath],
+    fidelity: FidelityLevel,
+) -> Result<SubBarBinding, SimulationError> {
+    let wants_path = matches!(fidelity, FidelityLevel::SubBar { .. });
+    if !wants_path {
+        if let Some(path) = paths.first() {
+            return Err(SimulationError::UnexpectedSubBarPath {
+                symbol: path.symbol.clone(),
+            });
+        }
+        return Ok((
+            vec![Vec::new(); streams.len()],
+            vec![Vec::new(); streams.len()],
+        ));
+    }
+
+    let total: usize = paths.iter().map(|path| path.bars.len()).sum();
+    if total > MAX_TOTAL_SUB_BARS {
+        return Err(SimulationError::TooManySubBars {
+            limit: MAX_TOTAL_SUB_BARS,
+            found: total,
+        });
+    }
+    for path in paths {
+        if !streams.iter().any(|stream| stream.symbol == path.symbol) {
+            return Err(SimulationError::UnknownSubBarSymbol {
+                symbol: path.symbol.clone(),
+            });
+        }
+    }
+
+    let mut bars_by_symbol = Vec::with_capacity(streams.len());
+    let mut index_by_symbol = Vec::with_capacity(streams.len());
+    for stream in streams {
+        let Some(path) = paths.iter().find(|path| path.symbol == stream.symbol) else {
+            return Err(SimulationError::MissingSubBarPath {
+                symbol: stream.symbol.clone(),
+            });
+        };
+        // A sub-bar path is validated as a bar series in its own right first,
+        // so a malformed OHLC row cannot reach execution through the back door.
+        let checked = validate_inputs(&[SymbolStream {
+            symbol: stream.symbol.clone(),
+            bars: path.bars.clone(),
+        }])?;
+        let sub = checked.into_iter().next().expect("one stream in, one out");
+
+        let mut ranges = Vec::with_capacity(stream.bars.len());
+        let mut cursor = 0usize;
+        for (bar_index, parent) in stream.bars.iter().enumerate() {
+            let start = cursor;
+            while cursor < sub.bars.len() {
+                let candidate = sub.bars[cursor];
+                if candidate.open_time_ns > parent.close_time_ns {
+                    break;
+                }
+                let inside_time = candidate.open_time_ns >= parent.open_time_ns
+                    && candidate.close_time_ns <= parent.close_time_ns;
+                let inside_price = candidate.high <= parent.high && candidate.low >= parent.low;
+                if !inside_time || !inside_price {
+                    return Err(SimulationError::SubBarNotContained {
+                        symbol: stream.symbol.clone(),
+                        index: cursor,
+                    });
+                }
+                cursor += 1;
+            }
+            if cursor == start {
+                return Err(SimulationError::SubBarGap {
+                    symbol: stream.symbol.clone(),
+                    index: bar_index,
+                });
+            }
+            ranges.push((start, cursor));
+        }
+        if cursor != sub.bars.len() {
+            return Err(SimulationError::SubBarNotContained {
+                symbol: stream.symbol.clone(),
+                index: cursor,
+            });
+        }
+        bars_by_symbol.push(sub.bars);
+        index_by_symbol.push(ranges);
+    }
+    Ok((bars_by_symbol, index_by_symbol))
 }
 
 /// Lay down every bar-driven event up front. Ties inside one `(time, priority)`
@@ -2090,6 +2711,19 @@ fn build_bar_schedule(sim: &mut Sim<'_>) {
                 tie,
                 Task::ExecuteOpen { symbol, bar },
             );
+            // Level-3 path steps share the open-execution slot and are pushed
+            // after the parent's own open execution, so a stable sort keeps
+            // them in time order behind it.
+            if let Some(&(start, end)) = sim.sub_index[symbol].get(bar) {
+                for sub in start..end {
+                    sim.push(
+                        sim.sub_bars[symbol][sub].close_time_ns,
+                        priority::OPEN_EXECUTION,
+                        tie,
+                        Task::ExecuteSubBar { symbol, bar, sub },
+                    );
+                }
+            }
             sim.push(
                 row.close_time_ns,
                 priority::BAR_CLOSE,
@@ -2125,6 +2759,62 @@ fn build_bar_schedule(sim: &mut Sim<'_>) {
             );
         }
     }
+}
+
+/// Lay down every corporate action at its effective instant (§6.8). The
+/// canonical schedule order is already total, so the tie counter simply follows
+/// it and two actions at one instant keep their declared precedence.
+fn build_corporate_schedule(sim: &mut Sim<'_>) {
+    for index in 0..sim.corporate.len() {
+        let time_ns = sim.corporate[index].effective_time_ns;
+        sim.push(
+            time_ns,
+            priority::CORPORATE,
+            index as u64,
+            Task::Corporate { action: index },
+        );
+    }
+}
+
+/// Lay down every accrual boundary inside the run's span (§6.3).
+///
+/// Boundaries are absolute — a UTC day is a UTC day regardless of when the run
+/// starts — so two runs over overlapping ranges charge on the same instants.
+fn build_accrual_schedule(sim: &mut Sim<'_>) -> Result<(), SimulationError> {
+    let mut scheduled = 0usize;
+    for symbol in 0..sim.symbol_count {
+        let Some(policy) = sim.instruments[symbol].financing.clone() else {
+            continue;
+        };
+        let (Some(first), Some(last)) = (
+            sim.streams[symbol].bars.first().copied(),
+            sim.streams[symbol].bars.last().copied(),
+        ) else {
+            continue;
+        };
+        // Nothing can be held before the first bar opens, so the first
+        // boundary that can charge anything is the one after it.
+        let mut boundary = policy.next_boundary_ns(first.open_time_ns);
+        while let Some(time_ns) = boundary {
+            if time_ns > last.close_time_ns {
+                break;
+            }
+            scheduled += 1;
+            if scheduled > MAX_ACCRUAL_BOUNDARIES {
+                return Err(SimulationError::TooManyAccrualBoundaries {
+                    limit: MAX_ACCRUAL_BOUNDARIES,
+                });
+            }
+            sim.push(
+                time_ns,
+                priority::ACCRUAL,
+                symbol as u64,
+                Task::Accrue { symbol },
+            );
+            boundary = policy.next_boundary_ns(time_ns);
+        }
+    }
+    Ok(())
 }
 
 fn run_task(
@@ -2166,7 +2856,12 @@ fn run_task(
             )?;
         }
         Task::ExecuteOpen { symbol, bar } => execute_phase(sim, symbol, bar, Phase::Open)?,
+        Task::ExecuteSubBar { symbol, bar, sub } => {
+            execute_phase(sim, symbol, bar, Phase::SubBar { sub })?;
+        }
         Task::ExecuteClose { symbol, bar } => execute_phase(sim, symbol, bar, Phase::Close)?,
+        Task::Corporate { action } => apply_corporate_action(sim, action, entry.time_ns)?,
+        Task::Accrue { symbol } => accrue_financing(sim, symbol, entry.time_ns)?,
         Task::Decision { symbol, bar } => decide(sim, symbol, bar, entry.time_ns, strategy)?,
         Task::Submit { order } => submit_order(sim, order, entry.time_ns)?,
         Task::Activate { order } => {
@@ -2206,7 +2901,7 @@ fn run_task(
             )?;
             let equity = finite_accounting(
                 "equity",
-                marked_equity(sim.cash, &sim.positions, &sim.marks),
+                marked_equity(sim.cash, &sim.positions, &sim.marks, &sim.instruments),
             )?;
             sim.equity_curve.push(EquityPoint {
                 time_ns: entry.time_ns,
@@ -2222,8 +2917,227 @@ fn run_task(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Open,
+    /// One step of the level-3 intrabar path, resolved against `sub`'s OHLC.
+    SubBar {
+        sub: usize,
+    },
     Close,
     LegacyClose,
+}
+
+impl Phase {
+    const fn is_close(self) -> bool {
+        matches!(self, Self::Close | Self::LegacyClose)
+    }
+}
+
+// ── Corporate actions (§6.8) ───────────────────────────────────────
+
+/// Apply one action at its effective instant.
+///
+/// Everything here operates on the position and cash that exist *now*. Nothing
+/// reaches back into price history, which is precisely the hazard §6.8 exists
+/// to rule out: a stop written in pre-split prices is retired rather than
+/// silently re-interpreted against post-split ones.
+fn apply_corporate_action(
+    sim: &mut Sim<'_>,
+    action_index: usize,
+    time_ns: i64,
+) -> Result<(), SimulationError> {
+    let action = sim.corporate[action_index].clone();
+    let Some(symbol) = sim
+        .streams
+        .iter()
+        .position(|stream| stream.symbol == action.symbol)
+    else {
+        return Err(SimulationError::UnknownCorporateActionSymbol {
+            symbol: action.symbol,
+        });
+    };
+
+    let units_before = sim.positions[symbol].units;
+    let avg_entry_before = sim.positions[symbol].avg_entry;
+    let mut cash_delta = 0.0;
+    let mut cancelled = 0usize;
+
+    match &action.kind {
+        CorporateActionKind::Split {
+            numerator,
+            denominator,
+        } => {
+            let (units_factor, price_factor) =
+                CorporateAction::split_factors(*numerator, *denominator);
+            let position = &mut sim.positions[symbol];
+            position.units = stable_decimal(position.units * units_factor);
+            position.avg_entry = stable_decimal(position.avg_entry * price_factor);
+            position.favorable_extreme = stable_decimal(position.favorable_extreme * price_factor);
+            // The mark moves with the prices, so equity does not jump on the
+            // split itself; the next bar's close replaces it either way.
+            if let Some(mark) = sim.marks[symbol] {
+                sim.marks[symbol] = Some(stable_decimal(mark * price_factor));
+            }
+            cancelled = cancel_symbol_orders(sim, symbol, time_ns)?;
+        }
+        CorporateActionKind::CashDividend { amount_per_unit } => {
+            // Longs receive, shorts pay. The sign falls straight out of the
+            // signed position, so no branch can get it backwards.
+            let rate = sim.conversion_rate(symbol);
+            cash_delta = stable_decimal(units_before * amount_per_unit * rate);
+            sim.cash = finite_accounting("cash", stable_decimal(sim.cash + cash_delta))?;
+        }
+        CorporateActionKind::SymbolChange { .. } => {
+            // No economic effect. Recorded so a report shows the identity
+            // change against the exposure that lived through it.
+        }
+        CorporateActionKind::Delisting => {
+            cancelled = cancel_symbol_orders(sim, symbol, time_ns)?;
+            if units_before != 0.0 {
+                let Some(mark) = sim.marks[symbol] else {
+                    return Err(SimulationError::DelistingWithoutMark {
+                        symbol: action.symbol,
+                    });
+                };
+                // A cash-out is not a trade: no venue charges a spread,
+                // slippage or commission for delisting your position, so
+                // modelling one would invent a cost.
+                let rate = sim.conversion_rate(symbol);
+                let realized = apply_fill(
+                    &mut sim.positions[symbol],
+                    if units_before > 0.0 {
+                        OrderSide::Sell
+                    } else {
+                        OrderSide::Buy
+                    },
+                    units_before.abs(),
+                    mark,
+                    time_ns,
+                    rate,
+                );
+                cash_delta = stable_decimal(units_before * mark * rate);
+                sim.cash = finite_accounting("cash", stable_decimal(sim.cash + cash_delta))?;
+                sim.realized_pnl_account = stable_decimal(sim.realized_pnl_account + realized);
+            }
+            sim.delisted[symbol] = true;
+            // A delisted instrument has no further marks; keeping the last one
+            // would report an equity position in a security that no longer
+            // exists.
+            sim.marks[symbol] = None;
+        }
+    }
+
+    let sequence = sim.recorder.event(
+        time_ns,
+        SimEventKind::CorporateAction,
+        priority::CORPORATE,
+        Some(SymbolId(symbol)),
+        None,
+    )?;
+    sim.corporate_records.push(CorporateActionRecord {
+        time_ns,
+        sequence,
+        symbol: SymbolId(symbol),
+        kind: action.kind.wire_id().to_string(),
+        units_before,
+        units_after: sim.positions[symbol].units,
+        avg_entry_before,
+        avg_entry_after: sim.positions[symbol].avg_entry,
+        cash_delta,
+        orders_cancelled: cancelled,
+    });
+    Ok(())
+}
+
+fn cancel_symbol_orders(
+    sim: &mut Sim<'_>,
+    symbol: usize,
+    time_ns: i64,
+) -> Result<usize, SimulationError> {
+    let resting: Vec<usize> = sim.live[symbol].clone();
+    for index in &resting {
+        sim.cancel_order(
+            *index,
+            time_ns,
+            priority::CORPORATE,
+            CancelReason::CorporateAction,
+        )?;
+    }
+    Ok(resting.len())
+}
+
+// ── Financing accrual (§6.3) ───────────────────────────────────────
+
+/// Charge one accrual boundary for one symbol.
+///
+/// The charge uses the last *committed* mark, so it can never be computed from
+/// a price the run has not yet been allowed to see.
+fn accrue_financing(sim: &mut Sim<'_>, symbol: usize, time_ns: i64) -> Result<(), SimulationError> {
+    let Some(policy) = sim.instruments[symbol].financing.clone() else {
+        return Ok(());
+    };
+    let previous = sim.last_accrual_ns[symbol];
+    sim.last_accrual_ns[symbol] = time_ns;
+    let units = sim.positions[symbol].units;
+    if units == 0.0 {
+        return Ok(());
+    }
+    let Some(mark) = sim.marks[symbol] else {
+        // Nothing has closed yet, so there is no price to charge against. A
+        // position cannot exist before the first mark either, so this is
+        // unreachable in practice and silent only because there is genuinely
+        // nothing to say.
+        return Ok(());
+    };
+    // A run's first boundary charges from the previous boundary of the same
+    // grid, not from the run's start: financing is a property of the calendar,
+    // not of when someone chose to begin simulating.
+    let elapsed_seconds = if previous == i64::MIN {
+        policy.accrual.seconds()
+    } else {
+        (time_ns - previous) / NANOS_PER_SECOND
+    };
+
+    let breakdown: AccrualBreakdown =
+        accrue(&policy, units, mark, elapsed_seconds).map_err(|charge: FinancingCharge| {
+            SimulationError::FinancingRateUnavailable {
+                symbol: sim.streams[symbol].symbol.clone(),
+                charge: charge.wire_id(),
+            }
+        })?;
+    let rate = sim.conversion_rate(symbol);
+    let financing = stable_decimal(breakdown.financing * rate);
+    let borrow = stable_decimal(breakdown.borrow * rate);
+    let funding = stable_decimal(breakdown.funding * rate);
+    let total = stable_decimal(financing + borrow + funding);
+    if total == 0.0 && financing == 0.0 && borrow == 0.0 && funding == 0.0 {
+        return Ok(());
+    }
+
+    sim.cash = finite_accounting("cash", stable_decimal(sim.cash - total))?;
+    sim.total_financing_cost = finite_accounting(
+        "total_financing_cost",
+        stable_decimal(sim.total_financing_cost + total),
+    )?;
+    let sequence = sim.recorder.event(
+        time_ns,
+        SimEventKind::FundingCharge,
+        priority::ACCRUAL,
+        Some(SymbolId(symbol)),
+        None,
+    )?;
+    sim.financing_charges.push(FinancingChargeRecord {
+        time_ns,
+        sequence,
+        symbol: SymbolId(symbol),
+        units,
+        mark_price: mark,
+        seconds_accrued: elapsed_seconds,
+        financing,
+        borrow,
+        funding,
+        total,
+        cash_after: sim.cash,
+    });
+    Ok(())
 }
 
 fn schedule_expiry(sim: &mut Sim<'_>, order_index: usize, active_time_ns: i64) {
@@ -2270,6 +3184,7 @@ fn decide(
         DecisionPoint::ClosedBar | DecisionPoint::NextBarOpen => None,
     };
 
+    let session = sim.session_status(symbol, time_ns);
     let intents = {
         let ctx = DecisionContext {
             symbol: SymbolId(symbol),
@@ -2282,6 +3197,7 @@ fn decide(
             },
             positions: &sim.positions,
             orders: &sim.orders,
+            session,
         };
         let mut orders = OrderIntents::new(sim.symbol_count, sim.next_client_id);
         strategy
@@ -2354,6 +3270,7 @@ fn decide(
                     submit_sequence: 0,
                     state: OrderState::Submitted,
                     had_opportunity: false,
+                    filled_quantity: 0.0,
                 });
                 let submit_time = sim.orders[order_index].submit_time_ns;
                 if legacy_same_close {
@@ -2447,7 +3364,7 @@ fn submit_order(
         sim.orders[order_index].state = OrderState::Done;
         return Ok(());
     }
-    if let Some(tick) = sim.config.settings().price_tick {
+    if let Some(tick) = sim.price_tick(symbol.0) {
         for price in order_prices(&kind) {
             if !on_tick(price, tick) {
                 sim.record_rejection(
@@ -2460,6 +3377,33 @@ fn submit_order(
                 return Ok(());
             }
         }
+    }
+    if sim.delisted[symbol.0] {
+        sim.record_rejection(
+            time_ns,
+            symbol,
+            client_id,
+            RejectionReason::InstrumentDelisted,
+        )?;
+        sim.orders[order_index].state = OrderState::Done;
+        return Ok(());
+    }
+    // §6.7: an out-of-session submission either rests until the venue reopens
+    // or is refused, per configuration. It never fills out of session either
+    // way — the execution phase checks the calendar again at fill time.
+    if sim.config.settings().outside_session == OutsideSessionPolicy::Reject
+        && let Some(SessionStatus::Closed(reason)) = sim.session_status(symbol.0, time_ns)
+    {
+        sim.record_rejection(
+            time_ns,
+            symbol,
+            client_id,
+            RejectionReason::SessionClosed {
+                reason: reason.wire_id().to_string(),
+            },
+        )?;
+        sim.orders[order_index].state = OrderState::Done;
+        return Ok(());
     }
     if sim.live[symbol.0].len() >= MAX_LIVE_ORDERS_PER_SYMBOL {
         return Err(SimulationError::TooManyLiveOrders {
@@ -2559,7 +3503,7 @@ fn apply_request(
             RejectionReason::ModifyNotApplicable,
         );
     }
-    if let Some(tick) = sim.config.settings().price_tick {
+    if let Some(tick) = sim.price_tick(request.symbol.0) {
         for price in order_prices(&kind) {
             if !on_tick(price, tick) {
                 return sim.record_rejection(
@@ -2595,11 +3539,29 @@ fn execute_phase(
     if sim.live[symbol].is_empty() {
         return Ok(());
     }
-    let row = sim.bar(symbol, bar);
+    let parent = sim.bar(symbol, bar);
+    // The row an execution resolves against: the parent bar at levels 1–2, the
+    // path step at level 3. The participation window stays the *parent* bar
+    // either way, so a finer path cannot multiply the liquidity available.
+    let row = match phase {
+        Phase::SubBar { sub } => sim.sub_bars[symbol][sub],
+        _ => parent,
+    };
     let fidelity = sim.config.settings().fidelity;
     let legacy = sim.config.settings().compatibility == ExecutionCompatibility::LegacySameBarClose;
 
-    // Range-based orders had to be live by the open to claim the bar's path.
+    let time_ns = match phase {
+        Phase::Open => row.open_time_ns,
+        Phase::SubBar { .. } => row.close_time_ns,
+        Phase::Close | Phase::LegacyClose => row.close_time_ns,
+    };
+    // Nothing executes while the venue is shut, under either out-of-session
+    // policy (§6.7). A delisted instrument is shut permanently.
+    if !sim.venue_open(symbol, time_ns) {
+        return Ok(());
+    }
+
+    // Range-based orders had to be live by the row's open to claim its path.
     // MOC consumes only the close, so it may become active during the bar.
     let eligible: Vec<usize> = sim.live[symbol]
         .iter()
@@ -2623,31 +3585,39 @@ fn execute_phase(
     for index in eligible.iter().copied() {
         let order = sim.orders[index].clone();
         let half = sim.half_spread(row.open);
-        let resting_limit = match (phase, fidelity) {
-            (Phase::Open, _) => {
-                resting_stop_limit_at_boundary(order.kind, order.side, row.open, half)
-            }
-            (Phase::Close, FidelityLevel::BarOhlc) => {
+        let resting_limit = match phase {
+            Phase::Open => resting_stop_limit_at_boundary(order.kind, order.side, row.open, half),
+            // A path step resolves exactly like a level-2 bar, against its own
+            // range — that is what makes level 3 the same rules at a finer
+            // resolution rather than a second execution model.
+            Phase::SubBar { .. } => resting_stop_limit_in_bar(order.kind, order.side, &row, half),
+            Phase::Close if fidelity == FidelityLevel::BarOhlc => {
                 resting_stop_limit_in_bar(order.kind, order.side, &row, half)
             }
-            (Phase::Close | Phase::LegacyClose, FidelityLevel::BarClose) => {
+            // At level 3 the parent's close phase only serves market-on-close,
+            // whose price is the close; the range was already walked.
+            Phase::Close if fidelity.sub_bar_seconds().is_some() => None,
+            Phase::Close | Phase::LegacyClose if fidelity == FidelityLevel::BarClose => {
                 resting_stop_limit_at_boundary(order.kind, order.side, row.close, half)
             }
-            (Phase::LegacyClose, FidelityLevel::BarOhlc) => None,
+            Phase::Close | Phase::LegacyClose => None,
         };
         if resting_limit.is_some() {
             converted.push(index);
             continue;
         }
-        let trigger = match (phase, fidelity) {
-            (Phase::Open, _) => boundary_trigger(order.kind, order.side, row.open, half),
-            (Phase::LegacyClose, _) => boundary_trigger(
+        let trigger = match phase {
+            Phase::Open => boundary_trigger(order.kind, order.side, row.open, half),
+            Phase::SubBar { .. } => {
+                intrabar_trigger(order.kind, order.side, &row, half).map(|(trigger, _)| trigger)
+            }
+            Phase::LegacyClose => boundary_trigger(
                 order.kind,
                 order.side,
                 row.close,
                 sim.half_spread(row.close),
             ),
-            (Phase::Close, _) => {
+            Phase::Close => {
                 if matches!(order.kind, OrderKind::MarketOnClose) {
                     Some(Trigger {
                         rank: 0,
@@ -2656,6 +3626,8 @@ fn execute_phase(
                     })
                 } else if fidelity == FidelityLevel::BarOhlc {
                     intrabar_trigger(order.kind, order.side, &row, half).map(|(trigger, _)| trigger)
+                } else if fidelity.sub_bar_seconds().is_some() {
+                    None
                 } else if !matches!(order.kind, OrderKind::Market) {
                     boundary_trigger(order.kind, order.side, row.close, half)
                 } else {
@@ -2675,12 +3647,12 @@ fn execute_phase(
                 let order = &sim.orders[index];
                 (order.client_id, order.symbol)
             };
-            let (trigger_time, trigger_priority) = match phase {
-                Phase::Open => (row.open_time_ns, priority::OPEN_EXECUTION),
-                Phase::Close | Phase::LegacyClose => (row.close_time_ns, priority::CLOSE_EXECUTION),
+            let trigger_priority = match phase {
+                Phase::Open | Phase::SubBar { .. } => priority::OPEN_EXECUTION,
+                Phase::Close | Phase::LegacyClose => priority::CLOSE_EXECUTION,
             };
             sim.recorder.event(
-                trigger_time,
+                time_ns,
                 SimEventKind::StopTriggered,
                 trigger_priority,
                 Some(order_symbol),
@@ -2692,12 +3664,8 @@ fn execute_phase(
     resolve_oco(sim, &mut candidates);
     candidates.sort_by_key(|(index, _)| sim.orders[*index].submit_sequence);
 
-    let time_ns = match phase {
-        Phase::Open => row.open_time_ns,
-        Phase::Close | Phase::LegacyClose => row.close_time_ns,
-    };
     let execution_priority = match phase {
-        Phase::Open => priority::OPEN_EXECUTION,
+        Phase::Open | Phase::SubBar { .. } => priority::OPEN_EXECUTION,
         Phase::Close => priority::CLOSE_EXECUTION,
         Phase::LegacyClose => priority::SUBMIT,
     };
@@ -2706,23 +3674,35 @@ fn execute_phase(
         if sim.orders[index].state != OrderState::Active {
             continue;
         }
-        attempt_fill(sim, index, trigger, time_ns, execution_priority, row)?;
+        attempt_fill(
+            sim,
+            index,
+            trigger,
+            time_ns,
+            execution_priority,
+            row,
+            bar,
+            parent.volume,
+        )?;
     }
 
-    // An immediate-or-cancel order gets exactly one bar to work in.
-    let expiring: Vec<usize> = sim.live[symbol]
-        .iter()
-        .copied()
-        .filter(|index| {
-            let order = &sim.orders[*index];
-            matches!(order.time_in_force, TimeInForce::Ioc | TimeInForce::Fok)
-                && order.state == OrderState::Active
-                && order.active_time_ns <= row.open_time_ns
-                && (matches!(phase, Phase::Close | Phase::LegacyClose) || order.had_opportunity)
-        })
-        .collect();
-    for index in expiring {
-        sim.cancel_order(index, time_ns, execution_priority, CancelReason::Expired)?;
+    // An immediate-or-cancel order gets exactly one parent bar to work in, so a
+    // path step is never where one dies.
+    if !matches!(phase, Phase::SubBar { .. }) {
+        let expiring: Vec<usize> = sim.live[symbol]
+            .iter()
+            .copied()
+            .filter(|index| {
+                let order = &sim.orders[*index];
+                matches!(order.time_in_force, TimeInForce::Ioc | TimeInForce::Fok)
+                    && order.state == OrderState::Active
+                    && order.active_time_ns <= parent.open_time_ns
+                    && (phase.is_close() || order.had_opportunity)
+            })
+            .collect();
+        for index in expiring {
+            sim.cancel_order(index, time_ns, execution_priority, CancelReason::Expired)?;
+        }
     }
     for index in eligible {
         if sim.orders[index].state == OrderState::Active {
@@ -2825,6 +3805,8 @@ fn attempt_fill(
     time_ns: i64,
     execution_priority: u8,
     row: SimBar,
+    parent_bar: usize,
+    parent_volume: f64,
 ) -> Result<(), SimulationError> {
     let order = sim.orders[order_index].clone();
     let settings = sim.config.settings();
@@ -2853,7 +3835,6 @@ fn attempt_fill(
         "fill_price",
         stable_decimal(quoted + order.side.sign() * slip),
     )?;
-    // A limit never fills worse than its price — that is what a limit is.
     if let OrderKind::Limit { limit_price } = order.kind {
         fill_price = match order.side {
             OrderSide::Buy => fill_price.min(limit_price),
@@ -2862,6 +3843,24 @@ fn attempt_fill(
     }
 
     let position = sim.positions[order.symbol.0].units;
+    let remaining = order.remaining();
+    let available = sim.window_available(order.symbol.0, parent_bar, parent_volume);
+    if matches!(order.time_in_force, TimeInForce::Fok)
+        && available.is_some_and(|capacity| capacity < remaining)
+    {
+        sim.cancel_order(
+            order_index,
+            time_ns,
+            execution_priority,
+            CancelReason::FillOrKillUnfilled,
+        )?;
+        return Ok(());
+    }
+    let fill_quantity = available.map_or(remaining, |capacity| remaining.min(capacity));
+    if fill_quantity <= 0.0 {
+        return Ok(());
+    }
+
     if order.reduce_only {
         let reduces = position != 0.0 && position.signum() != order.side.sign();
         if !reduces {
@@ -2874,14 +3873,14 @@ fn attempt_fill(
             sim.retire(order_index);
             return Ok(());
         }
-        if order.quantity > position.abs() {
+        if remaining > position.abs() {
             sim.record_rejection(
                 time_ns,
                 order.symbol,
                 order.client_id,
                 RejectionReason::ReduceOnlyExceedsPosition {
                     position,
-                    quantity: order.quantity,
+                    quantity: remaining,
                 },
             )?;
             sim.retire(order_index);
@@ -2889,20 +3888,37 @@ fn attempt_fill(
         }
     }
 
+    // Per-order commission is charged once, on the first execution. Other
+    // schedules are evaluated per execution against the actual fill.
     let fee = finite_accounting(
         "commission",
-        stable_decimal(commission(
-            &settings.commission,
-            order.side,
-            order.quantity,
-            fill_price,
-        )),
+        stable_decimal(
+            if order.filled_quantity > 0.0
+                && matches!(settings.commission, CommissionModel::PerOrder { .. })
+            {
+                0.0
+            } else {
+                commission(&settings.commission, order.side, fill_quantity, fill_price)
+            },
+        ),
+    )?;
+    let rate = sim.conversion_rate(order.symbol.0);
+    let converted_notional = finite_accounting(
+        "converted_notional",
+        stable_decimal(fill_price * fill_quantity * rate),
+    )?;
+    let conversion_cost = finite_accounting(
+        "conversion_cost",
+        stable_decimal(
+            converted_notional.abs() * sim.instruments[order.symbol.0].conversion_spread_percent
+                / 100.0,
+        ),
     )?;
     let next_cash = finite_accounting(
         "cash",
-        stable_decimal(sim.cash - order.side.sign() * fill_price * order.quantity - fee),
+        stable_decimal(sim.cash - order.side.sign() * converted_notional - fee - conversion_cost),
     )?;
-    let next_units = position + order.side.sign() * order.quantity;
+    let next_units = position + order.side.sign() * fill_quantity;
     if settings.margin == MarginPolicy::CashOnly {
         if next_units < 0.0 {
             sim.record_rejection(
@@ -2921,7 +3937,7 @@ fn attempt_fill(
                 order.client_id,
                 RejectionReason::InsufficientBuyingPower {
                     cash: sim.cash,
-                    required: stable_decimal(fill_price * order.quantity + fee),
+                    required: stable_decimal(converted_notional + fee + conversion_cost),
                 },
             )?;
             sim.retire(order_index);
@@ -2929,22 +3945,34 @@ fn attempt_fill(
         }
     }
 
-    let spread_cost =
-        finite_accounting("spread_cost", stable_decimal(width / 2.0 * order.quantity))?;
-    let slippage_cost = finite_accounting("slippage_cost", stable_decimal(slip * order.quantity))?;
+    let spread_cost = finite_accounting(
+        "spread_cost",
+        stable_decimal(width / 2.0 * fill_quantity * rate),
+    )?;
+    let slippage_cost =
+        finite_accounting("slippage_cost", stable_decimal(slip * fill_quantity * rate))?;
     sim.cash = next_cash;
     sim.total_commission = finite_accounting(
         "total_commission",
         stable_decimal(sim.total_commission + fee),
     )?;
+    sim.total_conversion_cost = finite_accounting(
+        "total_conversion_cost",
+        stable_decimal(sim.total_conversion_cost + conversion_cost),
+    )?;
     let realized_pnl = apply_fill(
         &mut sim.positions[order.symbol.0],
         order.side,
-        order.quantity,
+        fill_quantity,
         fill_price,
         time_ns,
+        rate,
     );
     finite_accounting("realized_pnl", realized_pnl)?;
+    sim.realized_pnl_account = finite_accounting(
+        "realized_pnl_account",
+        stable_decimal(sim.realized_pnl_account + realized_pnl),
+    )?;
     finite_accounting("position_units", sim.positions[order.symbol.0].units)?;
     finite_accounting("average_entry", sim.positions[order.symbol.0].avg_entry)?;
     finite_accounting(
@@ -2952,9 +3980,18 @@ fn attempt_fill(
         sim.positions[order.symbol.0].realized_pnl,
     )?;
 
+    sim.orders[order_index].filled_quantity =
+        stable_decimal(sim.orders[order_index].filled_quantity + fill_quantity);
+    sim.consume_window(order.symbol.0, fill_quantity);
+    let remaining_quantity = sim.orders[order_index].remaining();
+    let complete = remaining_quantity == 0.0;
     let sequence = sim.recorder.event(
         time_ns,
-        SimEventKind::Fill,
+        if complete {
+            SimEventKind::Fill
+        } else {
+            SimEventKind::PartialFill
+        },
         execution_priority,
         Some(order.symbol),
         Some(order.client_id),
@@ -2966,33 +4003,53 @@ fn attempt_fill(
         sequence,
         symbol: order.symbol,
         side: order.side,
-        quantity: order.quantity,
+        quantity: fill_quantity,
+        remaining_quantity,
         reference_price: reference,
         quoted_price: quoted,
         fill_price,
         spread_cost,
         slippage_cost,
         commission: fee,
+        conversion_rate: rate,
+        conversion_cost,
         realized_pnl,
         cash_after: sim.cash,
         position_units_after: state.units,
         avg_entry_after: state.avg_entry,
     });
-    sim.retire(order_index);
+    if complete {
+        sim.retire(order_index);
+    }
 
     if let Some(group) = order.oco_group {
         let siblings: Vec<usize> = sim.live[order.symbol.0]
             .iter()
             .copied()
-            .filter(|index| sim.orders[*index].oco_group == Some(group))
+            .filter(|index| *index != order_index && sim.orders[*index].oco_group == Some(group))
             .collect();
         for sibling in siblings {
-            sim.cancel_order(
-                sibling,
-                time_ns,
-                priority::OCO_CANCEL,
-                CancelReason::OcoSibling,
-            )?;
+            if complete {
+                sim.cancel_order(
+                    sibling,
+                    time_ns,
+                    priority::OCO_CANCEL,
+                    CancelReason::OcoSibling,
+                )?;
+                continue;
+            }
+            let sibling_remaining = sim.orders[sibling].remaining();
+            if sibling_remaining <= fill_quantity {
+                sim.cancel_order(
+                    sibling,
+                    time_ns,
+                    priority::OCO_CANCEL,
+                    CancelReason::OcoSiblingConsumed,
+                )?;
+            } else {
+                sim.orders[sibling].quantity =
+                    stable_decimal(sim.orders[sibling].quantity - fill_quantity);
+            }
         }
     }
     Ok(())
@@ -3050,6 +4107,7 @@ fn finish(mut sim: Sim<'_>) -> Result<SimulationReport, SimulationError> {
                     submit_sequence: 0,
                     state: OrderState::Active,
                     had_opportunity: true,
+                    filled_quantity: 0.0,
                 });
                 sim.live[symbol_index].push(order_index);
                 attempt_fill(
@@ -3063,6 +4121,8 @@ fn finish(mut sim: Sim<'_>) -> Result<SimulationReport, SimulationError> {
                     liquidation_time,
                     priority::CLOSE_EXECUTION,
                     row,
+                    usize::MAX,
+                    f64::INFINITY,
                 )?;
             }
             liquidation_time
@@ -3078,7 +4138,7 @@ fn finish(mut sim: Sim<'_>) -> Result<SimulationReport, SimulationError> {
     )?;
     let final_equity = finite_accounting(
         "final_equity",
-        marked_equity(sim.cash, &sim.positions, &sim.marks),
+        marked_equity(sim.cash, &sim.positions, &sim.marks, &sim.instruments),
     )?;
     sim.equity_curve.push(EquityPoint {
         time_ns: final_time_ns,
@@ -3121,6 +4181,7 @@ fn finish(mut sim: Sim<'_>) -> Result<SimulationReport, SimulationError> {
             symbol: order.symbol,
             side: order.side,
             quantity: order.quantity,
+            filled_quantity: order.filled_quantity,
             kind: order.kind,
             time_in_force: order.time_in_force,
         })
@@ -3148,10 +4209,14 @@ fn finish(mut sim: Sim<'_>) -> Result<SimulationReport, SimulationError> {
         pending_orders: pending,
         positions,
         equity_curve: sim.equity_curve,
+        financing_charges: sim.financing_charges,
+        corporate_actions: sim.corporate_records,
         final_cash: sim.cash,
         final_equity,
         final_realized_pnl,
         total_commission: sim.total_commission,
+        total_conversion_cost: sim.total_conversion_cost,
+        total_financing_cost: sim.total_financing_cost,
     })
 }
 

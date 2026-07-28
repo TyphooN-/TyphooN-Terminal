@@ -59,6 +59,9 @@ pub enum RunAssemblyError {
         expected: AdjustmentPolicy,
         actual: AdjustmentPolicy,
     },
+    CorporateActionAdjustmentConflict {
+        source: crate::core::strategy_corporate::CorporateActionError,
+    },
     MissingInterventionLog,
     UnexpectedInterventionLog,
     InterventionLogIdMismatch {
@@ -134,6 +137,10 @@ impl std::fmt::Display for RunAssemblyError {
                 "dataset input `{input_id}` uses adjustment `{}`, expected `{}`",
                 actual.wire_id(),
                 expected.wire_id()
+            ),
+            Self::CorporateActionAdjustmentConflict { source } => write!(
+                formatter,
+                "corporate-action schedule conflicts with the run's dataset adjustment: {source}"
             ),
             Self::MissingInterventionLog => write!(
                 formatter,
@@ -414,6 +421,19 @@ pub fn assemble_verified_run_with_artifacts<'a>(
         return Err(RunAssemblyError::UnexpectedDatasetInput {
             input_id: input_id.to_string(),
         });
+    }
+
+    // §6.8: the adjustment policy and event schedule are two representations
+    // of the same economics. This check belongs at verified assembly, where the
+    // identity-bound datasets and execution config are finally both present;
+    // checking either artifact alone cannot detect a double-counted split or
+    // dividend.
+    if let Some(adjustment) = adjustment {
+        config
+            .settings()
+            .corporate_actions
+            .check_adjustment_consistency(adjustment)
+            .map_err(|source| RunAssemblyError::CorporateActionAdjustmentConflict { source })?;
     }
 
     Ok(VerifiedRun {

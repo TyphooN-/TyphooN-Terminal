@@ -228,26 +228,26 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Templates / random placeholders in generated logic | **Missing** | §8.1, M5 |
 | Fuzzy logic building blocks | **Missing** | §8.1 (deferred), M5+ |
 | Strategy improver (iterative refinement of an existing strategy) | **Missing** | §8.4, M6 |
-| Scaling out / partial exits | **Missing** — exits are all-or-nothing `Signal::Close` | §6.7, M2 |
+| Scaling out / partial exits | **Foundation** — canonical two-leg management lowers to independent reduce-only target/stop OCO groups with break-even, trailing and time-stop handling; native authoring/results UX remains open | §6.7, M2 |
 
 ### 4.2 Simulation & execution realism
 
 | Capability | TyphooN status | Addressed in |
 | --- | --- | --- |
-| Bar-close backtesting | **Foundation** — works, but same-bar-close fills and zero costs (§1.2) | §6, M1 |
-| Real-tick backtesting | **Missing** | §6.9, M2/M7 (data-gated) |
-| Intrabar modelling / OHLC ambiguity policy | **Missing** — no stop/limit intrabar resolution exists at all | §6.1, M1 |
-| Bid/ask & spread modelling | **Missing** | §6.2, M1 |
-| Commissions / fees / funding / borrow | **Missing** | §6.3, M1 |
-| Slippage & latency | **Missing** | §6.4, M1 |
-| Order types beyond immediate market reversal | **Missing** | §6.5, M1 |
-| Partial fills / liquidity caps | **Missing** | §6.6, M2 |
-| Sessions & timezones | **Partial** — session status exists app-side ([ADR-110](110-market-session-status-xstocks-24-5-and-us-equities.md)) but the simulator ignores it | §6.7, M2 |
-| Corporate actions in simulation | **Partial** — merge-layer split handling ([ADR-122](122-curated-stock-split-fallback-for-equity-merge.md), [ADR-124](124-depth-era-promotion-must-not-redefine-price-scale.md)) is *not* wired into backtests | §6.8, M2 |
-| Multi-market / multi-symbol simultaneous simulation | **Missing** — single symbol only | §6.11, M1/M4 |
+| Bar-close backtesting | **Current kernel** — realistic next-open execution is the default; the old same-close result is isolated as an explicitly named compatibility bridge | §6, M1 |
+| Real-tick backtesting | **Blocked** — the engine deliberately has no `Tick` fidelity variant because TyphooN retains no versioned tick history; `SubBar` is the highest honest level until such a corpus exists | §6.9, M2/M7 (data-gated) |
+| Intrabar modelling / OHLC ambiguity policy | **Current kernel** — pessimistic stop-first, target-first and documented OHLC-path policies, with gap-through-open handling | §6.1, M1 |
+| Bid/ask & spread modelling | **Foundation** — constant/percentage spread models execute against side-correct quotes; recorded quote input remains unsupported | §6.2, M1 |
+| Commissions / fees / funding / borrow | **Foundation** — per-fill commissions plus identity-bearing constant financing/borrow/funding assumptions and accrual events; unavailable borrow/live rate inputs fail the run instead of becoming zero | §6.3, M1/M2 |
+| Slippage & latency | **Foundation** — fixed/spread-fraction slippage and fixed/seeded-uniform two-leg latency are deterministic and run-stamped; volatility-scaled slippage remains unsupported | §6.4, M1 |
+| Order types beyond immediate market reversal | **Foundation** — market, limit, stop, stop-limit, market-on-close, IOC/FOK/Day/GTC/GTD, reduce-only and OCO lifecycles execute in the kernel | §6.5, M1 |
+| Partial fills / liquidity caps | **Foundation** — a run-stamped bar-volume participation cap is shared across orders and sub-bars; remainders rest or expire by TIF, including IOC/FOK and OCO resizing. L2 depth-aware fills remain open | §6.6, M2 |
+| Sessions & timezones | **Foundation** — per-instrument UTC/US-Eastern calendars gate every execution and queue or reject closed-session submissions with DST-correct local windows and rule-based US half days; exchange-published exception tables remain open | §6.7, M2 |
+| Corporate actions in simulation | **Foundation** — split, dividend, symbol-change and delisting events adjust live state at effective time; verified run assembly rejects events already represented by split-adjusted/total-return prices. Cash-in-lieu and native data-feed ingestion remain open | §6.8, M2 |
+| Multi-market / multi-symbol simultaneous simulation | **Foundation** — the reference kernel has a deterministic global multi-symbol event clock; portfolio/shared-capital policy and native orchestration remain M4 work | §6.11, M1/M4 |
 | Multi-timeframe within one strategy | **Missing** in the simulator (MTF chart overlay exists — [ADR-123](123-mtf-overlay-price-scale-consistency.md)) | §6.11, M1/M4 |
-| Deterministic, reproducible runs | **Missing** — no seed discipline, no run manifest | §6.10, M1 |
-| No-look-ahead guarantee | **Missing** — structurally possible today (§1.2 item 1) | §6.12, M1 |
+| Deterministic, reproducible runs | **Current kernel** — sealed run manifests, derived seeded streams, stable event ordering and concurrent bit-identity are gate-tested | §6.10, M1 |
+| No-look-ahead guarantee | **Current kernel** — committed-bar views, forming-bar restrictions and compile/runtime canaries are M1-gate tested | §6.12, M1 |
 
 ### 4.3 Optimization & search
 
@@ -1077,13 +1077,36 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   same-timestamp chart mutations cancel materialization fail-closed.
 - `strategy_ir.rs`: canonical strategy IR, semantic/type/resource validation, content-addressed
   strategy and execution identities, bounded persisted-artifact loading, and stable identity
-  vectors.
+  vectors. Execution-config schema v3 seals the participation model, per-instrument calendars,
+  quote currencies/ticks/financing, corporate-action schedule, conversion table, closed-session
+  policy, and declared sub-bar timeframe. True tick fidelity is deliberately unrepresentable while
+  TyphooN retains no versioned tick history.
+- `strategy_calendar.rs`, `strategy_instrument.rs`: bounded, content-addressed per-instrument
+  execution calendars and canonical instrument specs. UTC remains the internal clock; US-Eastern
+  windows resolve under the shared ADR-110 DST/holiday rules, including the documented rule-based
+  early closes. At every execution instant a closed venue prevents a fill, while submission either
+  queues or produces an explicit rejection according to the sealed policy.
+- `strategy_financing.rs`: identity-bearing constant-rate assumptions with provenance for long/
+  short financing, stock borrow, crypto funding and quote-to-account currency conversion. Accrual
+  boundaries are deterministic events and conversion costs are applied per fill. `Unavailable` is
+  distinct from `NotApplicable`: exposure requiring an unavailable paid/live input fails closed;
+  the engine never converts that absence to a zero rate.
+- `strategy_corporate.rs`: canonical effective-time split, cash-dividend, symbol-change and
+  delisting schedules. Verified run assembly now joins the config to the bound dataset adjustment
+  policy and rejects a split/dividend event already baked into split-adjusted or total-return
+  prices, closing the §6.8 double-counting boundary rather than merely exposing a helper check.
 - `strategy_interpreter.rs`: bounded scalar lowering from canonical IR into the simulator for
   closed-bar fixed-unit strategies, deterministic built-in indicator state, three-valued
   conditions, and explicit rejection of semantics the simulator cannot yet honor.
 - `strategy_simulator.rs`: bounded scalar multi-symbol event ordering, closed-bar decisions with
   next-open market fills, explicit spread/slippage/commission accounting, no-look-ahead market
-  views, deterministic event/ledger JSON, and a stable golden-ledger digest.
+  views, deterministic event/ledger JSON, and a stable golden-ledger digest. The richer-execution
+  kernel adds a parent-bar participation budget shared across all orders and sub-bars, partial-fill
+  remainders with IOC/FOK/OCO handling, fill-time session gating, effective-time corporate events,
+  time-accrued financing/borrow/funding, per-fill currency conversion, per-instrument price ticks,
+  and fail-closed level-3 sub-bar paths. The focused sub-bar golden proves that an earlier finer-bar
+  target beats a later stop even when the enclosing parent bar's pessimistic ambiguity policy would
+  choose the stop.
 - `strategy_run.rs`: named dataset-input bindings and cross-artifact assembly that verifies the
   strategy, execution config, run manifest, dataset manifests, actual bar content, optional
   intervention log, and every manifest-bound repaint QA artifact before a run can be treated as
@@ -1194,8 +1217,9 @@ submission delay are derived from the verified manifest and strategy IR, so no m
 silently disagree with the published run id. The raw simulator entry point remains available only
 as an explicitly non-identity-bearing kernel API for tests and exploratory callers.
 
-**M2 — gate NOT passed; metrics/report foundation landed.** The following M2 gate clauses now
-have test evidence:
+**M2 — gate NOT passed; metrics/report and richer-execution foundations landed.** The following
+M2 clauses and delivery slices now have test evidence. This matrix is implementation accounting,
+not a claim that the complete native M2 workflow exists:
 
 | M2 gate clause | Status | Evidence |
 | --- | --- | --- |
@@ -1207,11 +1231,20 @@ have test evidence:
 | Reports round-trip through JSON without loss | **Met** | `report_artifact_round_trips_detects_tampering_and_rejects_replay_mismatch` round-trips, re-verifies, and rejects both a mutated metric value and a divergent replay ledger; `report_loader_is_byte_bounded_before_decode` and `an_unsealed_report_id_never_passes_verification` pin the fail-closed loader |
 | Replaying a recorded hybrid run reproduces its ledger bit-for-bit | **Met** | `strategy_intervention/tests.rs::replaying_a_recorded_hybrid_run_reproduces_its_ledger_bit_for_bit` records a session where an automated strategy and an operator both act under costs, intrabar resolution and seeded latency, then replays the sealed log and compares the serialized ledgers byte for byte. `a_hybrid_run_replays_identically_from_a_round_tripped_log` proves the same through a persisted log, and `the_operator_actions_are_what_make_the_two_ledgers_match` is the control: replaying with an empty log must *not* reproduce the session, so the equality above is not vacuous |
 | A synthetic repainting indicator is identified at the exact mutated bar/output | **Met** | `strategy_repaint/tests.rs::a_synthetic_repaint_is_identified_at_the_exact_bar_and_output` asserts the exact output name and index, mutated bar, responsible prefix, distance, and before/after values; the centred/trailing/disappearing/revision-window controls cover the diagnostic semantics. `stored_qa_artifact_round_trips_with_identity_and_undefined_values` and `stored_qa_artifact_rejects_tampering_unknown_fields_and_oversize_before_decode` seal the evidence and pin bounded fail-closed loading. `verified_run_assembly_binds_acknowledged_repaint_qa_fail_closed` proves exact artifact resolution, dataset binding, clean/warning consistency, and rejection of missing, duplicate, mismatched, or unexpected evidence; `report_identity_inherits_the_manifest_repaint_artifact_and_acknowledgement_binding` proves propagation into report identity |
-| Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Implemented; pending final verification** | `strategy_protective/tests.rs::a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trails` derives every fill price, fee, realized PnL, cash balance and final equity on paper and asserts them exactly, including leg 0 banking its own target while leg 1 runs, the break-even move at +4.00 and the trailing step at +7.00. `both_legs_stop_out_independently_at_the_same_initial_level`, `a_short_two_leg_trade_mirrors_the_long_lifecycle`, `a_trailing_stop_never_loosens_on_a_pullback`, `a_time_stop_closes_the_remainder_at_market`, `a_legs_stop_and_target_retire_each_other_through_their_oco_group` and `a_strategy_exit_leaves_the_manager_to_cancel_the_resting_bracket` pin the state machine. `strategy_interpreter/tests.rs::canonical_trade_management_compiles_fixed_percent_and_atr_distances` pins resolved fixed, percent, and ATR distances and leg quantities; `canonical_two_leg_management_executes_a_real_partial_target`, `canonical_strategy_exit_retires_its_protective_orders_without_a_later_decision`, and `canonical_time_stop_wins_over_an_exit_signal_on_the_same_decision` cover the canonical-IR execution boundary. Final verification is still required before this clause is called met |
+| Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Met** | `strategy_protective/tests.rs::a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trails` derives every fill price, fee, realized PnL, cash balance and final equity on paper and asserts them exactly, including leg 0 banking its own target while leg 1 runs, the break-even move at +4.00 and the trailing step at +7.00. `both_legs_stop_out_independently_at_the_same_initial_level`, `a_short_two_leg_trade_mirrors_the_long_lifecycle`, `a_trailing_stop_never_loosens_on_a_pullback`, `a_time_stop_closes_the_remainder_at_market`, `a_legs_stop_and_target_retire_each_other_through_their_oco_group` and `a_strategy_exit_leaves_the_manager_to_cancel_the_resting_bracket` pin the state machine. `strategy_interpreter/tests.rs::canonical_trade_management_compiles_fixed_percent_and_atr_distances` pins resolved fixed, percent, and ATR distances and leg quantities; `canonical_two_leg_management_executes_a_real_partial_target`, `canonical_strategy_exit_retires_its_protective_orders_without_a_later_decision`, and `canonical_time_stop_wins_over_an_exit_signal_on_the_same_decision` cover the canonical-IR execution boundary. These passed in the complete `typhoon-engine` suite recorded for this checkpoint |
+| §6.6 partial fills and liquidity cap | **Foundation landed; native results workflow open** | `strategy_simulator/tests/richer_execution.rs::participation_cap_partially_fills_and_preserves_remainder` pins 5/5/2 fills from one 12-unit order under one shared volume budget, exact remaining quantities, partial-fill events and final position. The implementation also handles IOC/FOK and proportionally consumes OCO siblings; optional L2 depth-aware execution remains open |
+| §6.7 sessions, calendars and time zones | **Foundation landed; exchange-table ingestion open** | `closed_session_rejects_or_queues_without_an_out_of_session_fill` proves both configured policies and the first valid reopen fill; `strategy_calendar/tests.rs::us_equity_sessions_are_dst_correct_and_half_open` pins winter/summer US-Eastern boundaries. The calendar is a versioned rule set, not an exchange-published historical exception table |
+| §6.8 corporate actions and adjustment consistency | **Foundation landed; native ingestion open** | `split_then_dividend_adjusts_live_position_and_cash_in_canonical_order` pins effective-time split-before-dividend units, basis and cash. `verified_run_assembly_refuses_corporate_actions_already_baked_into_prices` proves the identity-bearing run boundary rejects double-counting against split-adjusted prices. Fractional cash-in-lieu and automatic event ingestion remain open |
+| §6.9 sub-bar fidelity | **Kernel foundation landed; tick and native replay open** | `sub_bar_fidelity_uses_the_earlier_path_step_before_parent_ambiguity` proves finer bars determine event sequence before parent-bar ambiguity, while validation refuses missing, foreign, incomplete or parent-inconsistent paths. True tick fidelity remains unavailable because TyphooN retains no versioned tick history; the native chart/replay/results path does not yet assemble and present sub-bar runs |
+| §6.3 deferred financing/borrow/funding/currency costs | **Foundation landed; paid/live inputs unavailable fail closed** | `financing_uses_last_committed_mark_and_reconciles_report_totals` pins the committed mark, interval, financing/funding debits, cash and report total; `strategy_financing/tests.rs::accrual_uses_declared_units_and_refuses_missing_borrow` proves unavailable short borrow is an error, not zero. Current rates/conversions are constant, provenance-bearing assumptions; no paid/live historical rate feed is integrated |
 
-Remaining M2 delivery beyond the gate: execution realism §6.6–§6.9 (partial fills/liquidity caps,
-sessions/timezones, corporate actions, sub-bar fidelity), the M1-deferred time-accrued financing,
-borrow, crypto funding and currency conversion, and the chart trade overlay.
+Remaining M2 packet: wire the richer-execution kernel into native chart trade overlays, visual
+replay/manual intervention authoring, and results/report presentation; assemble identity-bound
+sub-bar datasets through that native path; add exchange/vendor ingestion for historical corporate
+actions and authoritative calendars; and add entitled historical/live borrow, financing, funding
+and currency inputs. Until those paid/live inputs exist, unavailable rates continue to fail closed.
+True tick fidelity remains unavailable until TyphooN retains an immutable, versioned tick-history
+corpus. **M2 is not complete.**
 
 **M3–M8:** no later milestone gate has passed. Their remaining work is exactly the delivery and
 gate text below; they may now build on the completed M1 correctness foundation.

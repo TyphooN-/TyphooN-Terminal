@@ -324,3 +324,4 @@ include!("orders.rs");
 include!("golden.rs");
 include!("determinism.rs");
 include!("lookahead.rs");
+include!("richer_execution.rs");

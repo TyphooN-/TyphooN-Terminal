@@ -364,7 +364,7 @@ fn current_schema_identity_vectors_are_stable() {
     );
     assert_eq!(
         config_id_of(&settings()),
-        "35390ff4ec2d2ab66f39cff6e5e3da397a6b6637c66944db147a79194236d7fc"
+        "cc27d29b253c9fd0b5cd7d8c8294021b76dd8a97083fc60c1128f32eaba09ce8"
     );
     assert_eq!(
         run_id_of(&binding()),
@@ -2366,6 +2366,57 @@ fn verified_run_assembly_resolves_and_verifies_every_bound_artifact() {
 }
 
 #[test]
+fn verified_run_assembly_refuses_corporate_actions_already_baked_into_prices() {
+    use crate::core::strategy_corporate::{
+        CorporateAction, CorporateActionKind, CorporateActionSchedule,
+    };
+    use crate::core::strategy_dataset::AdjustmentPolicy;
+    use crate::core::strategy_run::{RunAssemblyError, RunDatasetInput, assemble_verified_run};
+
+    let strategy = ir();
+    let mut execution = settings();
+    execution.corporate_actions = CorporateActionSchedule::build(&[CorporateAction {
+        symbol: "AAPL".to_string(),
+        effective_time_ns: 1,
+        kind: CorporateActionKind::Split {
+            numerator: 2,
+            denominator: 1,
+        },
+    }])
+    .expect("schedule builds");
+    let config = StrategyExecutionConfig::build(&execution).expect("config builds");
+    let (bars, dataset) = run_dataset_fixture("primary", "AAPL", AdjustmentPolicy::SplitAdjusted);
+    let manifest = StrategyRunManifest::build(&RunBinding {
+        datasets: vec![DatasetBinding {
+            input_id: "primary".to_string(),
+            dataset_id: dataset.dataset_id.clone(),
+        }],
+        strategy_id: strategy.strategy_id().to_string(),
+        config_id: config.config_id().to_string(),
+        seed: 7,
+        engine_version: "0.1.0-test".to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
+        intervention_log_id: None,
+        repaint_qa: vec![],
+    })
+    .expect("manifest builds");
+
+    assert!(matches!(
+        assemble_verified_run(
+            &strategy,
+            &config,
+            &manifest,
+            &[RunDatasetInput {
+                input_id: "primary",
+                manifest: &dataset,
+                bars: &bars,
+            }],
+        ),
+        Err(RunAssemblyError::CorporateActionAdjustmentConflict { .. })
+    ));
+}
+
+#[test]
 fn verified_run_assembly_binds_and_verifies_the_manifest_intervention_log() {
     use crate::core::strategy_dataset::AdjustmentPolicy;
     use crate::core::strategy_intervention::InterventionLog;
@@ -3145,7 +3196,7 @@ fn every_fee_schedule_choice_changes_the_config_id() {
 #[test]
 fn the_execution_config_schema_version_records_the_realism_fields() {
     assert_eq!(
-        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, 2,
+        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, 3,
         "adding execution-realism fields is a schema change, not a silent reinterpretation"
     );
 }
