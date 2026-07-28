@@ -401,10 +401,130 @@ impl TyphooNApp {
         }
     }
 
+    fn drain_intervention_runs(&mut self) {
+        let events = self
+            .intervention_run_worker
+            .as_ref()
+            .map(|worker| worker.poll())
+            .unwrap_or_default();
+        for event in events {
+            let identity = event.identity();
+            match event {
+                strategy_intervention_run::InterventionRunEvent::Completed { output, .. } => {
+                    let current = self
+                        .charts
+                        .get(output.chart.chart_index)
+                        .is_some_and(|chart| {
+                            chart.bars_generation == output.chart.bars_generation
+                                && chart.symbol_matches(&output.chart.symbol)
+                                && chart.bars.len() == output.chart.bar_times_ms.len()
+                                && chart
+                                    .bars
+                                    .iter()
+                                    .zip(output.chart.bar_times_ms.iter())
+                                    .all(|(bar, time)| bar.ts_ms == *time)
+                        });
+                    if !current {
+                        let _ = self.intervention_run_state.accept_terminal(
+                            identity,
+                            Err("active chart identity/timeline changed; stale replay ignored"),
+                        );
+                        continue;
+                    }
+                    let identities = strategy_intervention_run::PromotedRunIdentities {
+                        run_id: output.manifest.run_id().to_owned(),
+                        log_id: output.log_id.clone(),
+                        report_id: output.view.report_id.clone(),
+                    };
+                    if self
+                        .intervention_run_state
+                        .accept_terminal(identity, Ok(&identities))
+                    {
+                        self.strategy_result_selected_trade = None;
+                        self.strategy_result_chart_tab = Some(output.chart.chart_index);
+                        self.strategy_result_status = self.intervention_run_state.status.clone();
+                        self.strategy_result_workflow =
+                            strategy_report_view::ResultWorkflowState::default();
+                        self.strategy_result_view = Some(output.view);
+                        if let Some(chart) = self.charts.get_mut(output.chart.chart_index) {
+                            chart.cached_trade_overlay_frame = 0;
+                        }
+                    }
+                }
+                strategy_intervention_run::InterventionRunEvent::Failed { message, .. } => {
+                    let _ = self
+                        .intervention_run_state
+                        .accept_terminal(identity, Err(&message));
+                }
+                strategy_intervention_run::InterventionRunEvent::Cancelled { .. } => {}
+            }
+        }
+    }
+
+    fn submit_intervention_run(&mut self) {
+        if self.intervention_run_ui.selected_dataset_ids.is_empty() {
+            self.intervention_run_state.status =
+                "Error: select every parent dataset bound by the run manifest".into();
+            return;
+        }
+        let Some(chart) = self.charts.get(self.active_tab) else {
+            return;
+        };
+        if chart.bars.is_empty() {
+            self.intervention_run_state.status =
+                "Error: active chart must have a timeline for report snapshot generation".into();
+            return;
+        }
+        let identity = self.intervention_run_state.begin_request();
+        let job = strategy_intervention_run::InterventionRunJob {
+            identity,
+            selected_dataset_ids: self
+                .intervention_run_ui
+                .selected_dataset_ids
+                .iter()
+                .cloned()
+                .collect(),
+            strategy_path: self.intervention_run_ui.strategy_path.clone(),
+            config_path: self.intervention_run_ui.config_path.clone(),
+            manifest_path: self.intervention_run_ui.manifest_path.clone(),
+            intervention_log_path: self.intervention_run_ui.intervention_log_path.clone(),
+            chart: strategy_sub_bar_run::RunChartContext {
+                chart_index: self.active_tab,
+                bars_generation: chart.bars_generation,
+                symbol: chart.symbol.clone(),
+                bar_times_ms: std::sync::Arc::from(
+                    chart.bars.iter().map(|bar| bar.ts_ms).collect::<Vec<_>>(),
+                ),
+            },
+        };
+        match self
+            .intervention_run_worker
+            .as_ref()
+            .ok_or("intervention-run worker did not start")
+            .and_then(|worker| {
+                worker
+                    .submit(job)
+                    .map_err(|_| "intervention-run worker queue is busy")
+            }) {
+            Ok(()) => {
+                self.intervention_run_state.status = format!(
+                    "Running exact manifest-bound intervention replay request {}",
+                    identity.request_id
+                );
+            }
+            Err(error) => {
+                let _ = self
+                    .intervention_run_state
+                    .accept_terminal(identity, Err(error));
+            }
+        }
+    }
+
     pub(super) fn render_backtest_window(&mut self, ctx: &egui::Context) {
         self.drain_strategy_result_load();
         self.drain_strategy_workflow();
         self.drain_sub_bar_runs();
+        self.drain_intervention_runs();
         if !self.show_backtest {
             return;
         }
@@ -488,6 +608,126 @@ impl TyphooNApp {
                         if self.sub_bar_run_state.is_busy() { ui.spinner(); }
                     });
                     if !self.sub_bar_run_state.status.is_empty() { ui.small(&self.sub_bar_run_state.status); }
+                });
+                ui.add_space(5.0);
+                ui.collapsing("Manifest-bound candidate intervention replay", |ui| {
+                    ui.small("Select every sealed parent dataset bound by the run manifest plus the sealed Strategy IR, execution config, run manifest, and candidate InterventionLog JSON. Artifacts are loaded and replayed only on the bounded worker; the current report is preserved unless exact replay and report verification succeed.");
+                    let dataset_rows: Vec<_> = self
+                        .dataset_inspector
+                        .records
+                        .iter()
+                        .map(|record| {
+                            (
+                                record.dataset_id.clone(),
+                                format!(
+                                    "{} {} · {}",
+                                    record.symbol,
+                                    record.timeframe,
+                                    &record.dataset_id[..12]
+                                ),
+                            )
+                        })
+                        .collect();
+                    ui.label("Bound parent datasets");
+                    egui::ScrollArea::vertical()
+                        .id_salt("intervention_parent_datasets")
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            for (dataset_id, label) in dataset_rows {
+                                let mut selected = self
+                                    .intervention_run_ui
+                                    .selected_dataset_ids
+                                    .contains(&dataset_id);
+                                if ui.checkbox(&mut selected, label).changed() {
+                                    if selected {
+                                        self.intervention_run_ui
+                                            .selected_dataset_ids
+                                            .insert(dataset_id);
+                                    } else {
+                                        self.intervention_run_ui
+                                            .selected_dataset_ids
+                                            .remove(&dataset_id);
+                                    }
+                                }
+                            }
+                        });
+                    for (label, path) in [
+                        ("Strategy JSON", &mut self.intervention_run_ui.strategy_path),
+                        (
+                            "Execution config JSON",
+                            &mut self.intervention_run_ui.config_path,
+                        ),
+                        (
+                            "Run manifest JSON",
+                            &mut self.intervention_run_ui.manifest_path,
+                        ),
+                        (
+                            "Candidate InterventionLog JSON",
+                            &mut self.intervention_run_ui.intervention_log_path,
+                        ),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            ui.add(
+                                egui::TextEdit::singleline(path)
+                                    .char_limit(4096)
+                                    .desired_width(330.0),
+                            );
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !self.intervention_run_state.is_busy(),
+                                egui::Button::new("Replay and promote candidate"),
+                            )
+                            .clicked()
+                        {
+                            self.submit_intervention_run();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.intervention_run_state.is_busy(),
+                                egui::Button::new("Cancel replay"),
+                            )
+                            .clicked()
+                        {
+                            let generation = self.intervention_run_state.cancel();
+                            if let Some(worker) = &self.intervention_run_worker {
+                                worker.supersede_with(generation);
+                            }
+                        }
+                        if self.intervention_run_state.is_busy() {
+                            ui.spinner();
+                        }
+                    });
+                    if !self.intervention_run_state.status.is_empty() {
+                        let color = if self.intervention_run_state.status.starts_with("Error:") {
+                            DOWN
+                        } else {
+                            UP
+                        };
+                        ui.label(
+                            egui::RichText::new(&self.intervention_run_state.status)
+                                .color(color)
+                                .small(),
+                        );
+                    }
+                    if let Some(installed) = &self.intervention_run_state.installed {
+                        egui::Grid::new("intervention_promoted_identities")
+                            .num_columns(2)
+                            .show(ui, |ui| {
+                                for (label, identity) in [
+                                    ("Run", &installed.run_id),
+                                    ("Intervention log", &installed.log_id),
+                                    ("Report", &installed.report_id),
+                                ] {
+                                    ui.label(label);
+                                    ui.monospace(identity);
+                                    ui.end_row();
+                                }
+                            });
+                    }
                 });
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {

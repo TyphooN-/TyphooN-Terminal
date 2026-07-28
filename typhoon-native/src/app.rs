@@ -111,6 +111,7 @@ mod settings;
 mod ssr_scan;
 mod state;
 mod storage;
+mod strategy_intervention_run;
 mod strategy_report_view;
 mod strategy_sub_bar_run;
 mod strategy_windows;
@@ -471,6 +472,12 @@ impl TyphooNApp {
             sub_bar_run_ui: strategy_sub_bar_run::SubBarRunUiState::default(),
             sub_bar_run_state: strategy_sub_bar_run::SubBarRunState::default(),
             strategy_run_worker: strategy_sub_bar_run::StrategyRunWorker::spawn_at(
+                platform::strategy_dataset_dir(),
+            )
+            .ok(),
+            intervention_run_ui: strategy_intervention_run::InterventionRunUiState::default(),
+            intervention_run_state: strategy_intervention_run::InterventionRunState::default(),
+            intervention_run_worker: strategy_intervention_run::InterventionRunWorker::spawn_at(
                 platform::strategy_dataset_dir(),
             )
             .ok(),

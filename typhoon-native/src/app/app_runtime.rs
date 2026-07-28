@@ -37,6 +37,9 @@ impl eframe::App for TyphooNApp {
         if let Some(worker) = self.strategy_run_worker.take() {
             worker.shutdown();
         }
+        if let Some(worker) = self.intervention_run_worker.take() {
+            worker.shutdown();
+        }
         self.ui_repaint_wake_alive
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.save_session();
