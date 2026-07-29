@@ -6,13 +6,15 @@ use crate::core::strategy_dataset::{
     DatasetQaPolicy,
 };
 use crate::core::strategy_ir::{
-    ExecutionSettings, ParamRange, ParamValue, StrategyExecutionConfig, StrategyParameter,
+    CompareOp, Condition, ExecutionSettings, Operand, ParamRange, ParamValue,
+    StrategyExecutionConfig, StrategyParameter,
 };
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_optimization::{
-    HoldoutQuarantine, ObjectiveDirection, ObservationRole, OosScheme, ParameterDomain, Percentile,
-    RobustnessPipeline, RobustnessStageSpec, SampleRole, SearchBatch, SearchMethod, SearchSpace,
-    StageAccess, StageVerdict, Threshold, WalkForwardConfig, generate_candidates,
+    HoldoutQuarantine, MAX_MONTE_CARLO_TRIALS, ObjectiveDirection, ObservationRole, OosScheme,
+    ParameterDomain, Percentile, RobustnessPipeline, RobustnessStageSpec, SampleRole, SearchBatch,
+    SearchMethod, SearchSpace, StageAccess, StageVerdict, Threshold, WalkForwardConfig,
+    generate_candidates,
 };
 
 fn bars() -> Vec<Bar> {
@@ -65,6 +67,179 @@ fn fixture() -> (
     let bars = bars();
     let manifest = manifest(&bars);
     (strategy, config, bars, manifest)
+}
+
+fn trading_fixture() -> (
+    crate::core::strategy_ir::StrategyIr,
+    StrategyExecutionConfig,
+    Vec<Bar>,
+    DatasetManifest,
+) {
+    let mut definition = GeneralStrategyBuilder::new("monte-carlo", "test")
+        .definition()
+        .clone();
+    let always = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Constant(0.0),
+    };
+    definition.long.enabled = true;
+    definition.long.entry = always.clone();
+    definition.long.exit = always;
+    let strategy = crate::core::strategy_ir::StrategyIr::build(&definition).unwrap();
+    let config =
+        StrategyExecutionConfig::build(&ExecutionSettings::conservative_defaults()).unwrap();
+    let bars = bars();
+    let manifest = manifest(&bars);
+    (strategy, config, bars, manifest)
+}
+
+fn monte_carlo_request(
+    strategy: &crate::core::strategy_ir::StrategyIr,
+    config: &StrategyExecutionConfig,
+    bars: &[Bar],
+    manifest: &DatasetManifest,
+    root_seed: u64,
+) -> RetestExecutionRequest {
+    let quarantine = HoldoutQuarantine::new(&manifest.dataset_id, "f".repeat(64), 10, 2).unwrap();
+    RetestExecutionRequest::seal(
+        strategy,
+        config,
+        manifest,
+        bars,
+        quarantine.lease(StageAccess::Robustness).unwrap(),
+        ObservationRole::OutOfSample,
+        "net_profit",
+        root_seed,
+    )
+    .unwrap()
+}
+
+#[test]
+fn canonical_trade_monte_carlo_executes_all_three_families_with_replayable_distributions() {
+    let (strategy, config, bars, manifest) = trading_fixture();
+    let settings = TradeMonteCarloConfig {
+        seed: 44,
+        trials: 32,
+        trade_skip_bps: 2_500,
+    };
+    let artifact = execute_trade_monte_carlo(
+        monte_carlo_request(&strategy, &config, &bars, &manifest, 9),
+        settings,
+        17,
+    )
+    .unwrap();
+
+    artifact.verify().unwrap();
+    assert_eq!(artifact.artifact_id().len(), 64);
+    assert_eq!(artifact.candidate_id(), strategy.strategy_id());
+    assert_eq!(artifact.run_id().len(), 64);
+    assert_eq!(artifact.report_id().len(), 64);
+    assert_eq!(artifact.dataset_id(), manifest.dataset_id);
+    assert_eq!(artifact.config_id(), config.config_id());
+    assert_eq!(artifact.root_seed(), 9);
+    assert_eq!(artifact.seed(), 44);
+    assert_eq!(artifact.evaluations_n(), 17);
+    assert_eq!(artifact.families().len(), 3);
+    assert!(artifact.trade_count() >= 2);
+    for family in artifact.families() {
+        assert_eq!(family.samples().len(), 32);
+        assert!(family.samples()[0].net_profit().is_finite());
+        assert!(family.samples()[0].max_drawdown().is_finite());
+        assert_eq!(family.net_profit().confidence_level_bps(), 9_000);
+        assert_eq!(family.max_drawdown().confidence_level_bps(), 9_000);
+        assert!(family.net_profit().p05().is_finite());
+        assert!(family.net_profit().median().is_finite());
+        assert!(family.net_profit().p95().is_finite());
+    }
+    assert_ne!(
+        artifact.families()[0].component_seed(),
+        artifact.families()[1].component_seed()
+    );
+    assert_eq!(
+        artifact,
+        replay_trade_monte_carlo(
+            monte_carlo_request(&strategy, &config, &bars, &manifest, 9),
+            &artifact,
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn trade_monte_carlo_rejects_unbounded_undefined_foreign_and_tampered_evidence() {
+    let (strategy, config, bars, manifest) = trading_fixture();
+    let request = || monte_carlo_request(&strategy, &config, &bars, &manifest, 9);
+    for settings in [
+        TradeMonteCarloConfig {
+            seed: 1,
+            trials: 0,
+            trade_skip_bps: 100,
+        },
+        TradeMonteCarloConfig {
+            seed: 1,
+            trials: MAX_MONTE_CARLO_TRIALS + 1,
+            trade_skip_bps: 100,
+        },
+        TradeMonteCarloConfig {
+            seed: 1,
+            trials: 8,
+            trade_skip_bps: 10_000,
+        },
+    ] {
+        assert!(execute_trade_monte_carlo(request(), settings, 1).is_err());
+    }
+
+    let artifact = execute_trade_monte_carlo(
+        request(),
+        TradeMonteCarloConfig {
+            seed: 7,
+            trials: 8,
+            trade_skip_bps: 2_000,
+        },
+        2,
+    )
+    .unwrap();
+    let mut tampered: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+    tampered["seed"] = 8.into();
+    assert!(
+        TradeMonteCarloArtifact::from_json_slice(&serde_json::to_vec(&tampered).unwrap()).is_err()
+    );
+
+    let mut other_settings = config.to_input();
+    other_settings.warmup_bars = 1;
+    let other_config = StrategyExecutionConfig::build(&other_settings).unwrap();
+    assert!(
+        replay_trade_monte_carlo(
+            monte_carlo_request(&strategy, &other_config, &bars, &manifest, 9),
+            &artifact,
+        )
+        .is_err()
+    );
+
+    let (empty_strategy, empty_config, empty_bars, empty_manifest) = fixture();
+    assert!(
+        execute_trade_monte_carlo(
+            monte_carlo_request(
+                &empty_strategy,
+                &empty_config,
+                &empty_bars,
+                &empty_manifest,
+                9,
+            ),
+            TradeMonteCarloConfig {
+                seed: 1,
+                trials: 8,
+                trade_skip_bps: 100,
+            },
+            1,
+        )
+        .is_err()
+    );
 }
 
 fn pipeline() -> RobustnessPipeline {

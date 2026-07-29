@@ -13,15 +13,17 @@ use crate::core::strategy_ir::{
 };
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_optimization::{
-    BurnedHoldout, FoldPlan, ObjectiveDirection, ObjectiveSpec, ObservationRole, OosPlan,
-    OosScheme, OptimizationError, ReportObservation, RetestRequest, RetestResult,
-    RobustnessArtifact, RobustnessPipeline, SampleRole, SearchBatch, SearchDataLease, StageAccess,
-    StageVerdict, WalkForwardConfig, select_best,
+    BurnedHoldout, FoldPlan, MAX_ARTIFACT_BYTES, MAX_MONTE_CARLO_TRIALS, MAX_SEARCH_COMBINATIONS,
+    MAX_TRIAL_BUDGET, ObjectiveDirection, ObjectiveSpec, ObservationRole, OosPlan, OosScheme,
+    OptimizationError, ReportObservation, RetestRequest, RetestResult, RobustnessArtifact,
+    RobustnessPipeline, SampleRole, SearchBatch, SearchDataLease, SplitMix64, StageAccess,
+    StageVerdict, WalkForwardConfig, max_drawdown, percentile_index, select_best,
 };
 use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
 use crate::core::strategy_simulator::run_verified_simulation;
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -251,6 +253,450 @@ fn execute_bound_observation(
         .metric(&request.metric_id)
         .ok_or_else(|| RetestError::Invalid("report metric is undefined".into()))?;
     Ok((report, observation, metric_value))
+}
+
+pub const TRADE_MONTE_CARLO_SCHEMA_VERSION: u32 = 1;
+pub const MAX_MONTE_CARLO_TRADES: usize = 10_000;
+const TRADE_MONTE_CARLO_DOMAIN: &[u8] = b"typhoon.strategy_retest.trade_monte_carlo.v1";
+const TRADE_MONTE_CARLO_CONFIDENCE_BPS: u32 = 9_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TradeMonteCarloConfig {
+    pub seed: u64,
+    pub trials: usize,
+    pub trade_skip_bps: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeMonteCarloFamily {
+    TradeOrderShuffle,
+    RandomTradeSubset,
+    BootstrapWithReplacement,
+}
+impl TradeMonteCarloFamily {
+    const ALL: [Self; 3] = [
+        Self::TradeOrderShuffle,
+        Self::RandomTradeSubset,
+        Self::BootstrapWithReplacement,
+    ];
+    fn tag(self) -> &'static [u8] {
+        match self {
+            Self::TradeOrderShuffle => b"trade_order_shuffle",
+            Self::RandomTradeSubset => b"random_trade_subset",
+            Self::BootstrapWithReplacement => b"bootstrap_with_replacement",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TradeMonteCarloSample {
+    net_profit: f64,
+    max_drawdown: f64,
+}
+impl TradeMonteCarloSample {
+    pub fn net_profit(&self) -> f64 {
+        self.net_profit
+    }
+    pub fn max_drawdown(&self) -> f64 {
+        self.max_drawdown
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TradeMonteCarloPercentiles {
+    confidence_level_bps: u32,
+    p05: f64,
+    median: f64,
+    p95: f64,
+}
+impl TradeMonteCarloPercentiles {
+    pub fn confidence_level_bps(&self) -> u32 {
+        self.confidence_level_bps
+    }
+    pub fn p05(&self) -> f64 {
+        self.p05
+    }
+    pub fn median(&self) -> f64 {
+        self.median
+    }
+    pub fn p95(&self) -> f64 {
+        self.p95
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TradeMonteCarloFamilyEvidence {
+    family: TradeMonteCarloFamily,
+    component_seed: u64,
+    samples: Vec<TradeMonteCarloSample>,
+    net_profit: TradeMonteCarloPercentiles,
+    max_drawdown: TradeMonteCarloPercentiles,
+}
+impl TradeMonteCarloFamilyEvidence {
+    pub fn family(&self) -> TradeMonteCarloFamily {
+        self.family
+    }
+    pub fn component_seed(&self) -> u64 {
+        self.component_seed
+    }
+    pub fn samples(&self) -> &[TradeMonteCarloSample] {
+        &self.samples
+    }
+    pub fn net_profit(&self) -> &TradeMonteCarloPercentiles {
+        &self.net_profit
+    }
+    pub fn max_drawdown(&self) -> &TradeMonteCarloPercentiles {
+        &self.max_drawdown
+    }
+}
+
+/// Content-addressed Monte Carlo evidence. Its only production constructor executes the canonical
+/// retest boundary above and derives trade PnL from the newly sealed report; no metric ledger or
+/// trade vector crosses the public API.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TradeMonteCarloArtifact {
+    schema_version: u32,
+    artifact_id: String,
+    candidate_id: String,
+    run_id: String,
+    report_id: String,
+    dataset_id: String,
+    config_id: String,
+    root_seed: u64,
+    seed: u64,
+    evaluations_n: usize,
+    trials: usize,
+    trade_skip_bps: u32,
+    trade_count: usize,
+    families: Vec<TradeMonteCarloFamilyEvidence>,
+}
+impl TradeMonteCarloArtifact {
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+    pub fn candidate_id(&self) -> &str {
+        &self.candidate_id
+    }
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    pub fn report_id(&self) -> &str {
+        &self.report_id
+    }
+    pub fn dataset_id(&self) -> &str {
+        &self.dataset_id
+    }
+    pub fn config_id(&self) -> &str {
+        &self.config_id
+    }
+    pub fn root_seed(&self) -> u64 {
+        self.root_seed
+    }
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+    pub fn evaluations_n(&self) -> usize {
+        self.evaluations_n
+    }
+    pub fn trade_count(&self) -> usize {
+        self.trade_count
+    }
+    pub fn families(&self) -> &[TradeMonteCarloFamilyEvidence] {
+        &self.families
+    }
+    pub fn verify(&self) -> Result<(), RetestError> {
+        if self.schema_version != TRADE_MONTE_CARLO_SCHEMA_VERSION
+            || self.artifact_id.len() != 64
+            || self.candidate_id.trim().is_empty()
+            || self.run_id.trim().is_empty()
+            || self.report_id.trim().is_empty()
+            || self.dataset_id.trim().is_empty()
+            || self.config_id.trim().is_empty()
+            || self.evaluations_n == 0
+            || self.evaluations_n > MAX_TRIAL_BUDGET
+            || self.trials == 0
+            || self.trials > MAX_MONTE_CARLO_TRIALS
+            || self.trade_skip_bps >= 10_000
+            || self.trade_count == 0
+            || self.trade_count > MAX_MONTE_CARLO_TRADES
+            || self
+                .trials
+                .checked_mul(self.trade_count)
+                .is_none_or(|work| work > MAX_SEARCH_COMBINATIONS)
+            || self.families.len() != TradeMonteCarloFamily::ALL.len()
+        {
+            return Err(RetestError::Invalid(
+                "invalid Monte Carlo artifact bounds".into(),
+            ));
+        }
+        for (expected, evidence) in TradeMonteCarloFamily::ALL.iter().zip(&self.families) {
+            if evidence.family != *expected
+                || evidence.component_seed != derive_trade_monte_carlo_seed(self, *expected)
+                || evidence.samples.len() != self.trials
+                || evidence.samples.iter().any(|sample| {
+                    !sample.net_profit.is_finite() || !sample.max_drawdown.is_finite()
+                })
+                || evidence.net_profit
+                    != summarize_samples(&evidence.samples, |sample| sample.net_profit)?
+                || evidence.max_drawdown
+                    != summarize_samples(&evidence.samples, |sample| sample.max_drawdown)?
+            {
+                return Err(RetestError::Invalid(
+                    "invalid Monte Carlo family evidence".into(),
+                ));
+            }
+        }
+        if self.compute_id()? != self.artifact_id {
+            return Err(RetestError::Invalid(
+                "Monte Carlo artifact identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
+        self.verify()?;
+        let bytes = serde_json::to_vec(self).map_err(invalid)?;
+        if bytes.len() > MAX_ARTIFACT_BYTES {
+            return Err(RetestError::Invalid(
+                "Monte Carlo artifact is too large".into(),
+            ));
+        }
+        Ok(bytes)
+    }
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, RetestError> {
+        if bytes.len() > MAX_ARTIFACT_BYTES {
+            return Err(RetestError::Invalid(
+                "Monte Carlo artifact is too large".into(),
+            ));
+        }
+        let artifact: Self = serde_json::from_slice(bytes).map_err(invalid)?;
+        artifact.verify()?;
+        Ok(artifact)
+    }
+    fn compute_id(&self) -> Result<String, RetestError> {
+        let identity = serde_json::to_vec(&(
+            self.schema_version,
+            &self.candidate_id,
+            &self.run_id,
+            &self.report_id,
+            &self.dataset_id,
+            &self.config_id,
+            self.root_seed,
+            self.seed,
+            self.evaluations_n,
+            self.trials,
+            self.trade_skip_bps,
+            self.trade_count,
+            &self.families,
+        ))
+        .map_err(invalid)?;
+        let mut hasher = Sha256::new();
+        hasher.update(TRADE_MONTE_CARLO_DOMAIN);
+        frame(&mut hasher, &identity);
+        Ok(hex(hasher.finalize()))
+    }
+}
+
+pub fn execute_trade_monte_carlo(
+    request: RetestExecutionRequest,
+    config: TradeMonteCarloConfig,
+    evaluations_n: usize,
+) -> Result<TradeMonteCarloArtifact, RetestError> {
+    if request.lease.stage() != StageAccess::Robustness
+        || config.trials == 0
+        || config.trials > MAX_MONTE_CARLO_TRIALS
+        || config.trade_skip_bps >= 10_000
+        || evaluations_n == 0
+        || evaluations_n > MAX_TRIAL_BUDGET
+    {
+        return Err(RetestError::Invalid(
+            "invalid Monte Carlo request bounds or stage".into(),
+        ));
+    }
+    let candidate_id = request.strategy.strategy_id().to_string();
+    let dataset_id = request.dataset.dataset_id.clone();
+    let config_id = request.config.config_id().to_string();
+    let root_seed = request.retest.root_seed();
+    let (report, _, _) = execute_bound_observation(&request)?;
+    let trades = report
+        .analysis()
+        .trades
+        .iter()
+        .map(|trade| trade.net_pnl)
+        .collect::<Vec<_>>();
+    if trades.is_empty()
+        || trades.len() > MAX_MONTE_CARLO_TRADES
+        || trades.iter().any(|value| !value.is_finite())
+        || config
+            .trials
+            .checked_mul(trades.len())
+            .is_none_or(|work| work > MAX_SEARCH_COMBINATIONS)
+    {
+        return Err(RetestError::Invalid(
+            "undefined or unbounded canonical trade evidence".into(),
+        ));
+    }
+    let mut artifact = TradeMonteCarloArtifact {
+        schema_version: TRADE_MONTE_CARLO_SCHEMA_VERSION,
+        artifact_id: String::new(),
+        candidate_id,
+        run_id: report.run_id().to_string(),
+        report_id: report.report_id().to_string(),
+        dataset_id,
+        config_id,
+        root_seed,
+        seed: config.seed,
+        evaluations_n,
+        trials: config.trials,
+        trade_skip_bps: config.trade_skip_bps,
+        trade_count: trades.len(),
+        families: Vec::new(),
+    };
+    for family in TradeMonteCarloFamily::ALL {
+        let component_seed = derive_trade_monte_carlo_seed(&artifact, family);
+        artifact.families.push(execute_trade_monte_carlo_family(
+            &trades,
+            family,
+            component_seed,
+            config,
+        )?);
+    }
+    artifact.artifact_id = artifact.compute_id()?;
+    artifact.verify()?;
+    if artifact.to_json_vec()?.len() > MAX_ARTIFACT_BYTES {
+        return Err(RetestError::Invalid(
+            "Monte Carlo artifact is too large".into(),
+        ));
+    }
+    Ok(artifact)
+}
+
+pub fn replay_trade_monte_carlo(
+    request: RetestExecutionRequest,
+    expected: &TradeMonteCarloArtifact,
+) -> Result<TradeMonteCarloArtifact, RetestError> {
+    expected.verify()?;
+    let replayed = execute_trade_monte_carlo(
+        request,
+        TradeMonteCarloConfig {
+            seed: expected.seed,
+            trials: expected.trials,
+            trade_skip_bps: expected.trade_skip_bps,
+        },
+        expected.evaluations_n,
+    )?;
+    if &replayed != expected {
+        return Err(RetestError::Invalid(
+            "foreign or non-deterministic Monte Carlo evidence".into(),
+        ));
+    }
+    Ok(replayed)
+}
+
+fn execute_trade_monte_carlo_family(
+    trades: &[f64],
+    family: TradeMonteCarloFamily,
+    component_seed: u64,
+    config: TradeMonteCarloConfig,
+) -> Result<TradeMonteCarloFamilyEvidence, RetestError> {
+    let mut rng = SplitMix64(component_seed);
+    let mut work = Vec::with_capacity(trades.len());
+    let mut samples = Vec::with_capacity(config.trials);
+    for _ in 0..config.trials {
+        work.clear();
+        match family {
+            TradeMonteCarloFamily::TradeOrderShuffle => {
+                work.extend_from_slice(trades);
+                for index in (1..work.len()).rev() {
+                    let other = (rng.next() as usize) % (index + 1);
+                    work.swap(index, other);
+                }
+            }
+            TradeMonteCarloFamily::RandomTradeSubset => {
+                for &trade in trades {
+                    if rng.next() % 10_000 >= u64::from(config.trade_skip_bps) {
+                        work.push(trade);
+                    }
+                }
+                if work.is_empty() {
+                    work.push(trades[(rng.next() as usize) % trades.len()]);
+                }
+            }
+            TradeMonteCarloFamily::BootstrapWithReplacement => {
+                for _ in 0..trades.len() {
+                    work.push(trades[(rng.next() as usize) % trades.len()]);
+                }
+            }
+        }
+        let net_profit = work.iter().copied().sum::<f64>();
+        let max_drawdown = max_drawdown(&work);
+        if !net_profit.is_finite() || !max_drawdown.is_finite() {
+            return Err(RetestError::Invalid("non-finite Monte Carlo metric".into()));
+        }
+        samples.push(TradeMonteCarloSample {
+            net_profit,
+            max_drawdown,
+        });
+    }
+    Ok(TradeMonteCarloFamilyEvidence {
+        family,
+        component_seed,
+        net_profit: summarize_samples(&samples, |sample| sample.net_profit)?,
+        max_drawdown: summarize_samples(&samples, |sample| sample.max_drawdown)?,
+        samples,
+    })
+}
+
+fn summarize_samples(
+    samples: &[TradeMonteCarloSample],
+    project: impl Fn(&TradeMonteCarloSample) -> f64,
+) -> Result<TradeMonteCarloPercentiles, RetestError> {
+    if samples.is_empty() || samples.len() > MAX_MONTE_CARLO_TRIALS {
+        return Err(RetestError::Invalid(
+            "invalid Monte Carlo sample vector".into(),
+        ));
+    }
+    let mut values = samples.iter().map(project).collect::<Vec<_>>();
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(RetestError::Invalid("non-finite Monte Carlo sample".into()));
+    }
+    values.sort_by(f64::total_cmp);
+    let pick = |basis_points| values[percentile_index(values.len(), basis_points)];
+    Ok(TradeMonteCarloPercentiles {
+        confidence_level_bps: TRADE_MONTE_CARLO_CONFIDENCE_BPS,
+        p05: pick(500),
+        median: pick(5_000),
+        p95: pick(9_500),
+    })
+}
+
+fn derive_trade_monte_carlo_seed(
+    artifact: &TradeMonteCarloArtifact,
+    family: TradeMonteCarloFamily,
+) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(TRADE_MONTE_CARLO_DOMAIN);
+    hasher.update(artifact.root_seed.to_be_bytes());
+    hasher.update(artifact.seed.to_be_bytes());
+    for value in [
+        artifact.candidate_id.as_bytes(),
+        artifact.run_id.as_bytes(),
+        artifact.report_id.as_bytes(),
+        artifact.dataset_id.as_bytes(),
+        artifact.config_id.as_bytes(),
+        family.tag(),
+    ] {
+        frame(&mut hasher, value);
+    }
+    let digest = hasher.finalize();
+    let mut prefix = [0_u8; 8];
+    prefix.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(prefix)
 }
 
 pub const MAX_WALK_FORWARD_MATRIX_CELLS: usize = 32;

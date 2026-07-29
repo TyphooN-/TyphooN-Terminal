@@ -1180,7 +1180,7 @@ pub enum Percentile {
 /// Integer-only, so one sample always resolves to one index. A `(len - 1) * bps / 10_000` form
 /// truncates the upper tail into the sample minimum once `len` is small: a two-sample p95 would
 /// name the *worse* observation, which inverts the confidence bound it is reported as (§7.3).
-fn percentile_index(len: usize, bps: usize) -> usize {
+pub(crate) fn percentile_index(len: usize, bps: usize) -> usize {
     len.saturating_mul(bps).div_ceil(10_000).clamp(1, len) - 1
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -1706,7 +1706,8 @@ pub struct MonteCarloDistribution {
     pub median: f64,
     pub p95: f64,
 }
-pub fn monte_carlo_trade_returns(
+#[cfg(test)]
+pub(crate) fn monte_carlo_trade_returns(
     trades: &[f64],
     method: MonteCarloMethod,
     seed: u64,
@@ -1751,7 +1752,7 @@ pub fn monte_carlo_trade_returns(
         samples,
     })
 }
-fn max_drawdown(values: &[f64]) -> f64 {
+pub(crate) fn max_drawdown(values: &[f64]) -> f64 {
     let (mut equity, mut peak, mut drawdown) = (0.0_f64, 0.0_f64, 0.0_f64);
     for value in values {
         equity += value;
@@ -2401,9 +2402,9 @@ fn worker_loop(jobs: Receiver<OptimizationJob>, events: SyncSender<OptimizationW
     }
 }
 
-struct SplitMix64(u64);
+pub(crate) struct SplitMix64(pub(crate) u64);
 impl SplitMix64 {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
