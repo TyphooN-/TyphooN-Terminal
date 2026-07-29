@@ -1,8 +1,7 @@
 use super::*;
 
 use crate::app::chart_ops::{
-    low_timeframe_no_data_symbols, mtf_canvas_grid_cols, mtf_canvas_grid_rows,
-    mtf_flat_chart_indices, mtf_visible_chart_groups_filtered,
+    mtf_canvas_grid_cols, mtf_canvas_grid_rows, mtf_flat_chart_indices, mtf_visible_chart_groups,
 };
 use typhoon_chart_ui::drawing_interaction::{
     drawing_anchors, drawing_hit_distance, drawing_set_anchor, translate_drawing,
@@ -524,7 +523,7 @@ impl TyphooNApp {
             while self.mtf_visible.len() < self.charts.len() {
                 self.mtf_visible.push(true);
             }
-            let suppressed_mtf_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
+
             // The central MTF grid tiles ONLY the user's open tabs — never the
             // hidden per-timeframe backing charts that the right-panel MTF Grid
             // indicator dots load. Those backing charts (`show_in_tab_bar == false`)
@@ -540,17 +539,13 @@ impl TyphooNApp {
                     chart.show_in_tab_bar && self.mtf_visible.get(i).copied().unwrap_or(true)
                 })
                 .collect();
-            let mtf_groups = mtf_visible_chart_groups_filtered(
-                &self.charts,
-                &tabbed_mtf_visible,
-                &suppressed_mtf_symbols,
-            );
+            let mtf_groups = mtf_visible_chart_groups(&self.charts, &tabbed_mtf_visible);
             let mtf_indices = mtf_flat_chart_indices(&mtf_groups);
             if mtf_indices.is_empty() {
                 ui.painter().text(
                     available.center(),
                     egui::Align2::CENTER_CENTER,
-                    "No supported MTF Grid charts (M15+ only)",
+                    "No visible open MTF charts",
                     egui::FontId::proportional(14.0),
                     AXIS_TEXT,
                 );

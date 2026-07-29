@@ -420,18 +420,9 @@ pub(super) fn open_chart_preload_indices(charts: &[ChartState]) -> Vec<usize> {
         .collect()
 }
 
-#[cfg(test)]
 pub(super) fn mtf_visible_chart_groups(
     charts: &[ChartState],
     visible: &[bool],
-) -> Vec<MtfChartGroup> {
-    mtf_visible_chart_groups_filtered(charts, visible, &std::collections::HashSet::new())
-}
-
-pub(super) fn mtf_visible_chart_groups_filtered(
-    charts: &[ChartState],
-    visible: &[bool],
-    suppressed_symbols: &std::collections::HashSet<String>,
 ) -> Vec<MtfChartGroup> {
     let mut groups: Vec<MtfChartGroup> = Vec::new();
     for (idx, chart) in charts.iter().enumerate() {
@@ -442,11 +433,10 @@ pub(super) fn mtf_visible_chart_groups_filtered(
             continue;
         }
         let symbol = mtf_grid_symbol_key(&chart.symbol);
-        if symbol.is_empty() || suppressed_symbols.contains(&symbol.to_ascii_uppercase()) {
+        if symbol.is_empty() {
             continue;
         }
         if let Some(group) = groups.iter_mut().find(|group| group.symbol == symbol) {
-            // small N, or could map but groups mutable
             group.indices.push(idx);
         } else {
             groups.push(MtfChartGroup {
@@ -464,6 +454,34 @@ pub(super) fn mtf_visible_chart_groups_filtered(
         });
     }
     groups
+}
+
+/// Chart ownership for the navbar MTF status panel. In single-chart mode the
+/// active chart is the only source of truth. In MTF mode every visible open tab
+/// participates; hidden backing charts never become navbar symbols.
+pub(super) fn mtf_navbar_chart_indices(
+    charts: &[ChartState],
+    visible: &[bool],
+    active_tab: usize,
+    mtf_enabled: bool,
+) -> Vec<usize> {
+    if !mtf_enabled {
+        return charts
+            .get(active_tab)
+            .filter(|chart| mtf_timeframe_rank(chart.timeframe).is_some())
+            .map(|_| vec![active_tab])
+            .unwrap_or_default();
+    }
+    charts
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, chart)| {
+            (chart.show_in_tab_bar
+                && visible.get(idx).copied().unwrap_or(true)
+                && mtf_timeframe_rank(chart.timeframe).is_some())
+            .then_some(idx)
+        })
+        .collect()
 }
 
 pub(super) fn mtf_flat_chart_indices(groups: &[MtfChartGroup]) -> Vec<usize> {
@@ -1351,16 +1369,23 @@ impl TyphooNApp {
 
     /// Compute MTF Grid indicator status for all timeframes from cache.
     /// Parallel: spawns threads for TFs not already loaded in chart tabs.
-    /// Order-independent hash of the open-chart `(symbol-key, timeframe)` set. It
-    /// changes whenever a chart is opened, closed, or retimeframed, so the grid's
-    /// cache fallback (`mtf_grid_status`) can be recomputed for the new layout —
-    /// otherwise a just-closed timeframe drops to a stale/empty cell.
+    /// Order-independent hash of the chart scope owned by the navbar MTF panel.
+    /// It changes when single/MTF mode, active chart, MTF visibility, symbol, or
+    /// timeframe changes so the panel never displays a stale scope.
     pub(super) fn mtf_open_chart_signature(&self) -> u64 {
         use std::hash::{Hash, Hasher};
-        // XOR per-chart hashes → independent of tab order; fold in the count so
-        // adding then removing different charts can't alias to the same value.
-        let mut acc: u64 = self.charts.len() as u64;
-        for c in &self.charts {
+        let scoped = mtf_navbar_chart_indices(
+            &self.charts,
+            &self.mtf_visible,
+            self.active_tab,
+            self.mtf_enabled,
+        );
+        let mut scope_hash = std::collections::hash_map::DefaultHasher::new();
+        self.mtf_enabled.hash(&mut scope_hash);
+        self.active_tab.hash(&mut scope_hash);
+        let mut acc: u64 = scope_hash.finish() ^ scoped.len() as u64;
+        for idx in scoped {
+            let c = &self.charts[idx];
             let mut h = std::collections::hash_map::DefaultHasher::new();
             mtf_grid_symbol_key(&c.symbol).hash(&mut h);
             c.timeframe.label().hash(&mut h);
@@ -1369,19 +1394,20 @@ impl TyphooNApp {
         acc
     }
 
-    /// The symbols shown in the MTF Grid navbar: one per distinct open **tab**
-    /// (`show_in_tab_bar`), sorted, with the supported-timeframe and low-TF-no-data
-    /// filters applied. Drives the grid off the user's actual open tabs — no hidden
-    /// backing charts — so the dot rows match the tab strip.
+    /// The symbols shown in the MTF Grid navbar: the active chart in single mode,
+    /// or every visible open tab in MTF mode. Missing low timeframes never suppress
+    /// a symbol's available higher-timeframe status.
     pub(super) fn mtf_grid_navbar_symbols(&self) -> Vec<String> {
-        let suppressed = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
         let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for chart in &self.charts {
-            if !chart.show_in_tab_bar || mtf_timeframe_rank(chart.timeframe).is_none() {
-                continue;
-            }
+        for idx in mtf_navbar_chart_indices(
+            &self.charts,
+            &self.mtf_visible,
+            self.active_tab,
+            self.mtf_enabled,
+        ) {
+            let chart = &self.charts[idx];
             let key = mtf_grid_symbol_key(&chart.symbol);
-            if key.is_empty() || suppressed.contains(&key.to_ascii_uppercase()) {
+            if key.is_empty() {
                 continue;
             }
             seen.insert(key);
@@ -1404,10 +1430,14 @@ impl TyphooNApp {
         // timeframe (avoids re-scanning per timeframe).
         let mut live: std::collections::HashMap<Timeframe, MtfCellValues> =
             std::collections::HashMap::new();
-        for c in &self.charts {
-            if c.show_in_tab_bar
-                && !c.bars.is_empty()
-                && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(symbol_key)
+        for idx in mtf_navbar_chart_indices(
+            &self.charts,
+            &self.mtf_visible,
+            self.active_tab,
+            self.mtf_enabled,
+        ) {
+            let c = &self.charts[idx];
+            if !c.bars.is_empty() && mtf_grid_symbol_key(&c.symbol).eq_ignore_ascii_case(symbol_key)
             {
                 live.entry(c.timeframe).or_insert((
                     c.fresh_live_quote_mid()
@@ -1454,14 +1484,23 @@ impl TyphooNApp {
             Some(c) => Arc::clone(c),
             None => return,
         };
-        self.mtf_grid_status_symbol = self.symbol_input.trim().to_string();
         self.mtf_grid_status_open_sig = self.mtf_open_chart_signature();
         self.mtf_grid_status_at = Some(std::time::Instant::now());
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let active_key = mtf_grid_symbol_key(&self.symbol_input).to_ascii_uppercase();
+        let active_key = self
+            .charts
+            .get(self.active_tab)
+            .map(|chart| mtf_grid_symbol_key(&chart.symbol).to_ascii_uppercase())
+            .unwrap_or_default();
         let mut open_tab_cells = std::collections::HashSet::new();
-        for chart in &self.charts {
-            if chart.show_in_tab_bar && !chart.bars.is_empty() {
+        for idx in mtf_navbar_chart_indices(
+            &self.charts,
+            &self.mtf_visible,
+            self.active_tab,
+            self.mtf_enabled,
+        ) {
+            let chart = &self.charts[idx];
+            if !chart.bars.is_empty() {
                 open_tab_cells.insert((
                     mtf_grid_symbol_key(&chart.symbol).to_ascii_uppercase(),
                     chart.timeframe.cache_suffix().to_string(),
@@ -1470,14 +1509,19 @@ impl TyphooNApp {
         }
         // (symbol, tf) cells with no open tab and no fresh cache entry.
         let mut cells: Vec<(String, Timeframe)> = Vec::new();
+        let low_timeframe_no_data = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
         for symbol in self.mtf_grid_navbar_symbols() {
             let key = mtf_grid_symbol_key(&symbol);
             let key_upper = key.to_ascii_uppercase();
+            let low_timeframes_unavailable = low_timeframe_no_data.contains(&key_upper);
             for &(_label, tf) in &MTF_GRID_TIMEFRAMES {
                 // Never load a timeframe that's disabled in Sync (e.g. M1/M5) — that
                 // was the source of the "No chart data found for …:1Min" spam and the
                 // wasted probes for data that does not exist.
                 if !self.enabled_sync_timeframes.contains(tf.cache_suffix()) {
+                    continue;
+                }
+                if low_timeframes_unavailable && mtf_low_timeframe(tf) {
                     continue;
                 }
                 let has_tab =
@@ -1575,7 +1619,6 @@ impl TyphooNApp {
             )
         }
 
-        let suppressed_symbols = low_timeframe_no_data_symbols(&self.unresolvable_pairs);
         let mut symbols = std::collections::BTreeSet::new();
         for (i, chart) in self.charts.iter().enumerate() {
             if self.mtf_enabled && !self.mtf_visible.get(i).copied().unwrap_or(true) {
@@ -1594,10 +1637,7 @@ impl TyphooNApp {
             if let Some(stripped) = symbol.strip_suffix(".EQ") {
                 symbol = stripped.to_string();
             }
-            if !symbol.is_empty()
-                && !is_timeframe_token(&symbol)
-                && !suppressed_symbols.contains(&symbol.to_ascii_uppercase())
-            {
+            if !symbol.is_empty() && !is_timeframe_token(&symbol) {
                 symbols.insert(symbol);
             }
         }
@@ -1620,9 +1660,8 @@ impl TyphooNApp {
             .replace('/', "")
             .trim_end_matches(".EQ")
             .to_ascii_uppercase();
-        if low_timeframe_no_data_symbols(&self.unresolvable_pairs).contains(&symbol_key) {
-            return;
-        }
+        let low_timeframes_unavailable =
+            low_timeframe_no_data_symbols(&self.unresolvable_pairs).contains(&symbol_key);
         let mut existing_chart_by_tf: std::collections::HashMap<Timeframe, usize> =
             std::collections::HashMap::new();
         let mut empty_low_timeframes: std::collections::HashSet<Timeframe> =
@@ -1637,6 +1676,9 @@ impl TyphooNApp {
             }
         }
         for &(label, tf) in &MTF_GRID_TIMEFRAMES {
+            if low_timeframes_unavailable && mtf_low_timeframe(tf) {
+                continue;
+            }
             if empty_low_timeframes.contains(&tf) {
                 continue;
             }

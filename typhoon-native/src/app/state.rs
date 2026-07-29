@@ -138,12 +138,9 @@ pub struct TyphooNApp {
     /// completion; `Some` means a pass is running, so the render path never spawns a
     /// second one or back-fills the same cells twice.
     pub(crate) mtf_grid_rx: Option<std::sync::mpsc::Receiver<()>>,
-    /// Active symbol at the last fill — a change retriggers the fill so the focused
-    /// symbol's cells refresh immediately.
-    pub(crate) mtf_grid_status_symbol: String,
-    /// Signature of the open-chart (symbol, timeframe) set at the last fill. Opening
-    /// or closing a chart changes it and retriggers the fill so a just-closed
-    /// timeframe's cell repopulates from the cache. `0` = never computed.
+    /// Signature of the navbar chart scope at the last fill. Mode, active chart,
+    /// visibility, open/closed tabs, symbols, and timeframes all participate.
+    /// `0` means never computed.
     pub(crate) mtf_grid_status_open_sig: u64,
     /// When the fill last ran. Drives a self-terminating throttled refresh that keeps
     /// back-filling navbar cells until the cache is warm, then idles.

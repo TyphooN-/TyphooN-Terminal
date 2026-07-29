@@ -209,7 +209,6 @@ impl TyphooNApp {
             alpaca_historical_rpm_hint: 0,
             alpaca_historical_rpm_observed: 0,
             mtf_grid_rx: None,
-            mtf_grid_status_symbol: String::new(),
             mtf_grid_status_open_sig: 0,
             mtf_grid_status_at: None,
             deferred_chart_loads: VecDeque::new(),

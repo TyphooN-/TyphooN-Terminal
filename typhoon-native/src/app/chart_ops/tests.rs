@@ -203,6 +203,29 @@ fn mtf_grid_groups_visible_charts_by_symbol_and_sorts_each_symbol_by_timeframe()
 }
 
 #[test]
+fn mtf_navbar_scope_is_active_chart_in_single_mode_and_visible_tabs_in_grid_mode() {
+    let mut hidden = ChartState::new("kraken:AAPL:1Hour", Timeframe::H1);
+    hidden.show_in_tab_bar = false;
+    let charts = vec![
+        ChartState::new("kraken:AAPL:1Day", Timeframe::D1),
+        ChartState::new("kraken:MSFT:4Hour", Timeframe::H4),
+        hidden,
+    ];
+    let visible = vec![true, false, true];
+
+    assert_eq!(
+        mtf_navbar_chart_indices(&charts, &visible, 1, false),
+        vec![1],
+        "single-chart mode must follow the active chart even when its MTF visibility is off"
+    );
+    assert_eq!(
+        mtf_navbar_chart_indices(&charts, &visible, 1, true),
+        vec![0],
+        "MTF mode must include all and only visible open tabs"
+    );
+}
+
+#[test]
 fn mtf_grid_omits_empty_low_timeframe_cells() {
     let mut m15 = ChartState::new("AMC", Timeframe::M15);
     m15.bars.push(Bar {
@@ -256,19 +279,19 @@ fn mtf_chart_canvas_uses_flat_two_column_flow() {
 }
 
 #[test]
-fn mtf_grid_suppresses_symbol_when_broker_has_no_m1_or_m5_bars() {
+fn mtf_grid_keeps_open_higher_timeframes_when_low_timeframes_have_no_data() {
     let charts = vec![
         ChartState::new("CC", Timeframe::D1),
         ChartState::new("CC", Timeframe::H4),
         ChartState::new("WEN", Timeframe::D1),
     ];
     let visible = vec![true; charts.len()];
-    let no_low_tf_symbols = ["CC".to_string()].into_iter().collect();
+    let groups = mtf_visible_chart_groups(&charts, &visible);
 
-    let groups = mtf_visible_chart_groups_filtered(&charts, &visible, &no_low_tf_symbols);
-
-    assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].symbol, "WEN");
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].symbol, "CC");
+    assert_eq!(groups[0].indices, vec![1, 0]);
+    assert_eq!(groups[1].symbol, "WEN");
 }
 
 #[test]

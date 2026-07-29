@@ -48,15 +48,14 @@ impl TyphooNApp {
         if self.right_mtf_grid_open
             && self.cache.is_some()
             && self.mtf_grid_rx.is_none()
-            && !self.symbol_input.trim().is_empty()
+            && !self.mtf_grid_navbar_symbols().is_empty()
         {
-            let symbol_changed = self.mtf_grid_status_symbol != self.symbol_input.trim();
             let open_changed = self.mtf_grid_status_open_sig != self.mtf_open_chart_signature();
             let throttle_ok = self
                 .mtf_grid_status_at
                 .map(|t| t.elapsed() >= std::time::Duration::from_secs(1))
                 .unwrap_or(true);
-            if symbol_changed || open_changed || throttle_ok {
+            if open_changed || throttle_ok {
                 self.compute_mtf_grid_status();
             }
         }
