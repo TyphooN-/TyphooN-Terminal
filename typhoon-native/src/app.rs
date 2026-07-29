@@ -114,6 +114,7 @@ mod state;
 mod storage;
 mod strategy_intervention_run;
 mod strategy_report_view;
+mod strategy_research;
 mod strategy_sub_bar_run;
 mod strategy_windows;
 mod style_scope;
@@ -540,6 +541,11 @@ impl TyphooNApp {
             ci_contribution: String::new(),
             ci_result: Vec::new(),
             show_backtest: false,
+            show_strategy_builder: false,
+            show_nnfx_builder: false,
+            show_strategy_databank: false,
+            strategy_research: strategy_research::StrategyResearchState::new(),
+            strategy_databank_worker: None,
             show_dataset_inspector: false,
             dataset_inspector: dataset_inspector_model::DatasetInspectorState::new(),
             dataset_worker: None,

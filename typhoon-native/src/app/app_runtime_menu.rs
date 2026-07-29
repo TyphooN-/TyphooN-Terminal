@@ -257,6 +257,18 @@ impl TyphooNApp {
                                 self.show_backtest = true;
                                 ui.close();
                             }
+                            if ui.button("Strategy Builder").clicked() {
+                                self.show_strategy_builder = true;
+                                ui.close();
+                            }
+                            if ui.button("NNFX Builder").clicked() {
+                                self.show_nnfx_builder = true;
+                                ui.close();
+                            }
+                            if ui.button("Strategy Databank").clicked() {
+                                self.show_strategy_databank = true;
+                                ui.close();
+                            }
                             if ui
                                 .button("Dataset Inspector")
                                 .on_hover_text("Browse immutable, content-addressed strategy datasets: manifest, provenance, QA flags, and a bounded bar table (ADR-135 §11.2).")

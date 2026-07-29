@@ -223,7 +223,7 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Capability (vendor public claim) | TyphooN status | Addressed in |
 | --- | --- | --- |
 | Machine-learning / automated strategy generation | **Missing** | §8, M5 |
-| No-code visual strategy builder (AlgoWizard-class) | **Missing** — strategies are hand-written Rust structs | §5.2, M3 |
+| No-code visual strategy builder (AlgoWizard-class) | **Foundation** — the native transient typed-node builder validates and seals only canonical `StrategyIr`, exposes canonical text, and can save/reload exact verified artifacts through the bounded databank worker; a complete typed-socket canvas and native run orchestration remain open | §5.2, M3 |
 | Custom indicators & models | **Partial** — a large native indicator library plus `typhoon-transpiler` ([ADR-040](040-typhoon-transpiler-pipeline-source-to-gpu-cpu-execution.md), [ADR-067](067-multi-frontend-expansion-cross-language-transpiler.md)), but no strategy-level plug-in surface | §5.10, M6 |
 | Templates / random placeholders in generated logic | **Missing** | §8.1, M5 |
 | Fuzzy logic building blocks | **Missing** | §8.1 (deferred), M5+ |
@@ -290,7 +290,7 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Portfolio construction / comparison | **Missing** | §10, M6 |
 | Fit-to-portfolio objective | **Missing** | §10.2, M6 |
 | Correlation-aware strategy selection | **Missing** | §10.1, M6 |
-| Databank of stored strategies with metadata | **Missing** — results are in-memory, lost on window close | §5.7, M3 |
+| Databank of stored strategies with metadata | **Foundation** — immutable canonical strategies/runs, indexed bounded queries, exact metric-vector comparison/verification, and a prepared-page native browser exist; native append/rerun orchestration from the GUI remains open | §5.7, M3 |
 
 ### 4.6 Data management & QA
 
@@ -323,9 +323,9 @@ TyphooN targets these capabilities natively; MT4-specific packaging is not the t
 
 | Capability (NNFX Algo Tester public claim) | TyphooN status | Addressed in |
 | --- | --- | --- |
-| Guided indicator-role builder (ATR, baseline, C1, C2, volume, exit, continuation, news/market filters) | **Missing as a builder** — a fixed NNFX Rust strategy and broad indicator library exist, but no role-based builder or saved configuration | §5.2, §5.11, M3 |
-| Full-algorithm, C1-only, baseline-only, and baseline+C1 test profiles | **Missing** | §5.2, M3 |
-| NNFX baseline/standard/continuation/pullback entries and One Candle/A Bridge Too Far rule toggles | **Missing as configurable IR** — only fixed NNFX logic exists | §5.2, M3 |
+| Guided indicator-role builder (ATR, baseline, C1, C2, volume, exit, continuation, news/market filters) | **Foundation** — the native guided form lowers these slots and toggles directly into canonical `StrategyIr`, saves through the bounded worker, and opens the identical artifact in the general builder; end-to-end native run orchestration remains open | §5.2, §5.11, M3 |
+| Full-algorithm, C1-only, baseline-only, and baseline+C1 test profiles | **Foundation** — all four profiles lower through the canonical IR builder and are selectable in the native guided form; the complete configuration-space round-trip gate remains open | §5.2, M3 |
+| NNFX baseline/standard/continuation/pullback entries and One Candle/A Bridge Too Far rule toggles | **Foundation** — represented in canonical IR and exposed in the native guided form; full GUI-authored rerun evidence remains open | §5.2, M3 |
 | Automatic plus manual/hybrid backtesting | **Missing** — simulation cannot pause for a recorded user decision | §6.13, M2 |
 | Visual mode with entries, exits, stop updates, and indicator state | **Missing as a visual workflow** — bar-state replay data is a useful engine foundation, but no annotated replay UI is wired | §5.11, M2/M3 |
 | Repainting-indicator diagnostic | **Missing** | §11.5, M2 |
@@ -1372,6 +1372,18 @@ metrics exactly; two structurally identical strategies collapse to one id; datab
 over a synthetic 10⁵-run corpus stay bounded and off the render thread. Every guided NNFX
 profile/slot/rule configuration round-trips through the canonical IR and produces the same IR
 as the equivalent general-builder graph.
+
+**Native checkpoint (2026-07-29; M3 remains open):** the wired egui backing model now covers a
+transient general builder, constrained NNFX builder, canonical text, bounded worker save/load
+with explicit cancellation/failure/stale-response handling, and an immutable prepared-page
+databank browser. A native model test authors a strategy, saves it through the databank worker,
+clears both editor and canonical text, reloads the exact verified artifact, executes it twice
+through the existing identity-bound sub-bar simulation/report path, appends the first report's
+real metric vector, and verifies the rerun vector by exact equality. This is independently
+useful evidence, but it does **not** complete the literal user-driven GUI gate: dataset/config
+selection, run submission, report-to-databank append, and rerun verification are not yet wired
+as one native action flow. The exhaustive guided configuration-space round-trip test and a
+render-path assertion that the 10⁵-run corpus is never touched directly also remain required.
 
 ### M4 — Optimizer, retester & robustness pipeline
 **Prereqs:** M1–M3.

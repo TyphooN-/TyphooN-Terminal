@@ -106,6 +106,13 @@ pub fn strategy_dataset_dir() -> PathBuf {
     cache_dir().join("strategy_datasets")
 }
 
+/// Dedicated append-only experiment database (ADR-135 §5.7).
+/// Kept separate from the latency-sensitive bar cache while following the
+/// same user-selected bulk-storage location.
+pub fn strategy_databank_path() -> PathBuf {
+    cache_dir().join("strategy_databank.sqlite3")
+}
+
 /// Root of the content-addressed reference-data artifact store (ADR-135 §6.7,
 /// §6.8) — sealed calendar-exception and corporate-action artifacts.
 ///

@@ -193,6 +193,7 @@ impl TyphooNApp {
         self.render_compound_calc_window(ctx);
 
         self.render_backtest_window(ctx);
+        self.render_strategy_research_windows(ctx);
 
         // Dataset Inspector — bounded tabular browser over immutable strategy
         // datasets (ADR-135 §11.2). Pumps its worker every frame even when the

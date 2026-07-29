@@ -846,6 +846,12 @@ pub struct TyphooNApp {
     pub(crate) ci_contribution: String,
     pub(crate) ci_result: Vec<(f64, f64, f64)>,
     pub(crate) show_backtest: bool,
+    pub(crate) show_strategy_builder: bool,
+    pub(crate) show_nnfx_builder: bool,
+    pub(crate) show_strategy_databank: bool,
+    pub(crate) strategy_research: crate::app::strategy_research::StrategyResearchState,
+    pub(crate) strategy_databank_worker:
+        Option<typhoon_engine::core::strategy_databank::DatabankWorker>,
     /// Dataset Inspector window visibility (ADR-135 §11.2).
     pub(crate) show_dataset_inspector: bool,
     /// Bounded view model for the Dataset Inspector — one page of bars, one
