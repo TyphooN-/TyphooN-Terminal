@@ -57,6 +57,13 @@ fn sync_row_unsynced(row: &SyncStatsRow) -> u64 {
         .saturating_sub(row.unreachable)
 }
 
+pub(super) fn default_sync_sort() -> SortState {
+    SortState {
+        column: 0,
+        ascending: true,
+    }
+}
+
 /// Display order for the Sync Status table. Sorting indices keeps the immutable
 /// worker snapshot shared and avoids cloning row strings on every frame.
 fn sorted_sync_row_indices(rows: &[SyncStatsRow], state: &SortState) -> Vec<usize> {
@@ -1276,6 +1283,13 @@ fn kraken_equities_merged_timeframe_supported(tf: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_status_opens_with_alphabetical_broker_sorting() {
+        let state = default_sync_sort();
+        assert_eq!(state.column, 0);
+        assert!(state.ascending);
+    }
 
     #[test]
     fn kraken_equity_ws_mid_timeframes_remain_native_health_rows() {
