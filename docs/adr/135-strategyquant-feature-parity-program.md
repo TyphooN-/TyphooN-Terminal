@@ -242,8 +242,8 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Slippage & latency | **Foundation** — fixed/spread-fraction slippage and fixed/seeded-uniform two-leg latency are deterministic and run-stamped; volatility-scaled slippage remains unsupported | §6.4, M1 |
 | Order types beyond immediate market reversal | **Foundation** — market, limit, stop, stop-limit, market-on-close, IOC/FOK/Day/GTC/GTD, reduce-only and OCO lifecycles execute in the kernel | §6.5, M1 |
 | Partial fills / liquidity caps | **Foundation** — a run-stamped bar-volume participation cap is shared across orders and sub-bars; remainders rest or expire by TIF, including IOC/FOK and OCO resizing. L2 depth-aware fills remain open | §6.6, M2 |
-| Sessions & timezones | **Foundation** — per-instrument UTC/US-Eastern calendars gate every execution and queue or reject closed-session submissions with DST-correct local windows and rule-based US half days; exchange-published exception tables remain open | §6.7, M2 |
-| Corporate actions in simulation | **Foundation** — split, dividend, symbol-change and delisting events adjust live state at effective time; verified run assembly rejects events already represented by split-adjusted/total-return prices. Cash-in-lieu and native data-feed ingestion remain open | §6.8, M2 |
+| Sessions & timezones | **Foundation** — per-instrument UTC/US-Eastern calendars gate every execution and queue or reject closed-session submissions with DST-correct local windows and rule-based US half days. Published closures, early closes and open overrides now load from content-addressed exception artifacts sealed from persisted source records; acquiring exchange/vendor source feeds remains open | §6.7, M2 |
+| Corporate actions in simulation | **Foundation** — split, dividend, symbol-change and delisting events adjust live state at effective time; verified run assembly rejects events already represented by split-adjusted/total-return prices. Schedules now materialize from content-addressed source artifacts; cash-in-lieu and the automated fetchers that would persist those source records remain open | §6.8, M2 |
 | Multi-market / multi-symbol simultaneous simulation | **Foundation** — the reference kernel has a deterministic global multi-symbol event clock; portfolio/shared-capital policy and native orchestration remain M4 work | §6.11, M1/M4 |
 | Multi-timeframe within one strategy | **Missing** in the simulator (MTF chart overlay exists — [ADR-123](123-mtf-overlay-price-scale-consistency.md)) | §6.11, M1/M4 |
 | Deterministic, reproducible runs | **Current kernel** — sealed run manifests, derived seeded streams, stable event ordering and concurrent bit-identity are gate-tested | §6.10, M1 |
@@ -588,6 +588,14 @@ session) must be **modelled and reported**, not silently dropped.
 - Orders outside a tradable session **queue or reject** per configuration; they never fill.
 - All internal time is **UTC**; display and session-relative rules (e.g. "no entries in the
   first 15 minutes") resolve through the instrument's exchange time zone with correct DST.
+- A venue's *published* closures, early closes and open overrides are a **source artifact**,
+  not a rule: they are stated in exchange-local civil dates, sealed content-addressed with
+  every source record and its raw bytes, and outrank the weekday/holiday rule underneath.
+- **Authority is a property of the source system, not a caller's claim.** The built-in
+  NYSE/xStocks rules are `DerivedRule` and the keyless Yahoo chart endpoint is
+  `UnverifiedPublic`; neither may back a run that requires authoritative reference data, and a
+  cache inherits exactly the authority of what it cached. An unreachable source is an error,
+  never a silent fall back to the rule.
 
 ### 6.8 Corporate actions
 - Splits, reverse splits, dividends, symbol changes, and delistings applied **as events at
@@ -599,6 +607,16 @@ session) must be **modelled and reported**, not silently dropped.
 - The known merge-layer hazards ([ADR-122](122-curated-stock-split-fallback-for-equity-merge.md),
   [ADR-124](124-depth-era-promotion-must-not-redefine-price-scale.md)) surface as **dataset
   QA warnings** attached to any run built on affected symbols.
+- A schedule ingested from a source is a **content-addressed artifact** carrying its source
+  system, authority class, completeness claim, covered range, as-of instant and every source
+  record with the SHA-256 of its raw bytes. Ratios and dividend amounts cross the boundary as
+  exact decimal strings in one canonical spelling, so `2` and `2.0` cannot both mean one split.
+  Retrieval time is audit metadata and is deliberately **excluded** from identity: re-fetching
+  identical as-of bytes tomorrow is the same artifact and must not change a run id.
+- An execution config **binds the artifact ids it was materialized from** (schema v4), so
+  changing the reference data changes the config id. A bound calendar id must be the one an
+  instrument's calendar was actually sealed from, and vice versa — a binding with nothing
+  behind it is a false provenance claim and is refused.
 
 ### 6.9 Tick / intrabar modes
 Simulation fidelity is a declared, recorded level:
@@ -1079,13 +1097,46 @@ below remain authoritative; a checked foundation does **not** imply that its mil
   strategy and execution identities, bounded persisted-artifact loading, and stable identity
   vectors. Execution-config schema v3 seals the participation model, per-instrument calendars,
   quote currencies/ticks/financing, corporate-action schedule, conversion table, closed-session
-  policy, and declared sub-bar timeframe. True tick fidelity is deliberately unrepresentable while
-  TyphooN retains no versioned tick history.
+  policy, and declared sub-bar timeframe. Schema v4 additionally seals the reference-data
+  artifact ids the settings were materialized from. The bump is a compatible extension rather
+  than a reinterpretation: v3 remains loadable and keeps its sealed id byte for byte, because
+  bindings are hashed only from v4 onwards, and a v3 artifact carrying bindings is refused so
+  the field cannot be smuggled outside the id that covers it. True tick fidelity is deliberately
+  unrepresentable while TyphooN retains no versioned tick history.
 - `strategy_calendar.rs`, `strategy_instrument.rs`: bounded, content-addressed per-instrument
   execution calendars and canonical instrument specs. UTC remains the internal clock; US-Eastern
   windows resolve under the shared ADR-110 DST/holiday rules, including the documented rule-based
   early closes. At every execution instant a closed venue prevents a fill, while submission either
-  queues or produces an explicit rejection according to the sealed policy.
+  queues or produces an explicit rejection according to the sealed policy. A calendar may now
+  also carry a bounded, ascending, duplicate-free set of *published* exceptions keyed by
+  exchange-local date, sealed into `calendar_id` alongside the artifact id they came from. A
+  published verdict outranks every derived rule for that date and reports as
+  `ClosedReason::PublishedClosure`, distinct from the rule-derived `Holiday`, so a report never
+  presents a guess as an exchange statement. Exceptions and their artifact id are present
+  together or not at all.
+- `strategy_reference_data.rs` (M2): the §6.7–§6.8 ingestion boundary. It does not fetch; it
+  accepts a bounded snapshot of records some other process persisted and seals a verified
+  calendar-exception or corporate-action artifact from them. Authority is derived from the
+  source system rather than taken on trust, so a keyless feed cannot be labelled official and a
+  cache is worth exactly what it cached; incomplete, uncovered, unreachable, malformed,
+  unsupported, duplicate, conflicting, out-of-range, offsetless and adjusted-price-double-count
+  inputs all fail closed. Identity covers source class, authority, completeness, covered range,
+  as-of instant, scope, every source-record id with the SHA-256 of its raw bytes, and the
+  canonical executable events; retrieval time is excluded by a named, hashed decision.
+  Materialization sorts source records into the same canonical order the sealed events use, so
+  the two lists are one order rather than two. The codec bounds bytes before parsing, denies
+  unknown fields, and re-serializes to prove the input was the one canonical encoding, so a
+  reordered or prettified file cannot share an id. The store is a flat content-addressed
+  directory addressed only by 64-hex id — never by caller path — with write-then-rename
+  publication.
+- `strategy_reference_data_worker.rs` (M2): the background boundary for the above. Every
+  snapshot read, digest, verify, materialize, list and bind runs on one named thread behind a
+  bounded job queue and a bounded event queue with a per-poll ceiling; submit and poll never
+  block a frame callback. Inspection is a dry run that reports the exact refusal a promotion
+  would hit, so a blocked snapshot disables promotion *and* says why instead of offering an
+  action that will fail. Listings report what they omitted. Selection re-loads both artifacts
+  through the store — re-verifying them against their ids — before binding and sealing a config,
+  and labels the result with the authority it actually has rather than the fact that it sealed.
 - `strategy_financing.rs`: identity-bearing constant-rate assumptions with provenance for long/
   short financing, stock borrow, crypto funding and quote-to-account currency conversion. Accrual
   boundaries are deterministic events and conversion costs are applied per fill. `Unavailable` is
@@ -1234,16 +1285,23 @@ not a claim that the complete native M2 workflow exists:
 | A synthetic repainting indicator is identified at the exact mutated bar/output | **Met** | `strategy_repaint/tests.rs::a_synthetic_repaint_is_identified_at_the_exact_bar_and_output` asserts the exact output name and index, mutated bar, responsible prefix, distance, and before/after values; the centred/trailing/disappearing/revision-window controls cover the diagnostic semantics. `stored_qa_artifact_round_trips_with_identity_and_undefined_values` and `stored_qa_artifact_rejects_tampering_unknown_fields_and_oversize_before_decode` seal the evidence and pin bounded fail-closed loading. `verified_run_assembly_binds_acknowledged_repaint_qa_fail_closed` proves exact artifact resolution, dataset binding, clean/warning consistency, and rejection of missing, duplicate, mismatched, or unexpected evidence; `report_identity_inherits_the_manifest_repaint_artifact_and_acknowledgement_binding` proves propagation into report identity |
 | Hand-computed two-leg scenario (independent target/stop, break-even, trailing, fee, ledger effect) | **Met** | `strategy_protective/tests.rs::a_hand_computed_two_leg_trade_banks_its_target_moves_to_break_even_then_trails` derives every fill price, fee, realized PnL, cash balance and final equity on paper and asserts them exactly, including leg 0 banking its own target while leg 1 runs, the break-even move at +4.00 and the trailing step at +7.00. `both_legs_stop_out_independently_at_the_same_initial_level`, `a_short_two_leg_trade_mirrors_the_long_lifecycle`, `a_trailing_stop_never_loosens_on_a_pullback`, `a_time_stop_closes_the_remainder_at_market`, `a_legs_stop_and_target_retire_each_other_through_their_oco_group` and `a_strategy_exit_leaves_the_manager_to_cancel_the_resting_bracket` pin the state machine. `strategy_interpreter/tests.rs::canonical_trade_management_compiles_fixed_percent_and_atr_distances` pins resolved fixed, percent, and ATR distances and leg quantities; `canonical_two_leg_management_executes_a_real_partial_target`, `canonical_strategy_exit_retires_its_protective_orders_without_a_later_decision`, and `canonical_time_stop_wins_over_an_exit_signal_on_the_same_decision` cover the canonical-IR execution boundary. These passed in the complete `typhoon-engine` suite recorded for this checkpoint |
 | §6.6 partial fills and liquidity cap | **Foundation landed; native results workflow open** | `strategy_simulator/tests/richer_execution.rs::participation_cap_partially_fills_and_preserves_remainder` pins 5/5/2 fills from one 12-unit order under one shared volume budget, exact remaining quantities, partial-fill events and final position. The implementation also handles IOC/FOK and proportionally consumes OCO siblings; optional L2 depth-aware execution remains open |
-| §6.7 sessions, calendars and time zones | **Foundation landed; exchange-table ingestion open** | `closed_session_rejects_or_queues_without_an_out_of_session_fill` proves both configured policies and the first valid reopen fill; `strategy_calendar/tests.rs::us_equity_sessions_are_dst_correct_and_half_open` pins winter/summer US-Eastern boundaries. The calendar is a versioned rule set, not an exchange-published historical exception table |
-| §6.8 corporate actions and adjustment consistency | **Foundation landed; native ingestion open** | `split_then_dividend_adjusts_live_position_and_cash_in_canonical_order` pins effective-time split-before-dividend units, basis and cash. `verified_run_assembly_refuses_corporate_actions_already_baked_into_prices` proves the identity-bearing run boundary rejects double-counting against split-adjusted prices. Fractional cash-in-lieu and automatic event ingestion remain open |
+| §6.7 sessions, calendars and time zones | **Foundation landed; exception ingestion/materialization and native selection landed; source feeds open** | `closed_session_rejects_or_queues_without_an_out_of_session_fill` proves both configured policies and the first valid reopen fill; `strategy_calendar/tests.rs::us_equity_sessions_are_dst_correct_and_half_open` pins winter/summer US-Eastern boundaries. On top of that rule set, `strategy_reference_data/tests.rs::holiday_early_close_open_override_and_dst_use_exchange_local_dates` pins a published closure, half day and Sunday open override resolved in exchange-local dates and reported as `PublishedClosure` rather than a derived holiday; `one_published_close_minute_resolves_to_two_utc_instants_across_dst` proves one 13:00 local close lands at 17:00Z in EDT and 18:00Z in EST and that the fall-back repeat hour is one published date; `an_early_close_shortens_the_venues_own_windows_and_never_invents_an_open` proves the shortened day is the venue's own windows truncated — a policy-only calendar and a close at or before the first open are both refused rather than given an invented bell; `a_full_length_override_is_not_reported_as_an_early_close` keeps the session-relative flag honest. `incomplete_outage_rule_only_yahoo_and_dishonest_authority_fail_closed` proves an incomplete batch, an uncovered range, the built-in rule set, a mislabelled keyless feed and an unreachable source each fail closed. **What is still missing is the data**: no exchange or contracted-vendor feed is integrated, so an authoritative artifact can only be sealed from source records something else persisted |
+| §6.8 corporate actions and adjustment consistency | **Foundation landed; materialization and native selection landed; automated fetchers open** | `split_then_dividend_adjusts_live_position_and_cash_in_canonical_order` pins effective-time split-before-dividend units, basis and cash. `verified_run_assembly_refuses_corporate_actions_already_baked_into_prices` proves the identity-bearing run boundary rejects double-counting against split-adjusted prices, and `adjusted_price_double_count_guard_rejects_splits_and_total_return_dividends` proves the same refusal at the ingestion boundary. `split_and_dividend_convert_safely_and_have_deterministic_order` pins split-before-dividend order and refuses `2.0` and `0.250` as second spellings; `source_ranks_match_the_schedule` pins the source rank table to the schedule's so records and sealed actions cannot sort apart; `ambiguous_and_non_canonical_timestamps_are_refused` rejects offsetless, local and `+00:00` stamps; `duplicate_conflict_unsupported_out_of_range_and_raw_tampering_are_rejected` and `a_repeated_calendar_date_is_a_duplicate_and_a_contradictory_one_is_a_conflict` name a redundant record apart from a contradictory one in both families. Fractional cash-in-lieu and the automated fetchers that would persist source records remain open |
+| Reference-data identity, restart recovery and v3 compatibility | **Met for the boundary that exists** | `declaration_order_is_canonical_and_retrieval_time_is_audit_only` proves two declaration orders and two retrieval times seal one id while an as-of change does not; `a_decoded_artifact_whose_records_are_reordered_is_refused` and `bounded_codec_rejects_oversize_unknown_noncanonical_and_tampered_artifacts` pin bounded-before-decode, unknown-field, non-canonical-encoding and tampered-id refusals; `oversize_batches_and_raw_records_are_refused` pins the record and raw-byte bounds before any sort or hash. `restart_identity_and_v4_execution_binding_round_trip` stores both artifacts, reloads them from their ids alone, compares byte-identically, refuses a path used as an id, binds them into settings and re-derives the sealed config id. `v3_execution_configs_keep_their_sealed_identity` pins the pre-existing v3 vector as still loadable, verifiable and unchanged; `a_v3_config_may_not_carry_reference_data_bindings` and `unknown_execution_config_schema_versions_are_refused` close the relabelling and unknown-version paths; `reference_calendar_bindings_must_match_the_instrument_calendars` refuses a binding no instrument carries and a materialized calendar the bindings omit |
+| Native reference-data inspection, materialization and selection | **Landed for the local-snapshot path** | `strategy_reference_data_worker/tests.rs::inspecting_a_snapshot_reports_authority_coverage_and_never_promotes` proves inspection runs off the submitting thread, reports authority/coverage/completeness, and leaves the store empty; `rule_only_keyless_and_unreachable_sources_are_blocked_with_a_reason` proves each non-authoritative class is reported blocked *with the refusal* and then actually fails to materialize; `materializing_then_selecting_seals_a_config_and_labels_its_authority` seals both artifacts, lists them, binds them and rebuilds the same v4 config id while labelling the pair non-authoritative because one source is a cache of a keyless feed; `the_job_queue_is_bounded_and_reports_backpressure` pins non-blocking backpressure, the per-poll ceiling and a terminating drop of a backlogged worker; `a_listing_bounded_below_the_store_reports_what_it_omitted` proves a truncated listing counts what it hid; `unreadable_snapshots_and_unknown_artifact_ids_fail_without_stopping_the_worker` covers missing, garbage, directory and path-as-id inputs. The panel view model is pure and separately tested in `typhoon-native/src/app/reference_data_model/tests.rs`: no defaults, promotion gated on the worker's own dry run, superseded replies dropped, slot changes discarding a stale preparation, vanished artifacts clearing their slot, omissions surfaced, and backpressure freeing the pending slot. Sealing a source below exchange/vendor authority additionally requires an explicit operator acknowledgement that starts false and is cleared by every new inspection (`a_non_authoritative_source_needs_an_explicit_acknowledgement`), so a durable artifact from a rule-derived or keyless feed is a stated decision rather than a default. Snapshot selection uses the platform file dialog, which yields a path only — the file is opened, bounded and decoded on the worker |
 | §6.9 sub-bar fidelity | **Identity-bound engine and native single-run path landed; tick replay open** | Run-manifest schema v5 content-addresses one finer immutable dataset per parent input. Verified assembly checks the dataset seal, exact id, symbol, adjustment/calendar policy and declared finer fixed timeframe before simulation constructs a bounded path. `verified_sub_bar_resolution_*` covers success plus missing, unexpected, mismatched, tampered and incompatible inputs; `sub_bar_path_requires_exact_causal_tiling_without_gaps_or_overlaps` rejects duplicate paths, gaps, overlaps, out-of-parent bars and incomplete coverage, while `sub_bar_fidelity_uses_the_earlier_path_step_before_parent_ambiguity` proves causal event ordering. The native Backtest Engine selects bounded parent/finer summaries from the Dataset Inspector plus existing sealed strategy/config/manifest JSON, snapshots chart identity and timeline generation, submits one bounded worker job, ignores stale completions, and installs only a matching prepared overlay/report. It does not generate artifacts. True tick fidelity remains unavailable because TyphooN retains no versioned tick history |
 | §6.3 deferred financing/borrow/funding/currency costs | **Foundation landed; paid/live inputs unavailable fail closed** | `financing_uses_last_committed_mark_and_reconciles_report_totals` pins the committed mark, interval, financing/funding debits, cash and report total; `strategy_financing/tests.rs::accrual_uses_declared_units_and_refuses_missing_borrow` proves unavailable short borrow is an error, not zero. Current rates/conversions are constant, provenance-bearing assumptions; no paid/live historical rate feed is integrated |
 
-Remaining M2 packet: add exchange/vendor ingestion for historical corporate
-actions and authoritative calendars; and add entitled historical/live borrow, financing, funding
-and currency inputs. Until those paid/live inputs exist, unavailable rates continue to fail closed.
-True tick fidelity remains unavailable until TyphooN retains an immutable, versioned tick-history
-corpus. **M2 is not complete.**
+Remaining M2 packet: the ingestion, materialization, identity and native selection half of
+authoritative calendars and corporate actions is now landed and tested, but **no exchange or
+contracted-vendor feed is integrated**, so in practice only `UnverifiedPublic` and `DerivedRule`
+source records exist to seal — and neither may back a run that requires authority. Acquiring
+those feeds, plus entitled historical/live borrow, financing, funding and currency inputs, is
+what remains. Until those paid/live inputs exist, unavailable rates and non-authoritative
+reference data continue to fail closed rather than being substituted. Multi-symbol
+corporate-action schedules in one config, automated fetchers that persist source snapshots, and
+fractional cash-in-lieu are also open. True tick fidelity remains unavailable until TyphooN
+retains an immutable, versioned tick-history corpus. **M2 is not complete.**
 
 **M3–M8:** no later milestone gate has passed. Their remaining work is exactly the delivery and
 gate text below; they may now build on the completed M1 correctness foundation.

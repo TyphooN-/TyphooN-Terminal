@@ -41,6 +41,11 @@ pub const TRADING_CALENDAR_SCHEMA_VERSION: u32 = 1;
 /// Windows one calendar may declare. Bounded because the spec is operator input
 /// that ends up in a content-addressed config.
 pub const MAX_SESSION_WINDOWS: usize = 8;
+/// Published exceptions one calendar may carry. Roughly a decade of US equity
+/// holidays and half days, and bounded for the same reason the windows are.
+pub const MAX_CALENDAR_EXCEPTIONS: usize = 4_096;
+/// Longest source-record id or label an exception may seal into a calendar id.
+pub const MAX_EXCEPTION_TEXT_BYTES: usize = 256;
 
 /// Minutes in a day. A window is stated inside `[0, MINUTES_PER_DAY]`.
 pub const MINUTES_PER_DAY: u32 = 24 * 60;
@@ -73,6 +78,20 @@ pub enum CalendarError {
     },
     /// Exchange-local windows against a policy that has no local-day structure.
     WindowsWithoutTradingDay,
+    TooManyExceptions {
+        limit: usize,
+        found: usize,
+    },
+    InvalidException {
+        index: usize,
+    },
+    DuplicateExceptionDate {
+        index: usize,
+    },
+    ExceptionsOutOfOrder {
+        index: usize,
+    },
+    MissingExceptionArtifactId,
 }
 
 impl std::fmt::Display for CalendarError {
@@ -106,6 +125,25 @@ impl std::fmt::Display for CalendarError {
             ),
             Self::WindowsWithoutTradingDay => formatter
                 .write_str("exchange-local windows require a policy with a trading-day rule"),
+            Self::TooManyExceptions { limit, found } => write!(
+                formatter,
+                "{found} calendar exceptions exceeds the limit of {limit}"
+            ),
+            Self::InvalidException { index } => write!(
+                formatter,
+                "calendar exception {index} has invalid local-date override data or empty source identity"
+            ),
+            Self::DuplicateExceptionDate { index } => write!(
+                formatter,
+                "calendar exception {index} duplicates a local exchange date"
+            ),
+            Self::ExceptionsOutOfOrder { index } => write!(
+                formatter,
+                "calendar exception {index} overlaps, duplicates, or precedes its predecessor"
+            ),
+            Self::MissingExceptionArtifactId => formatter.write_str(
+                "calendar exceptions and their materialized artifact id (64 lowercase hex) are present together or not at all",
+            ),
         }
     }
 }
@@ -266,6 +304,31 @@ pub struct TradingCalendarSpec {
     pub policy: CalendarPolicy,
     pub time_zone: ExchangeTimeZone,
     pub session: SessionRule,
+    #[serde(default)]
+    pub exceptions: Vec<CalendarException>,
+    #[serde(default)]
+    pub exception_artifact_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarException {
+    /// Exchange-local civil date; no UTC offset is baked into the exception.
+    pub local_date: chrono::NaiveDate,
+    pub source_record_id: String,
+    pub label: String,
+    pub kind: CalendarExceptionKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CalendarExceptionKind {
+    Closed,
+    /// Published windows for this date. This represents both early closes and
+    /// open overrides and intentionally bypasses the rule-only day verdict.
+    SessionOverride {
+        windows: Vec<LocalSessionWindow>,
+    },
 }
 
 impl TradingCalendarSpec {
@@ -275,6 +338,8 @@ impl TradingCalendarSpec {
             policy: CalendarPolicy::Continuous24x7,
             time_zone: ExchangeTimeZone::Utc,
             session: SessionRule::PolicyOnly,
+            exceptions: Vec::new(),
+            exception_artifact_id: None,
         }
     }
 
@@ -290,6 +355,8 @@ impl TradingCalendarSpec {
                     close_minute: 13 * 60,
                 },
             },
+            exceptions: Vec::new(),
+            exception_artifact_id: None,
         }
     }
 
@@ -300,6 +367,8 @@ impl TradingCalendarSpec {
             policy: CalendarPolicy::XStock24x5,
             time_zone: ExchangeTimeZone::UsEastern,
             session: SessionRule::PolicyOnly,
+            exceptions: Vec::new(),
+            exception_artifact_id: None,
         }
     }
 }
@@ -308,9 +377,14 @@ impl TradingCalendarSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClosedReason {
     Weekend,
+    /// The *rule* says the venue is shut. Derived, not published.
     Holiday {
         name: &'static str,
     },
+    /// A materialized calendar-exception artifact says the venue published a
+    /// full closure on this exchange-local date. Distinct from [`Self::Holiday`]
+    /// so a report never presents a derived guess as an exchange statement.
+    PublishedClosure,
     /// Inside a trading day but outside every declared window.
     OutsideWindow,
     /// Inside a window that an early close shortened past this instant.
@@ -324,6 +398,7 @@ impl ClosedReason {
         match self {
             Self::Weekend => "weekend",
             Self::Holiday { .. } => "holiday",
+            Self::PublishedClosure => "published_closure",
             Self::OutsideWindow => "outside_window",
             Self::EarlyClose { .. } => "early_close",
         }
@@ -401,7 +476,38 @@ impl TradingCalendar {
         self.status_at(utc)
     }
 
+    /// The local minute a regular day stops, when the rule declares windows.
+    /// `None` for a policy-only calendar, which has no rule-declared close to
+    /// call an override "early" against.
+    fn regular_close_minute(&self) -> Option<u32> {
+        match &self.spec.session {
+            SessionRule::PolicyOnly => None,
+            SessionRule::LocalWindows { windows, .. } => windows.last().map(|w| w.end_minute),
+        }
+    }
+
     pub fn status_at(&self, utc: chrono::DateTime<chrono::Utc>) -> SessionStatus {
+        let local = self.spec.time_zone.local(utc);
+        // Exceptions are validated unique and ascending by local date, so this
+        // is a binary search rather than the linear scan a per-bar hot path
+        // cannot afford at the 4096-exception bound.
+        if let Ok(index) = self
+            .spec
+            .exceptions
+            .binary_search_by(|candidate| candidate.local_date.cmp(&local.date()))
+        {
+            // A published exception is the exchange's own statement about this
+            // date and outranks every derived rule below, including the policy's
+            // weekend and holiday verdicts.
+            return match &self.spec.exceptions[index].kind {
+                CalendarExceptionKind::Closed => {
+                    SessionStatus::Closed(ClosedReason::PublishedClosure)
+                }
+                CalendarExceptionKind::SessionOverride { windows } => {
+                    status_in_windows(local, windows, self.regular_close_minute())
+                }
+            };
+        }
         let granularity = match self.spec.session {
             // With no intraday layer the policy is asked the intraday question
             // directly — that is what carries the xStocks 24×5 cycle.
@@ -433,7 +539,6 @@ impl TradingCalendar {
             };
         };
 
-        let local = self.spec.time_zone.local(utc);
         let minute = minute_of_day(local);
         let shortened = early_close.close_minute_on(local.date());
         let Some(window) = windows.iter().find(|window| window.contains(minute)) else {
@@ -453,6 +558,51 @@ impl TradingCalendar {
     pub fn is_open_at_ns(&self, utc_ns: i64) -> bool {
         self.status_at_ns(utc_ns).is_open()
     }
+}
+
+/// Adjudicate an instant against the windows a published exception declares.
+///
+/// `regular_close` is the rule's ordinary close, used only to answer whether
+/// this published day is genuinely shorter than a regular one. An override that
+/// runs to the usual bell is not an early close and must not claim to be.
+fn status_in_windows(
+    local: chrono::NaiveDateTime,
+    windows: &[LocalSessionWindow],
+    regular_close: Option<u32>,
+) -> SessionStatus {
+    let minute = minute_of_day(local);
+    let Some(window) = windows.iter().find(|window| window.contains(minute)) else {
+        return SessionStatus::Closed(ClosedReason::OutsideWindow);
+    };
+    let published_close = windows.last().map(|last| last.end_minute);
+    SessionStatus::Open {
+        minutes_since_open: minute - window.start_minute,
+        early_close: match (regular_close, published_close) {
+            (Some(regular), Some(published)) => published < regular,
+            _ => false,
+        },
+    }
+}
+
+/// Truncate `windows` at `close_minute`, dropping windows that start at or
+/// after it. This is how a published early close becomes an explicit session
+/// override for *any* venue, instead of assuming one venue's opening bell.
+///
+/// `None` when nothing survives — an "early close" at or before the day's first
+/// open is a closure, and the caller must say so rather than seal an empty
+/// session that would silently read as a normal day.
+pub fn shorten_windows(
+    windows: &[LocalSessionWindow],
+    close_minute: u32,
+) -> Option<Vec<LocalSessionWindow>> {
+    let shortened: Vec<_> = windows
+        .iter()
+        .filter(|window| window.start_minute < close_minute)
+        .map(|window| {
+            LocalSessionWindow::new(window.start_minute, window.end_minute.min(close_minute))
+        })
+        .collect();
+    (!shortened.is_empty()).then_some(shortened)
 }
 
 #[derive(serde::Deserialize)]
@@ -499,6 +649,42 @@ fn utc_from_nanos(utc_ns: i64) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 fn validate_spec(spec: &TradingCalendarSpec) -> Result<(), CalendarError> {
+    if spec.exceptions.len() > MAX_CALENDAR_EXCEPTIONS {
+        return Err(CalendarError::TooManyExceptions {
+            limit: MAX_CALENDAR_EXCEPTIONS,
+            found: spec.exceptions.len(),
+        });
+    }
+    // An exception set is only ever produced by materializing a source batch,
+    // so it must name the artifact it came from. Without that, a calendar could
+    // claim published closures with no provenance to check them against.
+    if spec.exceptions.is_empty() != spec.exception_artifact_id.is_none() {
+        return Err(CalendarError::MissingExceptionArtifactId);
+    }
+    if spec.exception_artifact_id.as_deref().is_some_and(|id| {
+        id.len() != 64
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() && b <= b'f')
+    }) {
+        return Err(CalendarError::MissingExceptionArtifactId);
+    }
+    for (index, exception) in spec.exceptions.iter().enumerate() {
+        if !is_bounded_identity(&exception.source_record_id)
+            || !is_bounded_identity(&exception.label)
+        {
+            return Err(CalendarError::InvalidException { index });
+        }
+        if let CalendarExceptionKind::SessionOverride { windows } = &exception.kind {
+            validate_exception_windows(windows, index)?;
+        }
+        if index > 0 && spec.exceptions[index - 1].local_date > exception.local_date {
+            return Err(CalendarError::ExceptionsOutOfOrder { index });
+        }
+        if index > 0 && spec.exceptions[index - 1].local_date == exception.local_date {
+            return Err(CalendarError::DuplicateExceptionDate { index });
+        }
+    }
     let SessionRule::LocalWindows {
         windows,
         early_close,
@@ -546,6 +732,34 @@ fn validate_spec(spec: &TradingCalendarSpec) -> Result<(), CalendarError> {
     Ok(())
 }
 
+/// Text that may be sealed into a calendar id: present, trimmed, printable and
+/// bounded. Unbounded operator text in a content-addressed artifact is how a
+/// config id becomes a place to hide a payload.
+fn is_bounded_identity(text: &str) -> bool {
+    !text.is_empty()
+        && text.trim() == text
+        && text.len() <= MAX_EXCEPTION_TEXT_BYTES
+        && !text.chars().any(char::is_control)
+}
+
+fn validate_exception_windows(
+    windows: &[LocalSessionWindow],
+    index: usize,
+) -> Result<(), CalendarError> {
+    if windows.is_empty() || windows.len() > MAX_SESSION_WINDOWS {
+        return Err(CalendarError::InvalidException { index });
+    }
+    for (window_index, window) in windows.iter().enumerate() {
+        if window.start_minute >= window.end_minute || window.end_minute > MINUTES_PER_DAY {
+            return Err(CalendarError::InvalidException { index });
+        }
+        if window_index > 0 && windows[window_index - 1].end_minute > window.start_minute {
+            return Err(CalendarError::InvalidException { index });
+        }
+    }
+    Ok(())
+}
+
 fn calendar_id(spec: &TradingCalendarSpec) -> String {
     use sha2::{Digest, Sha256};
 
@@ -572,6 +786,29 @@ fn calendar_id(spec: &TradingCalendarSpec) -> String {
         frame(early_close.wire_id().as_bytes());
         if let EarlyCloseRule::UsEquity { close_minute } = *early_close {
             frame(&close_minute.to_be_bytes());
+        }
+    }
+    frame(
+        spec.exception_artifact_id
+            .as_deref()
+            .unwrap_or("")
+            .as_bytes(),
+    );
+    frame(&(spec.exceptions.len() as u64).to_be_bytes());
+    for exception in &spec.exceptions {
+        frame(exception.local_date.to_string().as_bytes());
+        frame(exception.source_record_id.as_bytes());
+        frame(exception.label.as_bytes());
+        match &exception.kind {
+            CalendarExceptionKind::Closed => frame(b"closed"),
+            CalendarExceptionKind::SessionOverride { windows } => {
+                frame(b"session_override");
+                frame(&(windows.len() as u64).to_be_bytes());
+                for window in windows {
+                    frame(&window.start_minute.to_be_bytes());
+                    frame(&window.end_minute.to_be_bytes());
+                }
+            }
         }
     }
     let hash = hasher.finalize();

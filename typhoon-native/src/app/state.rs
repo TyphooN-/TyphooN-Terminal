@@ -856,6 +856,14 @@ pub struct TyphooNApp {
     /// Spawned lazily the first time the inspector opens, so a session that
     /// never opens it pays nothing.
     pub(crate) dataset_worker: Option<typhoon_engine::core::strategy_dataset_worker::DatasetWorker>,
+    /// Bounded view model for the reference-data panel — snapshot summaries and
+    /// artifact summaries only, never a decoded artifact (ADR-135 §6.7–§6.8).
+    pub(crate) reference_data: crate::app::reference_data_model::ReferenceDataState,
+    /// Background worker owning every reference-data read, verify and bind.
+    /// Spawned lazily with the inspector, so a session that never opens it pays
+    /// nothing.
+    pub(crate) reference_data_worker:
+        Option<typhoon_engine::core::strategy_reference_data_worker::ReferenceDataWorker>,
     pub(crate) show_screener: bool,
     pub(crate) screener_filter: String,
     pub(crate) screener_sort_col: usize,

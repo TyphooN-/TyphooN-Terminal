@@ -217,12 +217,16 @@ impl TyphooNApp {
         // closed still needs its reply consumed, or the worker parks on a full
         // event queue.
         self.pump_dataset_worker();
+        self.pump_reference_data_worker();
         self.pump_active_chart_materialization(ctx);
         if !self.show_dataset_inspector {
             return;
         }
         if self.dataset_worker.is_none() {
             self.start_dataset_worker();
+        }
+        if self.reference_data_worker.is_none() {
+            self.start_reference_data_worker();
         }
 
         let mut open = self.show_dataset_inspector;
@@ -263,6 +267,12 @@ impl TyphooNApp {
                 if !self.dataset_inspector.status.is_empty() {
                     ui.label(egui::RichText::new(&self.dataset_inspector.status).weak());
                 }
+                ui.separator();
+
+                // The reference-data half of the inspector (§6.7–§6.8): a
+                // collapsed section by default, so the bar table stays the
+                // window's subject and this costs nothing until opened.
+                self.draw_reference_data_panel(ui);
                 ui.separator();
 
                 ui.label(egui::RichText::new("Stored datasets").strong());

@@ -14,6 +14,7 @@ mod market_map;
 mod matrix_chat;
 mod news;
 mod reddit;
+mod reference_data_panel;
 mod research;
 mod risk_journal_windows;
 mod scope;

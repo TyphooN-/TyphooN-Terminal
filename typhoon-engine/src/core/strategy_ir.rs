@@ -90,8 +90,9 @@ pub use crate::core::strategy_fees::{
 /// execution config binds a calendar, a financing policy, a corporate-action
 /// schedule and an instrument registry by value.
 pub use crate::core::strategy_calendar::{
-    CalendarError, ClosedReason, EarlyCloseRule, ExchangeTimeZone, LocalSessionWindow, SessionRule,
-    SessionStatus, TradingCalendar, TradingCalendarSpec,
+    CalendarError, CalendarException, CalendarExceptionKind, ClosedReason, EarlyCloseRule,
+    ExchangeTimeZone, LocalSessionWindow, SessionRule, SessionStatus, TradingCalendar,
+    TradingCalendarSpec,
 };
 pub use crate::core::strategy_corporate::{
     CorporateAction, CorporateActionError, CorporateActionKind, CorporateActionSchedule,
@@ -120,7 +121,7 @@ pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 /// out-of-session order policy (§6.3, §6.7), the corporate-action schedule
 /// (§6.8), the currency-conversion table (§6.3), and sub-bar fidelity (§6.9).
 /// Every one of them changes what a run means, so none is a silent default.
-pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 3;
+pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 4;
 
 /// Wire-format version of [`StrategyRunManifest`]. v4 binds acknowledged
 /// repaint QA artifacts into run identity; v5 binds each immutable sub-bar
@@ -1624,10 +1625,21 @@ pub struct ExecutionSettings {
     /// Corporate actions applied as events at their effective time (§6.8).
     #[serde(default)]
     pub corporate_actions: CorporateActionSchedule,
+    /// Exact materialized reference-data artifacts used to populate the
+    /// executable values. Empty is explicit and never means "latest".
+    #[serde(default)]
+    pub reference_data: ReferenceDataBindings,
     /// How a non-account-currency instrument reaches the account currency
     /// (§6.3). `None` refuses such an instrument rather than assuming parity.
     #[serde(default)]
     pub currency_conversion: CurrencyConversion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceDataBindings {
+    pub calendar_artifact_ids: Vec<String>,
+    pub corporate_action_artifact_id: Option<String>,
 }
 
 const fn default_participation() -> ParticipationModel {
@@ -1662,6 +1674,7 @@ impl ExecutionSettings {
             instruments: InstrumentRegistry::empty(),
             outside_session: OutsideSessionPolicy::Queue,
             corporate_actions: CorporateActionSchedule::empty(),
+            reference_data: ReferenceDataBindings::default(),
             currency_conversion: CurrencyConversion::None,
         }
     }
@@ -1728,8 +1741,17 @@ impl StrategyExecutionConfig {
 
     /// Recompute the id from the current settings without comparing it.
     pub fn recompute_config_id(&self) -> Result<String, StrategyIrError> {
-        check_schema_version(ArtifactKind::ExecutionConfig, self.schema_version)?;
-        compute_config_id(&self.settings)
+        if !matches!(
+            self.schema_version,
+            3 | STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION
+        ) {
+            return Err(StrategyIrError::UnsupportedSchemaVersion {
+                artifact: ArtifactKind::ExecutionConfig,
+                found: self.schema_version,
+                supported: STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION,
+            });
+        }
+        compute_config_id_for_schema(&self.settings, self.schema_version)
     }
 
     /// Prove this config is the one that was sealed.
@@ -3119,10 +3141,17 @@ fn hash_timing(digest: &mut CanonicalDigest, timing: &ExecutionTiming) {
 /// The content-addressed config id: lowercase hex SHA-256 over the canonical
 /// encoding of fully validated execution settings.
 pub fn compute_config_id(settings: &ExecutionSettings) -> Result<String, StrategyIrError> {
-    validate_settings(settings)?;
+    compute_config_id_for_schema(settings, STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION)
+}
+
+fn compute_config_id_for_schema(
+    settings: &ExecutionSettings,
+    schema_version: u32,
+) -> Result<String, StrategyIrError> {
+    validate_settings(settings, schema_version)?;
 
     let mut digest = CanonicalDigest::new(CONFIG_ID_DOMAIN);
-    digest.tagged_u32("schema_version", STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION);
+    digest.tagged_u32("schema_version", schema_version);
     digest.tagged_f64("initial_capital", settings.initial_capital);
     digest.tagged_text("account_currency", &settings.account_currency);
 
@@ -3202,6 +3231,25 @@ pub fn compute_config_id(settings: &ExecutionSettings) -> Result<String, Strateg
     digest.tagged_text("outside_session", settings.outside_session.wire_tag());
     digest_instruments(&mut digest, &settings.instruments);
     digest_corporate_actions(&mut digest, &settings.corporate_actions);
+    if schema_version >= 4 {
+        digest.begin_seq(
+            "reference_data.calendars",
+            settings.reference_data.calendar_artifact_ids.len(),
+        );
+        for id in &settings.reference_data.calendar_artifact_ids {
+            digest.tagged_text("reference_data.calendar_id", id);
+        }
+        digest.begin_option(
+            "reference_data.corporate_actions",
+            settings
+                .reference_data
+                .corporate_action_artifact_id
+                .is_some(),
+        );
+        if let Some(id) = &settings.reference_data.corporate_action_artifact_id {
+            digest.tagged_text("reference_data.corporate_action_id", id);
+        }
+    }
     digest_currency_conversion(&mut digest, &settings.currency_conversion);
     Ok(digest.finish_hex())
 }
@@ -3356,7 +3404,10 @@ fn digest_fee_binding(digest: &mut CanonicalDigest, binding: &FeeScheduleBinding
     digest.tagged_text("fee.liquidity", binding.liquidity().wire_id());
 }
 
-fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError> {
+fn validate_settings(
+    settings: &ExecutionSettings,
+    schema_version: u32,
+) -> Result<(), StrategyIrError> {
     check_finite_in(
         "settings.initial_capital",
         settings.initial_capital,
@@ -3497,11 +3548,14 @@ fn validate_settings(settings: &ExecutionSettings) -> Result<(), StrategyIrError
             });
         }
     }
-    validate_realism(settings)
+    validate_realism(settings, schema_version)
 }
 
 /// The M2 execution-realism half of settings validation (§6.3, §6.6–§6.9).
-fn validate_realism(settings: &ExecutionSettings) -> Result<(), StrategyIrError> {
+fn validate_realism(
+    settings: &ExecutionSettings,
+    schema_version: u32,
+) -> Result<(), StrategyIrError> {
     if let FidelityLevel::SubBar { sub_bar_seconds } = settings.fidelity
         && (sub_bar_seconds == 0 || sub_bar_seconds > MAX_SUB_BAR_SECONDS)
     {
@@ -3536,6 +3590,74 @@ fn validate_realism(settings: &ExecutionSettings) -> Result<(), StrategyIrError>
         .corporate_actions
         .validate()
         .map_err(StrategyIrError::InvalidCorporateAction)?;
+    validate_reference_data(settings, schema_version)
+}
+
+/// Reference-data bindings are a v4 field (§6.7–§6.8). A v3 artifact predates
+/// them, so it must not carry any — otherwise settings that *do* bind artifacts
+/// could be relabelled v3 and sealed under an id that excludes the bindings.
+fn validate_reference_data(
+    settings: &ExecutionSettings,
+    schema_version: u32,
+) -> Result<(), StrategyIrError> {
+    let bindings = &settings.reference_data;
+    if schema_version < 4 {
+        return if bindings == &ReferenceDataBindings::default() {
+            Ok(())
+        } else {
+            Err(StrategyIrError::InconsistentExecution {
+                detail: "reference-data bindings require execution-config schema v4 or later",
+            })
+        };
+    }
+    if !bindings
+        .calendar_artifact_ids
+        .windows(2)
+        .all(|ids| ids[0] < ids[1])
+    {
+        return Err(StrategyIrError::InconsistentExecution {
+            detail: "reference calendar artifact ids must be unique and sorted",
+        });
+    }
+    for id in &bindings.calendar_artifact_ids {
+        check_digest_id("settings.reference_data.calendar_artifact_id", id)?;
+    }
+    // A calendar binding is a claim that some instrument's calendar was
+    // materialized from that artifact, and a materialized calendar carries the
+    // artifact id that sealed its exceptions. The two sets must agree exactly:
+    // a listed id no instrument carries is provenance for nothing, and an
+    // instrument calendar sealed from an unlisted artifact would hide which
+    // reference data the run actually ran on.
+    let carried: BTreeSet<&str> = settings
+        .instruments
+        .specs()
+        .iter()
+        .filter_map(|spec| spec.calendar.as_ref())
+        .filter_map(|calendar| calendar.spec().exception_artifact_id.as_deref())
+        .collect();
+    let bound: BTreeSet<&str> = bindings
+        .calendar_artifact_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if carried != bound {
+        return Err(StrategyIrError::InconsistentExecution {
+            detail: "every bound reference calendar artifact must be the one an instrument \
+                     calendar was materialized from, and vice versa",
+        });
+    }
+    // A binding is a claim that this schedule was materialized from that
+    // artifact. Claiming one over an empty schedule is a false provenance
+    // claim. The reverse — a hand-declared schedule with no artifact — is
+    // honest: it says "operator-declared", which is what v3 configs mean.
+    if let Some(id) = &bindings.corporate_action_artifact_id {
+        check_digest_id("settings.reference_data.corporate_action_artifact_id", id)?;
+        if settings.corporate_actions.is_empty() {
+            return Err(StrategyIrError::InconsistentExecution {
+                detail: "a corporate-action artifact binding requires a non-empty schedule",
+            });
+        }
+    }
     Ok(())
 }
 

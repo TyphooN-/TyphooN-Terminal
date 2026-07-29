@@ -105,3 +105,12 @@ pub fn cache_db_path() -> PathBuf {
 pub fn strategy_dataset_dir() -> PathBuf {
     cache_dir().join("strategy_datasets")
 }
+
+/// Root of the content-addressed reference-data artifact store (ADR-135 §6.7,
+/// §6.8) — sealed calendar-exception and corporate-action artifacts.
+///
+/// Beside the dataset store for the same reason: these are bulk research
+/// artifacts that should follow the NAS/large-drive redirect the cache honours.
+pub fn strategy_reference_data_dir() -> PathBuf {
+    cache_dir().join("strategy_reference_data")
+}

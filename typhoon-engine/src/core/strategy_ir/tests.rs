@@ -374,12 +374,153 @@ fn current_schema_identity_vectors_are_stable() {
     );
     assert_eq!(
         config_id_of(&settings()),
-        "cc27d29b253c9fd0b5cd7d8c8294021b76dd8a97083fc60c1128f32eaba09ce8"
+        "f2429d00719ea374d47fed5ee56c8ff09dda9ff332eed27db31ccbc362eebbcf"
     );
     assert_eq!(
         run_id_of(&binding_with_sub_bars()),
         "47a73220ca10948c2bd86b96f7b0c309b74b1ad77fe70d596e35f8d6919a6c85"
     );
+}
+
+/// A v3 execution config sealed before reference-data bindings existed must
+/// still load, verify, and keep the id it was sealed under.
+///
+/// The vector is the one the v3 build produced for [`settings`]. Reference-data
+/// bindings are hashed only from v4 onwards, so a config that binds nothing
+/// digests exactly as it did before the field existed — that is what makes the
+/// schema bump a compatible extension rather than a silent reinterpretation.
+#[test]
+fn v3_execution_configs_keep_their_sealed_identity() {
+    const V3_CONFIG_ID: &str = "cc27d29b253c9fd0b5cd7d8c8294021b76dd8a97083fc60c1128f32eaba09ce8";
+
+    let v3 = serde_json::json!({
+        "schema_version": 3,
+        "settings": settings(),
+        "config_id": V3_CONFIG_ID,
+    });
+    // The v3 field set is a strict subset of v4's, so a v3 artifact that
+    // predates `reference_data` is exactly a v4 artifact that binds nothing.
+    let loaded = StrategyExecutionConfig::from_json_slice(v3.to_string().as_bytes())
+        .expect("a sealed v3 config still loads");
+    assert_eq!(loaded.schema_version(), 3);
+    assert_eq!(loaded.config_id(), V3_CONFIG_ID);
+    assert_eq!(
+        loaded.recompute_config_id().expect("recomputes"),
+        V3_CONFIG_ID
+    );
+    loaded.verify().expect("a v3 config still verifies");
+    assert_eq!(
+        loaded.settings().reference_data,
+        ReferenceDataBindings::default()
+    );
+
+    // The same settings sealed today are v4 and carry a different id: the
+    // schema version is hashed, so the two eras can never be confused.
+    assert_ne!(config_id_of(&settings()), V3_CONFIG_ID);
+}
+
+/// Settings whose instrument calendar was materialized from a reference
+/// artifact, with that artifact listed in the v4 bindings. Not a *sealed*
+/// artifact — this module tests the config boundary, and what it needs is a
+/// calendar that carries a well-formed artifact id.
+fn settings_bound_to_a_reference_calendar(artifact_id: &str) -> ExecutionSettings {
+    let spec = TradingCalendarSpec {
+        exceptions: vec![CalendarException {
+            local_date: chrono::NaiveDate::from_ymd_opt(2024, 12, 25).expect("a real date"),
+            source_record_id: "christmas-2024".to_string(),
+            label: "Christmas Day".to_string(),
+            kind: CalendarExceptionKind::Closed,
+        }],
+        exception_artifact_id: Some(artifact_id.to_string()),
+        ..TradingCalendarSpec::us_equity_regular()
+    };
+    let mut settings = settings();
+    let currency = settings.account_currency.clone();
+    settings.instruments = InstrumentRegistry::build(&[InstrumentSpec {
+        symbol: "AAA".to_string(),
+        currency,
+        calendar: Some(TradingCalendar::build(&spec).expect("a materialized calendar")),
+        financing: FinancingModel::None,
+        price_tick: None,
+    }])
+    .expect("one instrument");
+    settings.reference_data = ReferenceDataBindings {
+        calendar_artifact_ids: vec![artifact_id.to_string()],
+        corporate_action_artifact_id: None,
+    };
+    settings
+}
+
+/// A calendar binding is a provenance claim about an instrument's calendar. An
+/// id no instrument carries, or a materialized calendar the bindings omit, is a
+/// claim with nothing behind it and is refused rather than sealed.
+#[test]
+fn reference_calendar_bindings_must_match_the_instrument_calendars() {
+    let artifact_id = hex_id('a');
+    let matched = settings_bound_to_a_reference_calendar(&artifact_id);
+    StrategyExecutionConfig::build(&matched).expect("a matched binding seals");
+
+    let mut unbacked = settings();
+    unbacked.reference_data = ReferenceDataBindings {
+        calendar_artifact_ids: vec![artifact_id.clone()],
+        corporate_action_artifact_id: None,
+    };
+    assert!(
+        StrategyExecutionConfig::build(&unbacked).is_err(),
+        "an artifact id no instrument calendar carries is provenance for nothing"
+    );
+
+    let mut unlisted = matched.clone();
+    unlisted.reference_data = ReferenceDataBindings::default();
+    assert!(
+        StrategyExecutionConfig::build(&unlisted).is_err(),
+        "a materialized instrument calendar must be named in the bindings"
+    );
+
+    let mut mismatched = matched;
+    mismatched.reference_data = ReferenceDataBindings {
+        calendar_artifact_ids: vec![hex_id('b')],
+        corporate_action_artifact_id: None,
+    };
+    assert!(
+        StrategyExecutionConfig::build(&mismatched).is_err(),
+        "a binding must name the artifact the calendar was actually sealed from"
+    );
+}
+
+/// v3 predates reference-data bindings, so a v3 artifact may not carry any.
+/// Otherwise settings that *do* bind artifacts could be relabelled v3 and
+/// sealed under an id that excludes the bindings.
+#[test]
+fn a_v3_config_may_not_carry_reference_data_bindings() {
+    let settings = settings_bound_to_a_reference_calendar(&hex_id('a'));
+    let bound = StrategyExecutionConfig::build(&settings).expect("v4 accepts the binding");
+    let relabelled = serde_json::json!({
+        "schema_version": 3,
+        "settings": settings,
+        "config_id": bound.config_id(),
+    });
+    assert!(
+        StrategyExecutionConfig::from_json_slice(relabelled.to_string().as_bytes()).is_err(),
+        "a v3 artifact must not be able to carry v4 reference-data bindings"
+    );
+}
+
+/// Schema versions this build reads. A version it never sealed is refused
+/// rather than recomputed under today's rules.
+#[test]
+fn unknown_execution_config_schema_versions_are_refused() {
+    for version in [0, 1, 2, 5] {
+        let artifact = serde_json::json!({
+            "schema_version": version,
+            "settings": settings(),
+            "config_id": "0".repeat(64),
+        });
+        assert!(
+            StrategyExecutionConfig::from_json_slice(artifact.to_string().as_bytes()).is_err(),
+            "schema version {version} must not load"
+        );
+    }
 }
 
 #[test]
@@ -3801,8 +3942,8 @@ fn every_fee_schedule_choice_changes_the_config_id() {
 #[test]
 fn the_execution_config_schema_version_records_the_realism_fields() {
     assert_eq!(
-        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, 3,
-        "adding execution-realism fields is a schema change, not a silent reinterpretation"
+        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, 4,
+        "binding materialized reference-data artifacts is a schema change, not a silent reinterpretation"
     );
 }
 

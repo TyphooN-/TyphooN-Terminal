@@ -165,7 +165,11 @@ impl CorporateActionKind {
     /// Ordering rank inside one `(time, symbol)`, so two actions at the same
     /// instant have exactly one legal order. A split resizes the position a
     /// dividend then pays on, and a delisting is always last.
-    const fn order_rank(&self) -> u8 {
+    ///
+    /// Public because reference-data materialization sorts its *source* records
+    /// into this same order, so that an artifact's record-to-action pairing is
+    /// the real one rather than two independently sorted lists zipped together.
+    pub const fn order_rank(&self) -> u8 {
         match self {
             Self::Split { .. } => 0,
             Self::CashDividend { .. } => 1,

@@ -102,6 +102,7 @@ mod market_data_sync;
 mod market_map_model;
 mod news_auto_scrape;
 mod platform;
+mod reference_data_model;
 mod remote_image_loader;
 #[cfg(test)]
 mod remote_image_loader_tests;
@@ -542,6 +543,8 @@ impl TyphooNApp {
             show_dataset_inspector: false,
             dataset_inspector: dataset_inspector_model::DatasetInspectorState::new(),
             dataset_worker: None,
+            reference_data: reference_data_model::ReferenceDataState::new(),
+            reference_data_worker: None,
             show_screener: false,
             screener_filter: String::new(),
             screener_sort_col: 3,
