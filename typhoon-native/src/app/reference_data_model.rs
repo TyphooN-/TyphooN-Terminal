@@ -34,7 +34,13 @@ pub(crate) enum ReferenceSelectionSlot {
 pub(crate) struct ReferenceSelection {
     pub(crate) config_id: String,
     pub(crate) calendar_artifact_id: String,
+    /// The corporate-action artifact this selection added.
     pub(crate) corporate_action_artifact_id: String,
+    /// Every corporate-action artifact the prepared config binds. One artifact
+    /// speaks for one symbol, so binding a second instrument extends this list
+    /// rather than replacing it, and the panel shows the whole set instead of
+    /// implying the last selection is all the run carries.
+    pub(crate) bound_corporate_action_artifact_ids: Vec<String>,
     /// Whether *both* bound artifacts clear exchange/vendor authority.
     pub(crate) authoritative: bool,
 }
@@ -258,6 +264,7 @@ impl ReferenceDataState {
                 settings,
                 calendar_artifact_id,
                 corporate_action_artifact_id,
+                bound_corporate_action_artifact_ids,
                 authoritative,
             } => {
                 if !self.is_current(request_id) {
@@ -265,8 +272,10 @@ impl ReferenceDataState {
                 }
                 self.pending = None;
                 self.status = format!(
-                    "Prepared execution config {} from verified artifacts{}.",
+                    "Prepared execution config {} from verified artifacts ({} \
+                     corporate-action artifact(s) bound){}.",
                     short_id(&config_id),
+                    bound_corporate_action_artifact_ids.len(),
                     if authoritative {
                         ""
                     } else {
@@ -278,6 +287,7 @@ impl ReferenceDataState {
                     config_id,
                     calendar_artifact_id,
                     corporate_action_artifact_id,
+                    bound_corporate_action_artifact_ids,
                     authoritative,
                 });
             }

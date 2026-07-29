@@ -114,7 +114,7 @@
 //! that no longer exists. None of these is a silent drop.
 
 use crate::core::strategy_calendar::{SessionStatus, TradingCalendar};
-use crate::core::strategy_corporate::{CorporateAction, CorporateActionKind};
+use crate::core::strategy_corporate::{CorporateAction, CorporateActionKind, FractionalUnitPolicy};
 use crate::core::strategy_financing::{AccrualBreakdown, FinancingCharge, FinancingPolicy, accrue};
 use crate::core::strategy_interpreter::{CanonicalIrStrategy, InterpreterError};
 use crate::core::strategy_intervention::{HybridReplay, InterventionError, InterventionLog};
@@ -924,6 +924,16 @@ pub enum SimulationError {
     SymbolChangeMismatch {
         symbol: String,
     },
+    /// A split left a fractional unit under a policy that refuses to model one.
+    FractionalUnitsRefused {
+        symbol: String,
+        units: f64,
+    },
+    /// Cash in lieu was declared, but the split fell before any bar of the
+    /// symbol had closed, so the declared price rule has no price to read.
+    CashInLieuWithoutMark {
+        symbol: String,
+    },
     /// A position would accrue a charge whose rate the policy calls
     /// unavailable. The run fails rather than accruing zero (§6.3, §14).
     FinancingRateUnavailable {
@@ -1059,6 +1069,15 @@ impl fmt::Display for SimulationError {
             Self::SymbolChangeMismatch { symbol } => {
                 write!(f, "symbol change for `{symbol}` does not match its stream")
             }
+            Self::FractionalUnitsRefused { symbol, units } => write!(
+                f,
+                "a split left `{symbol}` holding {units} units and the run refuses \
+                 fractional remainders"
+            ),
+            Self::CashInLieuWithoutMark { symbol } => write!(
+                f,
+                "cash in lieu for `{symbol}` has no committed mark to price the fraction at"
+            ),
             Self::FinancingRateUnavailable { symbol, charge } => write!(
                 f,
                 "symbol `{symbol}` holds exposure needing a `{charge}` rate the policy calls unavailable"
@@ -3374,6 +3393,7 @@ fn apply_corporate_action(
                 sim.marks[symbol] = Some(stable_decimal(mark * price_factor));
             }
             cancelled = cancel_symbol_orders(sim, symbol, time_ns)?;
+            cash_delta = settle_fractional_units(sim, symbol, &action.symbol, time_ns)?;
         }
         CorporateActionKind::CashDividend { amount_per_unit } => {
             // Longs receive, shorts pay. The sign falls straight out of the
@@ -3442,6 +3462,67 @@ fn apply_corporate_action(
         orders_cancelled: cancelled,
     });
     Ok(())
+}
+
+/// Apply the run's fractional-remainder policy to a just-split position (§6.8).
+///
+/// Returns the cash the settlement moved, which is zero for every policy but
+/// `CashInLieu` and for a position that split into whole units anyway.
+///
+/// The price is the *post-split* mark, because the caller has already adjusted
+/// it: a fraction of a share is worth a fraction of what the share is worth now.
+/// Like a delisting cash-out, this is not a trade — no venue charges a spread,
+/// slippage or commission to settle a fraction it created — so modelling one
+/// would invent a cost.
+fn settle_fractional_units(
+    sim: &mut Sim<'_>,
+    symbol: usize,
+    symbol_name: &str,
+    time_ns: i64,
+) -> Result<f64, SimulationError> {
+    let policy = sim.config.settings().fractional_units.clone();
+    if matches!(policy, FractionalUnitPolicy::KeepFraction) {
+        return Ok(0.0);
+    }
+    let units = sim.positions[symbol].units;
+    let (whole, fraction) = CorporateAction::whole_and_fractional_units(units);
+    if fraction == 0.0 {
+        return Ok(0.0);
+    }
+    let FractionalUnitPolicy::CashInLieu { .. } = policy else {
+        return Err(SimulationError::FractionalUnitsRefused {
+            symbol: symbol_name.to_string(),
+            units,
+        });
+    };
+    // The declared rule is "the last committed mark". Without one there is no
+    // price at all, and a run that asked for cash in lieu does not get a
+    // silent zero instead.
+    let Some(mark) = sim.marks[symbol] else {
+        return Err(SimulationError::CashInLieuWithoutMark {
+            symbol: symbol_name.to_string(),
+        });
+    };
+    let rate = sim.conversion_rate(symbol);
+    let realized = apply_fill(
+        &mut sim.positions[symbol],
+        if fraction > 0.0 {
+            OrderSide::Sell
+        } else {
+            OrderSide::Buy
+        },
+        fraction.abs(),
+        mark,
+        time_ns,
+        rate,
+    );
+    // `apply_fill` walks the position down by exactly `fraction`, so this is a
+    // restatement of the whole part rather than a second, rounding write.
+    sim.positions[symbol].units = whole;
+    let cash_delta = stable_decimal(fraction * mark * rate);
+    sim.cash = finite_accounting("cash", stable_decimal(sim.cash + cash_delta))?;
+    sim.realized_pnl_account = stable_decimal(sim.realized_pnl_account + realized);
+    Ok(cash_delta)
 }
 
 fn cancel_symbol_orders(

@@ -374,7 +374,7 @@ fn current_schema_identity_vectors_are_stable() {
     );
     assert_eq!(
         config_id_of(&settings()),
-        "f2429d00719ea374d47fed5ee56c8ff09dda9ff332eed27db31ccbc362eebbcf"
+        "aa195d8d0666198a4748d5b286c2aaf441b97af72114b4372287b2b968ca1de7"
     );
     assert_eq!(
         run_id_of(&binding_with_sub_bars()),
@@ -446,7 +446,7 @@ fn settings_bound_to_a_reference_calendar(artifact_id: &str) -> ExecutionSetting
     .expect("one instrument");
     settings.reference_data = ReferenceDataBindings {
         calendar_artifact_ids: vec![artifact_id.to_string()],
-        corporate_action_artifact_id: None,
+        corporate_action_artifact_ids: Vec::new(),
     };
     settings
 }
@@ -463,7 +463,7 @@ fn reference_calendar_bindings_must_match_the_instrument_calendars() {
     let mut unbacked = settings();
     unbacked.reference_data = ReferenceDataBindings {
         calendar_artifact_ids: vec![artifact_id.clone()],
-        corporate_action_artifact_id: None,
+        corporate_action_artifact_ids: Vec::new(),
     };
     assert!(
         StrategyExecutionConfig::build(&unbacked).is_err(),
@@ -480,7 +480,7 @@ fn reference_calendar_bindings_must_match_the_instrument_calendars() {
     let mut mismatched = matched;
     mismatched.reference_data = ReferenceDataBindings {
         calendar_artifact_ids: vec![hex_id('b')],
-        corporate_action_artifact_id: None,
+        corporate_action_artifact_ids: Vec::new(),
     };
     assert!(
         StrategyExecutionConfig::build(&mismatched).is_err(),
@@ -494,7 +494,7 @@ fn reference_calendar_bindings_must_match_the_instrument_calendars() {
 #[test]
 fn a_v3_config_may_not_carry_reference_data_bindings() {
     let settings = settings_bound_to_a_reference_calendar(&hex_id('a'));
-    let bound = StrategyExecutionConfig::build(&settings).expect("v4 accepts the binding");
+    let bound = StrategyExecutionConfig::build(&settings).expect("current schema accepts binding");
     let relabelled = serde_json::json!({
         "schema_version": 3,
         "settings": settings,
@@ -502,15 +502,248 @@ fn a_v3_config_may_not_carry_reference_data_bindings() {
     });
     assert!(
         StrategyExecutionConfig::from_json_slice(relabelled.to_string().as_bytes()).is_err(),
-        "a v3 artifact must not be able to carry v4 reference-data bindings"
+        "a v3 artifact must not be able to carry later reference-data bindings"
     );
+}
+
+/// A v4 execution config sealed before multi-symbol corporate-action bindings
+/// and the fractional-remainder policy existed must still load, verify, and keep
+/// the id it was sealed under.
+///
+/// The vector is the one the v4 build produced for [`settings`]. Both v5
+/// additions are hashed only from v5 onwards, and v4's single optional
+/// corporate-action binding is still framed as an option, so a v4 artifact
+/// digests exactly as it did before either field existed.
+#[test]
+fn v4_execution_configs_keep_their_sealed_identity() {
+    const V4_CONFIG_ID: &str = "f2429d00719ea374d47fed5ee56c8ff09dda9ff332eed27db31ccbc362eebbcf";
+
+    let v4 = serde_json::json!({
+        "schema_version": 4,
+        "settings": settings(),
+        "config_id": V4_CONFIG_ID,
+    });
+    let loaded = StrategyExecutionConfig::from_json_slice(v4.to_string().as_bytes())
+        .expect("a sealed v4 config still loads");
+    assert_eq!(loaded.schema_version(), 4);
+    assert_eq!(loaded.config_id(), V4_CONFIG_ID);
+    assert_eq!(
+        loaded.recompute_config_id().expect("recomputes"),
+        V4_CONFIG_ID
+    );
+    loaded.verify().expect("a v4 config still verifies");
+    assert_eq!(
+        loaded.settings().fractional_units,
+        FractionalUnitPolicy::KeepFraction
+    );
+
+    // The same settings sealed today are v5 and carry a different id: the
+    // schema version is hashed, so the two eras can never be confused.
+    assert_ne!(config_id_of(&settings()), V4_CONFIG_ID);
+}
+
+/// v4 spelled one corporate-action binding as a single optional id and v5 spells
+/// the set as a list. Both decode into the one in-memory shape; carrying both at
+/// once is a contradiction and is refused rather than resolved by precedence.
+#[test]
+fn both_corporate_action_binding_spellings_decode_and_never_together() {
+    let id = hex_id('c');
+    let single: ReferenceDataBindings = serde_json::from_value(serde_json::json!({
+        "calendar_artifact_ids": [],
+        "corporate_action_artifact_id": id,
+    }))
+    .expect("the v4 spelling decodes");
+    let many: ReferenceDataBindings = serde_json::from_value(serde_json::json!({
+        "calendar_artifact_ids": [],
+        "corporate_action_artifact_ids": [id.clone()],
+    }))
+    .expect("the v5 spelling decodes");
+    assert_eq!(single, many);
+    assert_eq!(single.corporate_action_artifact_ids, vec![id.clone()]);
+
+    let both = serde_json::from_value::<ReferenceDataBindings>(serde_json::json!({
+        "calendar_artifact_ids": [],
+        "corporate_action_artifact_id": id,
+        "corporate_action_artifact_ids": [hex_id('d')],
+    }));
+    assert!(
+        both.is_err(),
+        "two spellings of one field is a contradiction"
+    );
+}
+
+/// Settings carrying one split per named symbol plus the artifact ids they claim
+/// to have been materialized from.
+fn settings_bound_to_corporate_artifacts(symbols: &[(&str, &str)]) -> ExecutionSettings {
+    let actions: Vec<CorporateAction> = symbols
+        .iter()
+        .enumerate()
+        .map(|(index, (symbol, _))| CorporateAction {
+            symbol: (*symbol).to_string(),
+            effective_time_ns: 1_700_000_000_000_000_000 + index as i64,
+            kind: CorporateActionKind::Split {
+                numerator: 2,
+                denominator: 1,
+            },
+        })
+        .collect();
+    let mut ids: Vec<String> = symbols.iter().map(|(_, id)| (*id).to_string()).collect();
+    ids.sort();
+    ExecutionSettings {
+        corporate_actions: CorporateActionSchedule::build(&actions).expect("a valid schedule"),
+        reference_data: ReferenceDataBindings {
+            calendar_artifact_ids: Vec::new(),
+            corporate_action_artifact_ids: ids,
+        },
+        ..settings()
+    }
+}
+
+/// One artifact speaks for one symbol and contributes at least one of its
+/// events, so a config may not bind more artifacts than its schedule has
+/// symbols: the surplus binding would be provenance for nothing.
+#[test]
+fn multi_symbol_corporate_action_bindings_must_each_contribute_a_symbol() {
+    let two =
+        settings_bound_to_corporate_artifacts(&[("AAA", &hex_id('a')), ("BBB", &hex_id('b'))]);
+    let sealed = StrategyExecutionConfig::build(&two).expect("two symbols, two artifacts");
+    assert_eq!(
+        sealed
+            .settings()
+            .reference_data
+            .corporate_action_artifact_ids
+            .len(),
+        2
+    );
+
+    let mut surplus = two.clone();
+    surplus
+        .reference_data
+        .corporate_action_artifact_ids
+        .push(hex_id('e'));
+    assert!(
+        StrategyExecutionConfig::build(&surplus).is_err(),
+        "a third artifact with no third symbol behind it is a false provenance claim"
+    );
+
+    let mut unsorted = two.clone();
+    unsorted
+        .reference_data
+        .corporate_action_artifact_ids
+        .reverse();
+    assert!(
+        StrategyExecutionConfig::build(&unsorted).is_err(),
+        "the binding set is sorted, so bind order cannot change a config id"
+    );
+
+    let mut duplicated = two;
+    duplicated.reference_data.corporate_action_artifact_ids = vec![hex_id('a'), hex_id('a')];
+    assert!(
+        StrategyExecutionConfig::build(&duplicated).is_err(),
+        "one artifact listed twice is not two artifacts"
+    );
+}
+
+/// v4 could bind exactly one corporate-action artifact and knew nothing about
+/// fractional remainders. A v4 artifact carrying either v5 addition would be
+/// sealed under an id that does not cover it.
+#[test]
+fn a_v4_config_may_not_carry_v5_only_content() {
+    let two =
+        settings_bound_to_corporate_artifacts(&[("AAA", &hex_id('a')), ("BBB", &hex_id('b'))]);
+    let sealed = StrategyExecutionConfig::build(&two).expect("v5 accepts two bindings");
+    let relabelled = serde_json::json!({
+        "schema_version": 4,
+        "settings": two,
+        "config_id": sealed.config_id(),
+    });
+    assert!(
+        StrategyExecutionConfig::from_json_slice(relabelled.to_string().as_bytes()).is_err(),
+        "a v4 artifact must not be able to bind a second corporate-action artifact"
+    );
+
+    let settled = ExecutionSettings {
+        fractional_units: cash_in_lieu_policy(),
+        ..settings()
+    };
+    let sealed = StrategyExecutionConfig::build(&settled).expect("v5 accepts the policy");
+    let relabelled = serde_json::json!({
+        "schema_version": 4,
+        "settings": settled,
+        "config_id": sealed.config_id(),
+    });
+    assert!(
+        StrategyExecutionConfig::from_json_slice(relabelled.to_string().as_bytes()).is_err(),
+        "a v4 artifact must not be able to carry a fractional-remainder policy"
+    );
+}
+
+fn cash_in_lieu_policy() -> FractionalUnitPolicy {
+    FractionalUnitPolicy::CashInLieu {
+        pricing: CashInLieuPricing::LastCommittedMarkAssumption {
+            note: "operator assumption: no venue publishes fractional-share proceeds".to_string(),
+        },
+    }
+}
+
+/// The policy and the words the operator stated it in are both hashed. Two runs
+/// that settled fractions on different declared grounds are two runs, and a
+/// policy that failed validation never reaches an id at all.
+#[test]
+fn the_fractional_remainder_policy_is_sealed_into_the_config_id() {
+    let baseline = config_id_of(&settings());
+    let keep = ExecutionSettings {
+        fractional_units: FractionalUnitPolicy::KeepFraction,
+        ..settings()
+    };
+    assert_eq!(
+        config_id_of(&keep),
+        baseline,
+        "the default policy is what every earlier run already did"
+    );
+
+    let mut ids = BTreeSet::from([baseline]);
+    for policy in [
+        FractionalUnitPolicy::Refuse,
+        cash_in_lieu_policy(),
+        FractionalUnitPolicy::CashInLieu {
+            pricing: CashInLieuPricing::LastCommittedMarkAssumption {
+                note: "a different stated ground".to_string(),
+            },
+        },
+    ] {
+        let settings = ExecutionSettings {
+            fractional_units: policy,
+            ..settings()
+        };
+        assert!(
+            ids.insert(config_id_of(&settings)),
+            "a distinguishable policy must produce a distinguishable id"
+        );
+    }
+    assert_eq!(ids.len(), 4);
+
+    for note in ["", " padded ", "over\nline"] {
+        let settings = ExecutionSettings {
+            fractional_units: FractionalUnitPolicy::CashInLieu {
+                pricing: CashInLieuPricing::LastCommittedMarkAssumption {
+                    note: note.to_string(),
+                },
+            },
+            ..settings()
+        };
+        assert!(
+            StrategyExecutionConfig::build(&settings).is_err(),
+            "an unstatable assumption note ({note:?}) must not seal"
+        );
+    }
 }
 
 /// Schema versions this build reads. A version it never sealed is refused
 /// rather than recomputed under today's rules.
 #[test]
 fn unknown_execution_config_schema_versions_are_refused() {
-    for version in [0, 1, 2, 5] {
+    for version in [0, 1, 2, 6] {
         let artifact = serde_json::json!({
             "schema_version": version,
             "settings": settings(),
@@ -3942,8 +4175,9 @@ fn every_fee_schedule_choice_changes_the_config_id() {
 #[test]
 fn the_execution_config_schema_version_records_the_realism_fields() {
     assert_eq!(
-        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, 4,
-        "binding materialized reference-data artifacts is a schema change, not a silent reinterpretation"
+        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, 5,
+        "binding a corporate-action artifact per symbol and sealing the fractional-remainder \
+         policy are schema changes, not silent reinterpretations"
     );
 }
 

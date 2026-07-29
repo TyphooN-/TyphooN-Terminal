@@ -359,15 +359,15 @@ fn materializing_then_selecting_seals_a_config_and_labels_its_authority() {
         vec![calendar_id]
     );
     assert_eq!(
-        settings
-            .reference_data
-            .corporate_action_artifact_id
-            .as_deref(),
-        Some(actions_id.as_str())
+        settings.reference_data.corporate_action_artifact_ids,
+        vec![actions_id.clone()]
     );
     let rebuilt = StrategyExecutionConfig::build(&settings).expect("rebuilds");
     assert_eq!(rebuilt.config_id(), config_id);
-    assert_eq!(rebuilt.schema_version(), 4);
+    assert_eq!(
+        rebuilt.schema_version(),
+        crate::core::strategy_ir::STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION
+    );
 }
 
 /// A listing bounded below the store's size says how many artifacts it is not

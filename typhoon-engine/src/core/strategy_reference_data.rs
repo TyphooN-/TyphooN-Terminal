@@ -1406,10 +1406,18 @@ fn decode_bounded<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T, Re
 
 /// Bind verified artifacts into execution settings for one instrument.
 ///
-/// The calendar becomes the instrument's calendar, the schedule becomes the
-/// run's corporate actions, and both artifact ids are recorded so the config id
+/// The calendar becomes the instrument's calendar, the schedule joins the run's
+/// corporate actions, and both artifact ids are recorded so the config id
 /// changes when the reference data does. Nothing here defaults: an unverifiable
 /// artifact is an error, not a quiet fall back to the rule-only calendar.
+///
+/// Binding is **cumulative across symbols**. One artifact speaks for one symbol,
+/// so a multi-symbol run calls this once per instrument and each call merges
+/// that symbol's schedule into the config it is building. What is refused is a
+/// *second, different* artifact for a symbol some earlier call already spoke
+/// for: replacing it would silently discard the first artifact's events while
+/// still claiming its provenance, and there is no way to tell which of the two
+/// disagreeing sources a report should name.
 pub fn bind_reference_artifacts(
     settings: &ExecutionSettings,
     symbol: &str,
@@ -1428,18 +1436,21 @@ pub fn bind_reference_artifacts(
             source_record_id: symbol.into(),
         });
     }
-    // One config carries one corporate-action schedule. Binding a second,
-    // different artifact would silently drop the first symbol's events, so it is
-    // refused; multi-symbol schedules remain an M2 remainder.
-    if settings
+    let already_bound = settings
         .reference_data
-        .corporate_action_artifact_id
-        .as_deref()
-        .is_some_and(|bound| bound != actions.artifact_id())
+        .corporate_action_artifact_ids
+        .iter()
+        .any(|bound| bound == actions.artifact_id());
+    if !already_bound
+        && settings
+            .corporate_actions
+            .for_symbol(symbol)
+            .next()
+            .is_some()
     {
-        return Err(ReferenceDataError::Config(
-            "a different corporate-action artifact is already bound to these settings".into(),
-        ));
+        return Err(ReferenceDataError::Config(format!(
+            "a different corporate-action artifact already speaks for `{symbol}`"
+        )));
     }
 
     let mut output = settings.clone();
@@ -1462,10 +1473,22 @@ pub fn bind_reference_artifacts(
     }
     output.instruments = InstrumentRegistry::build(&specs)
         .map_err(|error| ReferenceDataError::Config(error.to_string()))?;
-    output.corporate_actions = actions.schedule.clone();
 
-    // Calendar ids accumulate as a sorted set: a config may bind one published
-    // calendar per instrument, and re-binding the same one is idempotent.
+    // Merge this symbol's events into whatever the config already carries.
+    // `build` re-sorts and re-validates the union, so the merged schedule is in
+    // the same canonical order a single-artifact one would be, and a duplicate
+    // or contradictory pair across two artifacts is refused there rather than
+    // producing a schedule whose order depended on bind order.
+    let mut merged = output.corporate_actions.actions().to_vec();
+    if !already_bound {
+        merged.extend(actions.schedule.actions().iter().cloned());
+    }
+    output.corporate_actions = CorporateActionSchedule::build(&merged)
+        .map_err(|error| ReferenceDataError::Corporate(error.to_string()))?;
+
+    // Both id lists accumulate as sorted sets: a config binds one published
+    // calendar per instrument and one action artifact per symbol, and
+    // re-binding the same one is idempotent.
     let mut calendar_ids: BTreeSet<String> = output
         .reference_data
         .calendar_artifact_ids
@@ -1473,9 +1496,16 @@ pub fn bind_reference_artifacts(
         .cloned()
         .collect();
     calendar_ids.insert(calendar.artifact_id.clone());
+    let mut action_ids: BTreeSet<String> = output
+        .reference_data
+        .corporate_action_artifact_ids
+        .iter()
+        .cloned()
+        .collect();
+    action_ids.insert(actions.artifact_id.clone());
     output.reference_data = ReferenceDataBindings {
         calendar_artifact_ids: calendar_ids.into_iter().collect(),
-        corporate_action_artifact_id: Some(actions.artifact_id.clone()),
+        corporate_action_artifact_ids: action_ids.into_iter().collect(),
     };
     Ok(output)
 }

@@ -95,7 +95,8 @@ pub use crate::core::strategy_calendar::{
     TradingCalendarSpec,
 };
 pub use crate::core::strategy_corporate::{
-    CorporateAction, CorporateActionError, CorporateActionKind, CorporateActionSchedule,
+    CashInLieuPricing, CorporateAction, CorporateActionError, CorporateActionKind,
+    CorporateActionSchedule, FractionalUnitPolicy,
 };
 pub use crate::core::strategy_financing::{
     AccrualInterval, CurrencyConversion, CurrencyRate, DayCount, FinancingCharge, FinancingError,
@@ -121,7 +122,19 @@ pub const STRATEGY_IR_SCHEMA_VERSION: u32 = 1;
 /// out-of-session order policy (§6.3, §6.7), the corporate-action schedule
 /// (§6.8), the currency-conversion table (§6.3), and sub-bar fidelity (§6.9).
 /// Every one of them changes what a run means, so none is a silent default.
-pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 4;
+///
+/// v4 seals the reference-data artifact ids the settings were materialized
+/// from, for exactly one corporate-action artifact.
+///
+/// v5 completes §6.8 in two ways. It binds *many* corporate-action artifacts —
+/// one per symbol — so a multi-symbol run can carry every symbol's real
+/// schedule instead of having to drop all but one. And it seals the fractional
+/// cash-in-lieu policy, whose default is the pre-v5 behaviour. Both are
+/// compatible extensions: v3 and v4 configs remain loadable and keep their
+/// sealed ids byte for byte, because each addition is hashed only from the
+/// version that introduced it, and an older artifact carrying newer content is
+/// refused rather than reinterpreted.
+pub const STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION: u32 = 5;
 
 /// Wire-format version of [`StrategyRunManifest`]. v4 binds acknowledged
 /// repaint QA artifacts into run identity; v5 binds each immutable sub-bar
@@ -1633,13 +1646,60 @@ pub struct ExecutionSettings {
     /// (§6.3). `None` refuses such an instrument rather than assuming parity.
     #[serde(default)]
     pub currency_conversion: CurrencyConversion,
+    /// What a split does with a fractional remainder (§6.8). The default keeps
+    /// the fraction, which is what every pre-v5 run did.
+    #[serde(default)]
+    pub fractional_units: FractionalUnitPolicy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The exact reference-data artifacts the executable values were materialized
+/// from. Empty is explicit and never means "latest".
+///
+/// One corporate-action artifact speaks for one symbol, so a multi-symbol run
+/// binds one per symbol. The list is a sorted, duplicate-free set: two operators
+/// who selected the same artifacts in a different order seal the same config.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
 pub struct ReferenceDataBindings {
     pub calendar_artifact_ids: Vec<String>,
-    pub corporate_action_artifact_id: Option<String>,
+    pub corporate_action_artifact_ids: Vec<String>,
+}
+
+/// v4 spelled the corporate-action binding as a single optional id. Both
+/// spellings decode, never together, so a config sealed under either era loads
+/// into the one in-memory shape without its identity being reinterpreted: the
+/// digest still frames a v4 config exactly the way v4 framed it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReferenceDataBindingsWire {
+    #[serde(default)]
+    calendar_artifact_ids: Vec<String>,
+    #[serde(default)]
+    corporate_action_artifact_id: Option<String>,
+    #[serde(default)]
+    corporate_action_artifact_ids: Option<Vec<String>>,
+}
+
+impl<'de> Deserialize<'de> for ReferenceDataBindings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ReferenceDataBindingsWire::deserialize(deserializer)?;
+        let corporate_action_artifact_ids = match (
+            wire.corporate_action_artifact_id,
+            wire.corporate_action_artifact_ids,
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(serde::de::Error::custom(
+                    "reference_data carries both the v4 and v5 corporate-action spellings",
+                ));
+            }
+            (Some(single), None) => vec![single],
+            (None, Some(many)) => many,
+            (None, None) => Vec::new(),
+        };
+        Ok(Self {
+            calendar_artifact_ids: wire.calendar_artifact_ids,
+            corporate_action_artifact_ids,
+        })
+    }
 }
 
 const fn default_participation() -> ParticipationModel {
@@ -1676,6 +1736,7 @@ impl ExecutionSettings {
             corporate_actions: CorporateActionSchedule::empty(),
             reference_data: ReferenceDataBindings::default(),
             currency_conversion: CurrencyConversion::None,
+            fractional_units: FractionalUnitPolicy::KeepFraction,
         }
     }
 }
@@ -1743,7 +1804,7 @@ impl StrategyExecutionConfig {
     pub fn recompute_config_id(&self) -> Result<String, StrategyIrError> {
         if !matches!(
             self.schema_version,
-            3 | STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION
+            3 | 4 | STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION
         ) {
             return Err(StrategyIrError::UnsupportedSchemaVersion {
                 artifact: ArtifactKind::ExecutionConfig,
@@ -3239,19 +3300,39 @@ fn compute_config_id_for_schema(
         for id in &settings.reference_data.calendar_artifact_ids {
             digest.tagged_text("reference_data.calendar_id", id);
         }
-        digest.begin_option(
-            "reference_data.corporate_actions",
-            settings
-                .reference_data
-                .corporate_action_artifact_id
-                .is_some(),
-        );
-        if let Some(id) = &settings.reference_data.corporate_action_artifact_id {
+        let corporate_ids = &settings.reference_data.corporate_action_artifact_ids;
+        if schema_version >= 5 {
+            digest.begin_seq("reference_data.corporate_action_set", corporate_ids.len());
+        } else {
+            // v4 could only ever bind one, and framed it as an option. Replaying
+            // that exact framing is what keeps a sealed v4 id byte for byte the
+            // id it was sealed under; `validate_reference_data` guarantees the
+            // list holds at most one element at this version.
+            digest.begin_option(
+                "reference_data.corporate_actions",
+                !corporate_ids.is_empty(),
+            );
+        }
+        for id in corporate_ids {
             digest.tagged_text("reference_data.corporate_action_id", id);
         }
     }
     digest_currency_conversion(&mut digest, &settings.currency_conversion);
+    if schema_version >= 5 {
+        digest_fractional_units(&mut digest, &settings.fractional_units);
+    }
     Ok(digest.finish_hex())
+}
+
+/// Frame the fractional-remainder policy. The assumption's own words are hashed
+/// with it: two runs that settled fractions on different stated grounds are two
+/// different runs, even when the arithmetic happens to agree.
+fn digest_fractional_units(digest: &mut CanonicalDigest, policy: &FractionalUnitPolicy) {
+    digest.tagged_text("fractional_units", policy.wire_id());
+    if let Some(pricing) = policy.pricing() {
+        digest.tagged_text("fractional_units.pricing", pricing.wire_id());
+        digest.tagged_text("fractional_units.note", pricing.note());
+    }
 }
 
 /// Canonically encode the per-instrument registry. Every field an operator
@@ -3540,11 +3621,13 @@ fn validate_settings(
         if settings.participation != ParticipationModel::Unlimited
             || !settings.instruments.is_empty()
             || !settings.corporate_actions.is_empty()
+            || !settings.fractional_units.is_default()
             || settings.currency_conversion != CurrencyConversion::None
         {
             return Err(StrategyIrError::InconsistentExecution {
                 detail: "legacy same-bar-close compatibility excludes participation caps, \
-                         instrument specs, corporate actions and currency conversion",
+                         instrument specs, corporate actions, fractional-remainder policies \
+                         and currency conversion",
             });
         }
     }
@@ -3590,6 +3673,7 @@ fn validate_realism(
         .corporate_actions
         .validate()
         .map_err(StrategyIrError::InvalidCorporateAction)?;
+    validate_schema_gated_fields(settings, schema_version)?;
     validate_reference_data(settings, schema_version)
 }
 
@@ -3646,17 +3730,63 @@ fn validate_reference_data(
                      calendar was materialized from, and vice versa",
         });
     }
+    let corporate_ids = &bindings.corporate_action_artifact_ids;
+    if schema_version < 5 && corporate_ids.len() > 1 {
+        return Err(StrategyIrError::InconsistentExecution {
+            detail: "binding more than one corporate-action artifact requires \
+                     execution-config schema v5 or later",
+        });
+    }
+    if !corporate_ids.windows(2).all(|ids| ids[0] < ids[1]) {
+        return Err(StrategyIrError::InconsistentExecution {
+            detail: "reference corporate-action artifact ids must be unique and sorted",
+        });
+    }
+    for id in corporate_ids {
+        check_digest_id("settings.reference_data.corporate_action_artifact_id", id)?;
+    }
     // A binding is a claim that this schedule was materialized from that
     // artifact. Claiming one over an empty schedule is a false provenance
     // claim. The reverse — a hand-declared schedule with no artifact — is
     // honest: it says "operator-declared", which is what v3 configs mean.
-    if let Some(id) = &bindings.corporate_action_artifact_id {
-        check_digest_id("settings.reference_data.corporate_action_artifact_id", id)?;
-        if settings.corporate_actions.is_empty() {
+    //
+    // Each artifact speaks for exactly one symbol and contributes at least one
+    // action for it, so more bindings than the schedule has distinct symbols
+    // means at least one binding has nothing behind it.
+    if !corporate_ids.is_empty() {
+        let symbols: BTreeSet<&str> = settings
+            .corporate_actions
+            .actions()
+            .iter()
+            .map(|action| action.symbol.as_str())
+            .collect();
+        if symbols.len() < corporate_ids.len() {
             return Err(StrategyIrError::InconsistentExecution {
-                detail: "a corporate-action artifact binding requires a non-empty schedule",
+                detail: "every bound corporate-action artifact must contribute a symbol's \
+                         events to the schedule",
             });
         }
+    }
+    Ok(())
+}
+
+/// Fields a config may only carry once its sealed id covers them.
+///
+/// The fractional-remainder policy is hashed from v5 onwards. Letting a v3 or v4
+/// artifact carry a non-default policy would let a run change how it settles
+/// fractions while keeping an id that says nothing about it.
+fn validate_schema_gated_fields(
+    settings: &ExecutionSettings,
+    schema_version: u32,
+) -> Result<(), StrategyIrError> {
+    settings
+        .fractional_units
+        .validate()
+        .map_err(StrategyIrError::InvalidCorporateAction)?;
+    if schema_version < 5 && !settings.fractional_units.is_default() {
+        return Err(StrategyIrError::InconsistentExecution {
+            detail: "a fractional-remainder policy requires execution-config schema v5 or later",
+        });
     }
     Ok(())
 }

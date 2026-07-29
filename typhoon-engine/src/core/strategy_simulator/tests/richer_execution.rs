@@ -1,6 +1,7 @@
 use crate::core::strategy_calendar::{TradingCalendar, TradingCalendarSpec};
 use crate::core::strategy_corporate::{
-    CorporateAction, CorporateActionKind, CorporateActionSchedule,
+    CashInLieuPricing, CorporateAction, CorporateActionKind, CorporateActionSchedule,
+    FractionalUnitPolicy,
 };
 use crate::core::strategy_financing::{
     AccrualInterval, DayCount, FinancingModel, FinancingPolicy, RateProvenance, RateSource,
@@ -202,6 +203,90 @@ fn split_then_dividend_adjusts_live_position_and_cash_in_canonical_order() {
         START_CAPITAL - 101.0 + 2.0,
         "cash ledger",
     );
+}
+
+#[test]
+fn reverse_split_cash_in_lieu_settles_the_fraction_at_the_declared_post_split_mark() {
+    let actions = CorporateActionSchedule::build(&[CorporateAction {
+        symbol: "aaa".into(),
+        effective_time_ns: 2 * MINUTE_NS,
+        kind: CorporateActionKind::Split {
+            numerator: 1,
+            denominator: 2,
+        },
+    }])
+    .unwrap();
+    let stream = stream_from(
+        "aaa",
+        &[
+            (100.0, 101.0, 99.0, 100.0),
+            (101.0, 102.0, 100.0, 101.0),
+            // The action applies after this open becomes the committed mark;
+            // the reverse split then doubles it to 202 post-split dollars.
+            (101.0, 102.0, 100.0, 101.0),
+            (202.0, 203.0, 201.0, 202.0),
+        ],
+    );
+    let report = run(
+        ExecutionSettings {
+            corporate_actions: actions,
+            fractional_units: FractionalUnitPolicy::CashInLieu {
+                pricing: CashInLieuPricing::LastCommittedMarkAssumption {
+                    note: "test assumption: settle at the post-split committed mark".into(),
+                },
+            },
+            ..free_settings()
+        },
+        &[stream],
+        &mut ScriptedStrategy::new(vec![(0, OrderSide::Buy, 3.0)]),
+    )
+    .unwrap();
+
+    let action = &report.corporate_actions[0];
+    assert_close(action.units_before, 3.0, "pre-split units");
+    assert_close(action.units_after, 1.0, "whole units retained");
+    assert_close(action.avg_entry_after, 202.0, "post-split basis");
+    assert_close(action.cash_delta, 101.0, "half-share cash in lieu");
+    assert_close(report.positions[0].units, 1.0, "final whole units");
+    assert_close(
+        report.final_cash,
+        START_CAPITAL - 3.0 * 101.0 + 101.0,
+        "entry cash plus cash-in-lieu settlement",
+    );
+    assert_close(
+        report.final_equity,
+        START_CAPITAL,
+        "economic value preserved",
+    );
+}
+
+#[test]
+fn reverse_split_refuses_an_unpriced_fraction_instead_of_guessing() {
+    let actions = CorporateActionSchedule::build(&[CorporateAction {
+        symbol: "aaa".into(),
+        effective_time_ns: 2 * MINUTE_NS,
+        kind: CorporateActionKind::Split {
+            numerator: 1,
+            denominator: 2,
+        },
+    }])
+    .unwrap();
+    let error = run(
+        ExecutionSettings {
+            corporate_actions: actions,
+            fractional_units: FractionalUnitPolicy::Refuse,
+            ..free_settings()
+        },
+        &[ramp("aaa", 4)],
+        &mut ScriptedStrategy::new(vec![(0, OrderSide::Buy, 3.0)]),
+    )
+    .expect_err("a fractional remainder without a settlement rule must fail closed");
+
+    assert!(matches!(
+        error,
+        SimulationError::FractionalUnitsRefused { symbol, units }
+            if symbol == "aaa" && units == 1.5
+    ));
 }
 
 #[test]

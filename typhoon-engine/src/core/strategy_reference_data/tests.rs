@@ -4,7 +4,9 @@ use crate::core::strategy_calendar::{
     TradingCalendarSpec,
 };
 use crate::core::strategy_dataset::AdjustmentPolicy;
-use crate::core::strategy_ir::{ExecutionSettings, StrategyExecutionConfig};
+use crate::core::strategy_ir::{
+    ExecutionSettings, STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION, StrategyExecutionConfig,
+};
 
 fn date(value: &str) -> chrono::NaiveDate {
     chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").unwrap()
@@ -745,7 +747,7 @@ fn bounded_codec_rejects_oversize_unknown_noncanonical_and_tampered_artifacts() 
 }
 
 #[test]
-fn restart_identity_and_v4_execution_binding_round_trip() {
+fn restart_identity_and_current_execution_binding_round_trip() {
     let calendar = materialize_calendar(&calendar_request(vec![calendar_record(
         "holiday",
         "2024-12-25",
@@ -795,7 +797,10 @@ fn restart_identity_and_v4_execution_binding_round_trip() {
     )
     .unwrap();
     let config = StrategyExecutionConfig::build(&bound).unwrap();
-    assert_eq!(config.schema_version(), 4);
+    assert_eq!(
+        config.schema_version(),
+        STRATEGY_EXECUTION_CONFIG_SCHEMA_VERSION
+    );
     assert_eq!(
         config.settings().reference_data.calendar_artifact_ids,
         vec![calendar.artifact_id()]
@@ -804,9 +809,8 @@ fn restart_identity_and_v4_execution_binding_round_trip() {
         config
             .settings()
             .reference_data
-            .corporate_action_artifact_id
-            .as_deref(),
-        Some(actions.artifact_id())
+            .corporate_action_artifact_ids,
+        vec![actions.artifact_id()]
     );
     assert_eq!(config.recompute_config_id().unwrap(), config.config_id());
     std::fs::remove_dir_all(root).unwrap();

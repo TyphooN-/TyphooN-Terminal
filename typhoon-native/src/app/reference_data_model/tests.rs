@@ -262,12 +262,17 @@ fn a_selection_carries_its_real_authority() {
         ),
         calendar_artifact_id: digest('a'),
         corporate_action_artifact_id: digest('b'),
+        bound_corporate_action_artifact_ids: vec![digest('b')],
         authoritative: false,
     });
 
     let selection = state.selection.as_ref().expect("a selection");
     assert!(!selection.authoritative);
     assert_eq!(selection.config_id, digest('c'));
+    assert_eq!(
+        selection.bound_corporate_action_artifact_ids,
+        vec![digest('b')]
+    );
     assert!(
         state.status.contains("NOT exchange/vendor authoritative"),
         "an unverified pair must say so: {}",
@@ -292,6 +297,7 @@ fn changing_a_slot_discards_the_previous_preparation() {
         ),
         calendar_artifact_id: digest('a'),
         corporate_action_artifact_id: digest('b'),
+        bound_corporate_action_artifact_ids: vec![digest('b')],
         authoritative: true,
     });
     assert!(state.prepared_settings.is_some());

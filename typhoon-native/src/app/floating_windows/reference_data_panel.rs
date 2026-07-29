@@ -419,11 +419,21 @@ impl TyphooNApp {
                         ui.label("Calendar artifact");
                         ui.label(egui::RichText::new(&selection.calendar_artifact_id).monospace());
                         ui.end_row();
-                        ui.label("Corporate actions");
-                        ui.label(
-                            egui::RichText::new(&selection.corporate_action_artifact_id)
-                                .monospace(),
-                        );
+                        // One artifact per symbol, so the whole bound set is
+                        // listed. Showing only the last selection would read as
+                        // "this run carries one symbol's actions" when a
+                        // multi-symbol config carries several.
+                        ui.label(format!(
+                            "Corporate actions ({})",
+                            selection.bound_corporate_action_artifact_ids.len()
+                        ));
+                        ui.vertical(|ui| {
+                            for id in &selection.bound_corporate_action_artifact_ids {
+                                let added = *id == selection.corporate_action_artifact_id;
+                                let text = egui::RichText::new(id).monospace();
+                                ui.label(if added { text.strong() } else { text });
+                            }
+                        });
                         ui.end_row();
                         ui.label("Authority");
                         ui.label(

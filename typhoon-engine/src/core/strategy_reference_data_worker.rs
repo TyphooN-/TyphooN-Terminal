@@ -340,6 +340,11 @@ pub enum ReferenceDataWorkerEvent {
         settings: Box<ExecutionSettings>,
         calendar_artifact_id: String,
         corporate_action_artifact_id: String,
+        /// Every corporate-action artifact the resulting config now binds, in
+        /// sorted order. A multi-symbol config accumulates one per symbol, so
+        /// this is the honest answer to "what reference data is this run on?" —
+        /// the single id above is only the artifact this selection added.
+        bound_corporate_action_artifact_ids: Vec<String>,
         /// False when either artifact is below exchange/vendor authority. The
         /// bind still happened and is honestly labelled; it is the caller's
         /// decision whether an unverified-public source may back a run.
@@ -584,12 +589,15 @@ fn execute(
                 bind_reference_artifacts(&settings, &symbol, &currency, &calendar, &actions)?;
             let config = StrategyExecutionConfig::build(&bound)
                 .map_err(|error| ReferenceDataError::Config(error.to_string()))?;
+            let bound_corporate_action_artifact_ids =
+                bound.reference_data.corporate_action_artifact_ids.clone();
             Ok(ReferenceDataWorkerEvent::Selected {
                 request_id,
                 config_id: config.config_id().to_string(),
                 settings: Box::new(bound),
                 calendar_artifact_id,
                 corporate_action_artifact_id,
+                bound_corporate_action_artifact_ids,
                 authoritative,
             })
         }

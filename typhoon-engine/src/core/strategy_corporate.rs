@@ -22,11 +22,19 @@
 //! exactly 3/2 and never by a decimal that has no exact binary form. A 1:20
 //! reverse split is `1:20`. Both directions are the same node.
 //!
+//! # Fractional remainders
+//!
+//! A split can leave a fractional unit, and a real broker settles that fraction
+//! in cash rather than carrying it. The price it settled at is not published
+//! anywhere this engine can read, so cash-in-lieu is not a default and never
+//! guesses: [`FractionalUnitPolicy`] makes the choice an authored, hashed,
+//! reported one. `KeepFraction` keeps today's exact arithmetic; `CashInLieu`
+//! settles the remainder at a **declared** price rule that says out loud it is
+//! an operator assumption; `Refuse` fails the run closed rather than model a
+//! remainder it was not told how to settle.
+//!
 //! # Honest limits
 //!
-//! - Fractional units survive a split. Real brokers pay cash in lieu of a
-//!   fractional share at a price nobody records; keeping the fraction is exact
-//!   arithmetic, and inventing the cash-in-lieu price would not be.
 //! - A symbol change has no economic effect and does not re-key the symbol
 //!   table: a run's symbol set is fixed when its datasets are bound. The event
 //!   is validated against the stream it names and recorded, so a report shows
@@ -48,6 +56,10 @@ pub const MAX_SPLIT_RATIO: u32 = 10_000;
 
 /// Longest symbol accepted in an action, matching the simulator's own bound.
 pub const MAX_ACTION_SYMBOL_LEN: usize = 64;
+
+/// Longest operator note accepted on a declared assumption. Long enough to name
+/// a source and a decision, short enough that a config id stays a config id.
+pub const MAX_ASSUMPTION_NOTE_LEN: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CorporateActionError {
@@ -84,6 +96,8 @@ pub enum CorporateActionError {
         action: &'static str,
         adjustment: AdjustmentPolicy,
     },
+    /// A declared assumption arrived without a usable statement of itself.
+    InvalidAssumptionNote,
 }
 
 impl std::fmt::Display for CorporateActionError {
@@ -129,7 +143,97 @@ impl std::fmt::Display for CorporateActionError {
                 "a `{action}` event on `{symbol}` double-counts an adjustment already in `{}` prices",
                 adjustment.wire_id()
             ),
+            Self::InvalidAssumptionNote => write!(
+                formatter,
+                "a declared assumption needs a trimmed, printable note of at most \
+                 {MAX_ASSUMPTION_NOTE_LEN} characters"
+            ),
         }
+    }
+}
+
+/// Where a cash-in-lieu payment's price comes from.
+///
+/// There is exactly one variant because there is exactly one price this engine
+/// honestly knows. A broker's real fractional-share proceeds are set by whatever
+/// it got when it sold the aggregated fractions, and nothing publishes that, so
+/// the alternative to a named assumption is not a better number — it is a
+/// fabricated one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "rule", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CashInLieuPricing {
+    /// The symbol's last committed mark, taken *after* the split's own price
+    /// adjustment so it is quoted in post-split units. Stated as the operator's
+    /// assumption, hashed into the execution-config id, and reported — never
+    /// presented as the venue's actual proceeds.
+    LastCommittedMarkAssumption { note: String },
+}
+
+impl CashInLieuPricing {
+    pub const fn wire_id(&self) -> &'static str {
+        match self {
+            Self::LastCommittedMarkAssumption { .. } => "last_committed_mark_assumption",
+        }
+    }
+
+    pub fn note(&self) -> &str {
+        match self {
+            Self::LastCommittedMarkAssumption { note } => note,
+        }
+    }
+}
+
+/// What a split does with a fractional remainder (§6.8).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "policy", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FractionalUnitPolicy {
+    /// Carry the exact fraction. Exact arithmetic and the conservative default:
+    /// it models no cash movement the engine cannot price.
+    #[default]
+    KeepFraction,
+    /// Truncate the position to whole units and settle the remainder in cash at
+    /// `pricing`.
+    CashInLieu { pricing: CashInLieuPricing },
+    /// Fail the run closed if a split would leave a fractional unit. For a run
+    /// that must not silently pick either of the other two.
+    Refuse,
+}
+
+impl FractionalUnitPolicy {
+    pub const fn wire_id(&self) -> &'static str {
+        match self {
+            Self::KeepFraction => "keep_fraction",
+            Self::CashInLieu { .. } => "cash_in_lieu",
+            Self::Refuse => "refuse",
+        }
+    }
+
+    /// Whether this is the default. Used by the schema guard that refuses a
+    /// pre-v5 config carrying a policy its sealed id does not cover.
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::KeepFraction)
+    }
+
+    pub const fn pricing(&self) -> Option<&CashInLieuPricing> {
+        match self {
+            Self::CashInLieu { pricing } => Some(pricing),
+            Self::KeepFraction | Self::Refuse => None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), CorporateActionError> {
+        let Some(pricing) = self.pricing() else {
+            return Ok(());
+        };
+        let note = pricing.note();
+        if note.is_empty()
+            || note.trim() != note
+            || note.chars().count() > MAX_ASSUMPTION_NOTE_LEN
+            || note.chars().any(char::is_control)
+        {
+            return Err(CorporateActionError::InvalidAssumptionNote);
+        }
+        Ok(())
     }
 }
 
@@ -209,6 +313,16 @@ impl CorporateAction {
             self.symbol.as_str(),
             self.kind.order_rank(),
         )
+    }
+
+    /// Split `units` into the whole part a cash-in-lieu policy keeps and the
+    /// signed fraction it settles. `trunc` rounds toward zero, so a short
+    /// position's remainder keeps the short's sign and is bought back rather
+    /// than sold. The subtraction is exact: `units` and `units.trunc()` share a
+    /// sign and an exponent range, so no rounding can enter here.
+    pub fn whole_and_fractional_units(units: f64) -> (f64, f64) {
+        let whole = units.trunc();
+        (whole, units - whole)
     }
 
     /// Position and average-entry multipliers for a split. Both are exact
