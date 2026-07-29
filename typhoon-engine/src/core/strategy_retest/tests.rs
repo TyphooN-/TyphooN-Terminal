@@ -16,6 +16,11 @@ use crate::core::strategy_optimization::{
     RobustnessStageSpec, SampleRole, SearchBatch, SearchMethod, SearchSpace, StageAccess,
     StageVerdict, Threshold, WalkForwardConfig, generate_candidates,
 };
+use crate::core::strategy_parameter_field::{
+    MAX_PARAMETER_FIELD_NEIGHBOURHOOD, MAX_PARAMETER_FIELD_RADIUS, MAX_PARAMETER_FIELD_SAMPLE,
+    ParameterFieldPhase, ParameterFieldStudyArtifact, ParameterFieldStudySpec, PlateauVerdict,
+    execute_parameter_field_study, replay_parameter_field_study,
+};
 use crate::core::strategy_perturbation::{
     MAX_PERTURBATION_COST_SCALE_BPS, MAX_PERTURBATION_JITTER_STEPS, MAX_PERTURBATION_NOISE_BPS,
     MAX_PERTURBATION_START_OFFSET, MAX_PERTURBATION_TRIALS_PER_FAMILY, PerturbationDetail,
@@ -1961,6 +1966,583 @@ fn perturbation_study_fails_closed_on_bounds_leases_undefined_and_tampering() {
     let other_config = StrategyExecutionConfig::build(&other).unwrap();
     assert!(
         replay_perturbation_study(
+            &other_config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            &artifact,
+        )
+        .is_err()
+    );
+}
+
+/// A two-axis long-only fixture over the oscillating series: entry and exit are both gated by a
+/// declared search axis, so the declared field is a genuine surface — moving either coordinate
+/// changes the realized trade set, not only the fill prices.
+fn parameter_field_fixture() -> (
+    StrategyExecutionConfig,
+    Vec<Bar>,
+    DatasetManifest,
+    SearchSpace,
+) {
+    let mut definition = GeneralStrategyBuilder::new("parameter-field", "test")
+        .definition()
+        .clone();
+    definition.parameters = vec![
+        StrategyParameter {
+            id: "entry_level".into(),
+            value: ParamValue::Float(103.0),
+            range: Some(ParamRange::Float {
+                min: 95.0,
+                max: 115.0,
+            }),
+        },
+        StrategyParameter {
+            id: "exit_level".into(),
+            value: ParamValue::Float(110.0),
+            range: Some(ParamRange::Float {
+                min: 100.0,
+                max: 120.0,
+            }),
+        },
+    ];
+    definition.long.enabled = true;
+    definition.long.entry = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Parameter("entry_level".into()),
+    };
+    definition.long.exit = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Parameter("exit_level".into()),
+    };
+    let strategy = crate::core::strategy_ir::StrategyIr::build(&definition).unwrap();
+    let mut settings = ExecutionSettings::conservative_defaults();
+    settings.slippage = SlippageModel::FixedPriceDistance { distance: 0.05 };
+    settings.spread = SpreadModel::Constant { price_units: 0.02 };
+    let config = StrategyExecutionConfig::build(&settings).unwrap();
+    let bars = perturbation_bars();
+    let manifest = manifest(&bars);
+    let space = SearchSpace::new(
+        strategy,
+        vec![
+            ParameterDomain::new(
+                "entry_level",
+                vec![99.0, 103.0, 107.0]
+                    .into_iter()
+                    .map(ParamValue::Float)
+                    .collect(),
+            )
+            .unwrap(),
+            ParameterDomain::new(
+                "exit_level",
+                vec![104.0, 110.0, 116.0]
+                    .into_iter()
+                    .map(ParamValue::Float)
+                    .collect(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    (config, bars, manifest, space)
+}
+
+/// The whole declared 3x3 field, so the SPP sample is the field itself.
+fn parameter_field_spec() -> ParameterFieldStudySpec {
+    ParameterFieldStudySpec {
+        field_sample_size: 9,
+        neighbour_radius: 1,
+        plateau_tolerance_bps: 1_500,
+        minimum_plateau_neighbours: 3,
+        metric_id: "net_profit".into(),
+        direction: ObjectiveDirection::Maximize,
+        root_seed: 0x5f1e,
+    }
+}
+
+/// Every ordinal within one step of `centre` on each axis of the 3x3 fixture field, centre excluded.
+fn expected_neighbourhood(centre: usize) -> std::collections::BTreeSet<usize> {
+    let (row, column) = (centre / 3, centre % 3);
+    let mut expected = std::collections::BTreeSet::new();
+    for entry in row.saturating_sub(1)..=(row + 1).min(2) {
+        for exit in column.saturating_sub(1)..=(column + 1).min(2) {
+            if entry * 3 + exit != centre {
+                expected.insert(entry * 3 + exit);
+            }
+        }
+    }
+    expected
+}
+
+#[test]
+fn parameter_field_study_executes_the_declared_field_and_persists_immutably() {
+    let (config, bars, manifest, space) = parameter_field_fixture();
+    let source_manifest = manifest.clone();
+    let execute = || {
+        execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            parameter_field_spec(),
+        )
+    };
+    let artifact = execute().unwrap();
+    artifact.verify().unwrap();
+    assert_eq!(artifact, execute().unwrap());
+    assert_eq!(
+        artifact,
+        replay_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            &artifact,
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        artifact,
+        ParameterFieldStudyArtifact::from_json_slice(&artifact.to_json_vec().unwrap()).unwrap()
+    );
+    // Positive control for the re-sealing negative tests below: untouched evidence survives a
+    // recomputed identity, so those tests fail on the invariant and not on the decode.
+    assert_eq!(
+        artifact,
+        ParameterFieldStudyArtifact::resealed_from_json(&artifact.to_json_vec().unwrap()).unwrap()
+    );
+
+    assert_eq!(artifact.source_dataset_id(), manifest.dataset_id);
+    assert_eq!(artifact.source_manifest_id(), manifest.manifest_id);
+    assert_eq!(artifact.config_id(), config.config_id());
+    assert_eq!(artifact.range(), 0..bars.len());
+    assert_eq!(artifact.metric_id(), "net_profit");
+    assert_eq!(artifact.root_seed(), 0x5f1e);
+    // The source evidence the field was measured on is still exactly what it was.
+    assert_eq!(manifest, source_manifest);
+    source_manifest.verify(&bars).unwrap();
+
+    // Every coordinate is a distinct canonical execution with its own report identity.
+    let mut identities = std::collections::BTreeSet::new();
+    let mut ordinals = std::collections::BTreeSet::new();
+    let mut ranks = std::collections::BTreeSet::new();
+    for (index, point) in artifact.points().iter().enumerate() {
+        assert_eq!(point.evaluation_n, index + 1);
+        assert_eq!(point.request_id.len(), 64);
+        assert_eq!(point.run_id.len(), 64);
+        assert_eq!(point.report_id.len(), 64);
+        assert!(point.value.is_finite());
+        assert!(ordinals.insert(point.ordinal));
+        assert!(ranks.insert(point.rank));
+        assert!(identities.insert(point.request_id.clone()));
+        assert!(identities.insert(point.run_id.clone()));
+        assert!(identities.insert(point.report_id.clone()));
+        // Bounded projection data: one axis index and one assignment per declared axis.
+        assert_eq!(point.axis_indices.len(), artifact.axes().len());
+        assert_eq!(point.assignments.len(), artifact.axes().len());
+        for (axis, index) in artifact.axes().iter().zip(&point.axis_indices) {
+            assert!(*index < axis.values().len());
+        }
+    }
+    assert_eq!(ranks, (1..=artifact.points().len()).collect());
+    assert_eq!(artifact.axes().len(), 2);
+    assert_eq!(artifact.axes()[0].id(), "entry_level");
+    assert_eq!(artifact.axes()[1].id(), "exit_level");
+
+    // SPP: the whole declared field, its own distribution, and its evaluation N.
+    let spp = artifact.spp();
+    assert_eq!(spp.sample_size(), 9);
+    assert_eq!(spp.field_combinations(), space.combinations());
+    assert!(spp.exhaustive());
+    assert_eq!(artifact.evaluations_n(), spp.sample_size());
+    assert_eq!(spp.sorted_values().len(), 9);
+    assert_eq!(spp.percentiles().confidence_level_bps(), 9_000);
+    assert!(spp.percentiles().p05() <= spp.percentiles().median());
+    assert!(spp.percentiles().median() <= spp.percentiles().p95());
+    assert_eq!(spp.estimate(), spp.percentiles().median());
+    // The declared field actually disperses, so the estimate is evidence and not a constant.
+    assert!(spp.field_minimum() < spp.field_maximum());
+
+    // Plateau: an explicit deterministic neighbourhood of the selected point, bound to reports.
+    let plateau = artifact.plateau();
+    assert_eq!(
+        plateau.centre_ordinal(),
+        artifact.profile().selected_ordinal()
+    );
+    assert_eq!(plateau.radius(), 1);
+    let members = plateau
+        .members()
+        .iter()
+        .map(|member| member.ordinal)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(members, expected_neighbourhood(plateau.centre_ordinal()));
+    assert!(!members.contains(&plateau.centre_ordinal()));
+    for member in plateau.members() {
+        let point = artifact
+            .points()
+            .iter()
+            .find(|point| point.ordinal == member.ordinal)
+            .expect("plateau member is an executed point");
+        assert_eq!(member.report_id, point.report_id);
+        assert_eq!(member.candidate_id, point.candidate_id);
+        assert_eq!(member.value, point.value);
+    }
+    assert_eq!(
+        plateau.holding_members(),
+        plateau.members().iter().filter(|m| m.holds).count()
+    );
+
+    // Optimization Profile: report-bound coordinates, ranks and the selection universe.
+    let profile = artifact.profile();
+    assert_eq!(profile.observations_n(), artifact.points().len());
+    assert_eq!(profile.evaluations_n(), 9);
+    assert!(profile.selected_rank() >= 1);
+    assert_eq!(
+        profile.selection_label(),
+        format!("best of N=9: {}", profile.selected_candidate_id())
+    );
+    assert!(profile.stability_bps() <= 10_000);
+    assert!(profile.within_tolerance() >= 1);
+
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    store.persist_parameter_field_study(&artifact, 6).unwrap();
+    assert!(matches!(
+        store.persist_parameter_field_study(&artifact, 7),
+        Err(RetestError::DuplicateLineage)
+    ));
+    let page = store
+        .query_studies(&StudyArtifactQuery {
+            source_dataset_id: manifest.dataset_id.clone(),
+            kind: Some(StudyArtifactKind::ParameterField),
+            after_sequence: None,
+            limit: 4,
+        })
+        .unwrap();
+    assert!(matches!(
+        &page.records[0].artifact,
+        StudyArtifact::ParameterField(value) if value == &artifact
+    ));
+    assert!(
+        store
+            .explain_study_query(&StudyArtifactQuery {
+                source_dataset_id: manifest.dataset_id.clone(),
+                kind: Some(StudyArtifactKind::ParameterField),
+                after_sequence: None,
+                limit: 4,
+            })
+            .unwrap()
+            .iter()
+            .any(|plan| plan.contains("idx_study_dataset_kind_sequence"))
+    );
+}
+
+#[test]
+fn parameter_field_plateau_separates_sharp_optima_from_broad_stable_regions() {
+    let (config, bars, manifest, space) = parameter_field_fixture();
+    let execute = |spec| {
+        execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            spec,
+        )
+        .unwrap()
+    };
+
+    // Zero tolerance with a full quorum: only a neighbourhood that is no worse than the optimum
+    // anywhere can hold, so a unique optimum is reported as a sharp isolated spike.
+    let mut sharp_spec = parameter_field_spec();
+    sharp_spec.plateau_tolerance_bps = 0;
+    sharp_spec.minimum_plateau_neighbours = 8;
+    let sharp = execute(sharp_spec);
+    assert_eq!(sharp.plateau().tolerance_bps(), 0);
+    assert_eq!(sharp.plateau().threshold(), sharp.plateau().centre_value());
+    assert!(sharp.plateau().holding_members() < sharp.plateau().members().len());
+    assert_eq!(
+        sharp.plateau().verdict(),
+        PlateauVerdict::SharpIsolatedOptimum
+    );
+
+    // The whole field range as tolerance: the exhaustive sample bounds every neighbour from below,
+    // so the same optimum is reported as a broad stable region.
+    let mut broad_spec = parameter_field_spec();
+    broad_spec.plateau_tolerance_bps = 10_000;
+    broad_spec.minimum_plateau_neighbours = 1;
+    let broad = execute(broad_spec);
+    assert_eq!(
+        broad.plateau().centre_ordinal(),
+        sharp.plateau().centre_ordinal()
+    );
+    assert_eq!(
+        broad.plateau().scale(),
+        broad.spp().field_maximum() - broad.spp().field_minimum()
+    );
+    assert!(broad.plateau().scale() > 0.0);
+    assert_eq!(
+        broad.plateau().holding_members(),
+        broad.plateau().members().len()
+    );
+    assert_eq!(broad.plateau().stability_bps(), 10_000);
+    assert_eq!(broad.plateau().verdict(), PlateauVerdict::BroadStableRegion);
+    assert_eq!(broad.profile().stability_bps(), 10_000);
+
+    // A quorum the declared neighbourhood cannot supply is refused, not silently clamped.
+    let mut impossible = parameter_field_spec();
+    impossible.minimum_plateau_neighbours = MAX_PARAMETER_FIELD_NEIGHBOURHOOD;
+    assert!(
+        execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            impossible,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn parameter_field_spp_estimates_the_field_and_stays_distinct_from_the_optimized_point() {
+    let (config, bars, manifest, space) = parameter_field_fixture();
+    let execute = |spec| {
+        execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            spec,
+        )
+    };
+    let artifact = execute(parameter_field_spec()).unwrap();
+
+    // The field distribution is measured over the field sample alone — a neighbourhood evaluation
+    // is local evidence about the optimum, never a member of the field's own distribution.
+    let sampled = artifact
+        .points()
+        .iter()
+        .filter(|point| point.phase == ParameterFieldPhase::FieldSample)
+        .map(|point| point.value)
+        .collect::<Vec<_>>();
+    assert_eq!(sampled.len(), artifact.spp().sample_size());
+    let mut sorted = sampled.clone();
+    sorted.sort_by(f64::total_cmp);
+    assert_eq!(artifact.spp().sorted_values(), sorted.as_slice());
+    assert_eq!(artifact.spp().field_minimum(), sorted[0]);
+    assert_eq!(artifact.spp().field_maximum(), sorted[sorted.len() - 1]);
+
+    // The headline estimate is the field's median, not the optimized point, and the gap between
+    // them is the recorded optimization bias.
+    let selected = artifact.spp().selected_value();
+    assert_eq!(selected, artifact.spp().field_maximum());
+    assert!(artifact.spp().estimate() < selected);
+    assert_eq!(
+        artifact.spp().optimization_bias(),
+        selected - artifact.spp().estimate()
+    );
+    assert!(artifact.spp().optimization_bias_bps() > 0);
+    assert!(artifact.spp().optimization_bias_bps() <= 10_000);
+
+    // A bounded sub-sample is a deterministic permutation prefix of the declared field: distinct
+    // coordinates, seeded, and a different root seed selects a different sample.
+    let mut partial_spec = parameter_field_spec();
+    partial_spec.field_sample_size = 5;
+    let partial = execute(partial_spec.clone()).unwrap();
+    assert!(!partial.spp().exhaustive());
+    assert_eq!(partial.spp().sample_size(), 5);
+    assert_eq!(partial.profile().evaluations_n(), 5);
+    let sample_ordinals = |artifact: &ParameterFieldStudyArtifact| {
+        artifact
+            .points()
+            .iter()
+            .filter(|point| point.phase == ParameterFieldPhase::FieldSample)
+            .map(|point| point.ordinal)
+            .collect::<Vec<_>>()
+    };
+    let drawn = sample_ordinals(&partial);
+    assert_eq!(drawn.len(), 5);
+    assert_eq!(
+        drawn
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        5
+    );
+    assert!(drawn.iter().all(|ordinal| *ordinal < space.combinations()));
+    let mut reseeded_spec = partial_spec.clone();
+    reseeded_spec.root_seed = 0x991d;
+    assert_ne!(sample_ordinals(&execute(reseeded_spec).unwrap()), drawn);
+
+    // The neighbourhood of the selected point is executed even where it fell outside the sample,
+    // and the selection universe stays exactly the field sample.
+    let neighbourhood = expected_neighbourhood(partial.plateau().centre_ordinal());
+    let executed = partial
+        .points()
+        .iter()
+        .map(|point| point.ordinal)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(neighbourhood.is_subset(&executed));
+    assert_eq!(
+        partial.profile().selection_label(),
+        format!("best of N=5: {}", partial.profile().selected_candidate_id())
+    );
+    assert!(partial.points().len() > partial.spp().sample_size());
+}
+
+#[test]
+fn parameter_field_study_fails_closed_on_bounds_leases_undefined_and_tampering() {
+    let (config, bars, manifest, space) = parameter_field_fixture();
+    let execute = |spec| {
+        execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            spec,
+        )
+    };
+    for mutate in [
+        (|spec: &mut ParameterFieldStudySpec| spec.field_sample_size = 0)
+            as fn(&mut ParameterFieldStudySpec),
+        |spec| spec.field_sample_size = 1,
+        |spec| spec.field_sample_size = MAX_PARAMETER_FIELD_SAMPLE + 1,
+        // Exhausted space: the declared field cannot supply that many distinct coordinates.
+        |spec| spec.field_sample_size = 10,
+        |spec| spec.neighbour_radius = 0,
+        |spec| spec.neighbour_radius = MAX_PARAMETER_FIELD_RADIUS + 1,
+        |spec| spec.plateau_tolerance_bps = 10_001,
+        |spec| spec.minimum_plateau_neighbours = 0,
+        |spec| spec.minimum_plateau_neighbours = MAX_PARAMETER_FIELD_NEIGHBOURHOOD + 1,
+        |spec| spec.metric_id = "  ".into(),
+        // A metric the sealed report does not define.
+        |spec| spec.metric_id = "unknown_metric".into(),
+    ] {
+        let mut spec = parameter_field_spec();
+        mutate(&mut spec);
+        assert!(execute(spec).is_err());
+    }
+
+    // Foreign lease, and a lease that does not admit the supplied payload.
+    let foreign = HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), bars.len() + 4, 4)
+        .unwrap()
+        .lease(StageAccess::Robustness)
+        .unwrap();
+    assert!(
+        execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            foreign,
+            &space,
+            parameter_field_spec()
+        )
+        .is_err()
+    );
+    let short = HoldoutQuarantine::new(&manifest.dataset_id, "f".repeat(64), bars.len() + 4, 6)
+        .unwrap()
+        .lease(StageAccess::Robustness)
+        .unwrap();
+    assert!(
+        execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            short,
+            &space,
+            parameter_field_spec()
+        )
+        .is_err()
+    );
+    // The final holdout is not leasable to a field study at all.
+    assert!(
+        HoldoutQuarantine::new(&manifest.dataset_id, "f".repeat(64), bars.len() + 4, 4)
+            .unwrap()
+            .lease(StageAccess::FinalReview)
+            .is_err()
+    );
+
+    let artifact = execute(parameter_field_spec()).unwrap();
+    let tamper = |pointer: &str, value: serde_json::Value| {
+        let mut tampered: serde_json::Value =
+            serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+        *tampered.pointer_mut(pointer).unwrap() = value;
+        serde_json::to_vec(&tampered).unwrap()
+    };
+    // Evidence that is re-derived during verification: editing it fails closed even after the
+    // artifact identity is recomputed over the edit.
+    for (pointer, value) in [
+        ("/points/0/value", serde_json::json!(1.0e9)),
+        ("/points/0/ordinal", serde_json::json!(8)),
+        ("/points/0/component_seed", serde_json::json!(1)),
+        ("/points/0/rank", serde_json::json!(9)),
+        ("/points/0/candidate_id", serde_json::json!("0".repeat(64))),
+        ("/points/0/request_id", serde_json::json!("0".repeat(64))),
+        ("/points/1/run_id", serde_json::json!("0".repeat(64))),
+        ("/points/1/report_id", serde_json::json!("0".repeat(64))),
+        ("/points/1/axis_indices/0", serde_json::json!(2)),
+        ("/spp/estimate", serde_json::json!(1.0e9)),
+        ("/spp/optimization_bias_bps", serde_json::json!(1)),
+        ("/spp/sorted_values/0", serde_json::json!(-1.0e9)),
+        ("/plateau/verdict", serde_json::json!("broad_stable_region")),
+        ("/plateau/threshold", serde_json::json!(-1.0e9)),
+        ("/plateau/members/0/holds", serde_json::json!(true)),
+        ("/plateau/holding_members", serde_json::json!(0)),
+        ("/profile/stability_bps", serde_json::json!(1)),
+        ("/profile/selected_ordinal", serde_json::json!(0)),
+        ("/profile/observations_n", serde_json::json!(3)),
+        ("/spec/root_seed", serde_json::json!(1)),
+        ("/spec/direction", serde_json::json!("minimize")),
+        ("/range_end", serde_json::json!(13)),
+    ] {
+        let bytes = tamper(pointer, value);
+        assert!(
+            ParameterFieldStudyArtifact::from_json_slice(&bytes).is_err(),
+            "tampered {pointer} verified"
+        );
+        assert!(
+            ParameterFieldStudyArtifact::resealed_from_json(&bytes).is_err(),
+            "resealed {pointer} verified"
+        );
+    }
+
+    // A duplicated coordinate is duplicate evidence, not a second observation.
+    let mut duplicate: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+    duplicate["points"][1] = duplicate["points"][0].clone();
+    let duplicate = serde_json::to_vec(&duplicate).unwrap();
+    assert!(ParameterFieldStudyArtifact::from_json_slice(&duplicate).is_err());
+    assert!(ParameterFieldStudyArtifact::resealed_from_json(&duplicate).is_err());
+
+    // A plateau member that names a coordinate the study never executed.
+    let mut foreign_member: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+    foreign_member["plateau"]["members"][0]["report_id"] = serde_json::json!("0".repeat(64));
+    let foreign_member = serde_json::to_vec(&foreign_member).unwrap();
+    assert!(ParameterFieldStudyArtifact::from_json_slice(&foreign_member).is_err());
+    assert!(ParameterFieldStudyArtifact::resealed_from_json(&foreign_member).is_err());
+
+    // Replay under a different execution config is foreign evidence.
+    let mut other = config.to_input();
+    other.warmup_bars = 1;
+    let other_config = StrategyExecutionConfig::build(&other).unwrap();
+    assert!(
+        replay_parameter_field_study(
             &other_config,
             &manifest,
             &bars,
