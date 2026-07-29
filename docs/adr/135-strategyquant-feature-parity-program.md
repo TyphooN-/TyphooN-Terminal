@@ -253,10 +253,10 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 
 | Capability | TyphooN status | Addressed in |
 | --- | --- | --- |
-| Parameter optimizer over arbitrary strategies | **Foundation** — SMA-only grid; GPU path is SMA/NNFX-only | §5.5, M4 |
-| Retester (re-run stored strategies under new settings/data) | **Missing** | §5.5, M4 |
+| Parameter optimizer over arbitrary strategies | **Foundation** — typed grid/random/Latin-hypercube/local candidate planning, canonical dedup, report-derived objectives/Pareto evidence, bounded jobs and the exact verified CPU retest path exist; adaptive Bayesian search and complete native orchestration remain open | §5.5, M4 |
+| Retester (re-run stored strategies under new settings/data) | **Foundation** — a content-bound request executes the exact leased bars through `VerifiedRun`, the canonical simulator and a sealed report, then persists immutable report-derived robustness evidence through bounded indexed queries; the complete native cross-dataset/config workflow remains open | §5.5, M4 |
 | Genetic / evolutionary search | **Missing** | §8.2, M5 |
-| Random / grid / Bayesian / local search | **Partial** — grid only | §8.2, M4/M5 |
+| Random / grid / Bayesian / local search | **Partial** — deterministic bounded grid, random, Latin-hypercube and local planning exist; adaptive Bayesian search remains open | §8.2, M4/M5 |
 | 3D optimization views | **Partial** — 2D Fast × Slow heatmap only | §5.11, M4 |
 | Optimization Profile (stability across the parameter field) | **Missing** | §7.4, M4 |
 | Advanced result filtering | **Partial** — top-N truncation by profit factor | §5.7, M3 |
@@ -273,8 +273,8 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Parameter-plateau / neighbour-stability analysis | **Foundation only** — a robustness pipeline/shader is constructed but has no host dispatch API and is not part of a gated workflow | §7.4, M4 |
 | Cross-checks across market / timeframe / data source | **Missing** | §7.5, M4 |
 | Problem recognition (automatic red-flag detection) | **Missing** | §7.6, M4 |
-| Multiple-testing / selection-bias controls | **Missing** — not represented anywhere | §7.7, M4 |
-| Holdout / quarantine discipline | **Missing** | §7.8, M4 |
+| Multiple-testing / selection-bias controls | **Foundation** — every report-derived optimization/robustness artifact binds and displays evaluation N; complete adjusted-significance policy and native presentation remain open | §7.7, M4 |
+| Holdout / quarantine discipline | **Foundation** — search/robustness leases cannot access the final holdout, one-way consumption is immutable and indexed, and the API refuses reuse; paper/shadow quarantine remains M8 work | §7.8, M4 |
 
 ### 4.5 Analysis, reporting & portfolio
 
@@ -1303,8 +1303,8 @@ honest seam. True tick fidelity remains unavailable until TyphooN retains an imm
 tick-history corpus. Every one of these unavailable lanes continues to fail closed and stays
 explicitly labelled in reports.
 
-**M3–M8:** no later milestone gate has passed. Their remaining work is exactly the delivery and
-gate text below; they may now build on the completed M1 correctness foundation.
+**M4–M8:** no later milestone gate has passed. Their remaining work is exactly the delivery and
+gate text below; they may now build on the completed M1–M3 foundations.
 
 ### M0 — Dataset foundation & QA — **gate passed 2026-07-27** (see §13.1)
 **Prereqs:** none (builds on the existing cache/merge stack).

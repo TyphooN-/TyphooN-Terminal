@@ -465,6 +465,9 @@ impl RetestRequest {
     pub fn dataset_id(&self) -> &str {
         &self.dataset_id
     }
+    pub fn root_seed(&self) -> u64 {
+        self.root_seed
+    }
     fn validate(&self) -> Result<(), OptimizationError> {
         if self.strategy_id.trim().is_empty()
             || self.dataset_id.trim().is_empty()
@@ -1135,6 +1138,9 @@ impl ReportObservation {
     }
     pub fn metric(&self, metric_id: &str) -> Option<f64> {
         self.metrics.get(metric_id).copied()
+    }
+    pub fn range(&self) -> Range<usize> {
+        self.range.clone()
     }
     /// Whether this evidence was produced on exactly the partition `lease` grants.
     fn on_leased_partition(&self, lease: &SearchDataLease) -> bool {
@@ -2184,6 +2190,15 @@ impl RobustnessArtifact {
         } else {
             StageVerdict::Fail
         }
+    }
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+    pub fn candidate_id(&self) -> &str {
+        &self.candidate_id
+    }
+    pub fn evaluations_n(&self) -> usize {
+        self.evaluations_n
     }
     pub fn stages(&self) -> &[StageEvidence] {
         &self.stages

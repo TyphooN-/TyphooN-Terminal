@@ -36,6 +36,7 @@ pub mod strategy_intervention;
 pub mod strategy_ir;
 pub mod strategy_metrics;
 pub mod strategy_optimization;
+pub mod strategy_retest;
 pub mod strategy_protective;
 pub mod strategy_reference_data;
 pub mod strategy_reference_data_worker;
