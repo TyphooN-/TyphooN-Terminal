@@ -926,6 +926,26 @@ pub struct SearchDataLease {
     range: Range<usize>,
 }
 impl SearchDataLease {
+    pub(crate) fn exact_partition(
+        stage: StageAccess,
+        dataset_id: impl Into<String>,
+        range: Range<usize>,
+    ) -> Result<Self, OptimizationError> {
+        let dataset_id = dataset_id.into();
+        if !matches!(stage, StageAccess::Search | StageAccess::Robustness)
+            || dataset_id.trim().is_empty()
+            || range.start >= range.end
+        {
+            return Err(OptimizationError::InvalidFold {
+                detail: "invalid exact content partition".into(),
+            });
+        }
+        Ok(Self {
+            stage,
+            dataset_id,
+            range,
+        })
+    }
     pub fn range(&self) -> Range<usize> {
         self.range.clone()
     }

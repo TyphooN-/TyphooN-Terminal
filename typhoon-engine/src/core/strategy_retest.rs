@@ -13,8 +13,10 @@ use crate::core::strategy_ir::{
 };
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_optimization::{
-    BurnedHoldout, ObservationRole, OptimizationError, ReportObservation, RetestRequest,
-    RetestResult, RobustnessArtifact, RobustnessPipeline, SearchDataLease, StageVerdict,
+    BurnedHoldout, FoldPlan, ObjectiveDirection, ObjectiveSpec, ObservationRole, OosPlan,
+    OosScheme, OptimizationError, ReportObservation, RetestRequest, RetestResult,
+    RobustnessArtifact, RobustnessPipeline, SampleRole, SearchBatch, SearchDataLease, StageAccess,
+    StageVerdict, WalkForwardConfig, select_best,
 };
 use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
@@ -176,6 +178,29 @@ pub fn execute_retest(
     pipeline: &RobustnessPipeline,
     evaluations_n: usize,
 ) -> Result<CompletedRetest, RetestError> {
+    let (report, observation, metric_value) = execute_bound_observation(&request)?;
+    let outcome = pipeline.execute(
+        &request.lease,
+        request.strategy.strategy_id(),
+        evaluations_n,
+        vec![observation.clone()],
+    )?;
+    Ok(CompletedRetest {
+        request_id: request.request_id,
+        report,
+        observation,
+        robustness: outcome.artifact().clone(),
+        evaluations_n,
+        metric_id: request.metric_id,
+        metric_value,
+    })
+}
+
+/// The shared content-bound execution core. Both one-off retests and multi-window studies pass
+/// through this exact `VerifiedRun` → canonical simulator → sealed report boundary.
+fn execute_bound_observation(
+    request: &RetestExecutionRequest,
+) -> Result<(StrategyReportArtifact, ReportObservation, f64), RetestError> {
     if request.request_id != request.compute_id() {
         return Err(RetestError::Invalid(
             "execution request identity mismatch".into(),
@@ -225,21 +250,618 @@ pub fn execute_retest(
     let metric_value = observation
         .metric(&request.metric_id)
         .ok_or_else(|| RetestError::Invalid("report metric is undefined".into()))?;
-    let outcome = pipeline.execute(
-        &request.lease,
-        request.strategy.strategy_id(),
-        evaluations_n,
-        vec![observation.clone()],
+    Ok((report, observation, metric_value))
+}
+
+pub const MAX_WALK_FORWARD_MATRIX_CELLS: usize = 32;
+const MAX_STUDY_WINDOWS: usize = 128;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactBarMember {
+    pub source_index: usize,
+    pub timestamp: String,
+    pub role: SampleRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactBarMembership {
+    pub role: SampleRole,
+    pub ranges: Vec<Range<usize>>,
+    pub indices: Vec<usize>,
+    pub timestamps: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OosSeamProof {
+    pub purged: Range<usize>,
+    pub oos: Range<usize>,
+    pub embargoed: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutedPartition {
+    pub role: SampleRole,
+    pub range: Range<usize>,
+    pub dataset_id: String,
+    pub run_id: String,
+    pub report_id: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OosExecutionSpec {
+    pub scheme: OosScheme,
+    pub purge_bars: usize,
+    pub embargo_bars: usize,
+    pub metric_id: String,
+    pub root_seed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutedOosScheme {
+    source_dataset_id: String,
+    membership: Vec<ExactBarMember>,
+    seams: Vec<OosSeamProof>,
+    executed_partitions: Vec<ExecutedPartition>,
+}
+impl ExecutedOosScheme {
+    pub fn source_dataset_id(&self) -> &str {
+        &self.source_dataset_id
+    }
+    pub fn membership(&self) -> &[ExactBarMember] {
+        &self.membership
+    }
+    pub fn seams(&self) -> &[OosSeamProof] {
+        &self.seams
+    }
+    pub fn executed_partitions(&self) -> &[ExecutedPartition] {
+        &self.executed_partitions
+    }
+}
+
+/// Execute every IS/OOS partition of a declared scheme against child manifests rebuilt from the
+/// exact bars admitted by `source_lease`. Purged and embargoed bars are evidence only and never
+/// enter a simulator run.
+pub fn execute_oos_scheme(
+    strategy: &StrategyIr,
+    config: &StrategyExecutionConfig,
+    source_manifest: &DatasetManifest,
+    bars: &[Bar],
+    source_lease: SearchDataLease,
+    spec: OosExecutionSpec,
+) -> Result<ExecutedOosScheme, RetestError> {
+    validate_source_content(source_manifest, bars, &source_lease)?;
+    if spec.metric_id.trim().is_empty() {
+        return Err(RetestError::Invalid("metric id is empty".into()));
+    }
+    let plan = OosPlan::new(bars.len(), spec.scheme, spec.purge_bars, spec.embargo_bars)?;
+    let source_start = source_lease.range().start;
+    let membership = plan
+        .roles()
+        .iter()
+        .enumerate()
+        .map(|(index, role)| ExactBarMember {
+            source_index: source_start + index,
+            timestamp: bars[index].timestamp.clone(),
+            role: *role,
+        })
+        .collect();
+    let seams = plan
+        .role_ranges(SampleRole::OutOfSample)
+        .iter()
+        .map(|range| OosSeamProof {
+            purged: source_start + range.start.saturating_sub(spec.purge_bars)
+                ..source_start + range.start,
+            oos: source_start + range.start..source_start + range.end,
+            embargoed: source_start + range.end
+                ..source_start + range.end.saturating_add(spec.embargo_bars).min(bars.len()),
+        })
+        .collect();
+    let mut executed_partitions = Vec::new();
+    for role in [SampleRole::InSample, SampleRole::OutOfSample] {
+        for range in plan.role_ranges(role) {
+            let observation_role = match role {
+                SampleRole::InSample => ObservationRole::InSample,
+                SampleRole::OutOfSample => ObservationRole::OutOfSample,
+                _ => unreachable!(),
+            };
+            let run = execute_partition(
+                strategy,
+                config,
+                source_manifest,
+                bars,
+                &source_lease,
+                range.clone(),
+                observation_role,
+                &spec.metric_id,
+                spec.root_seed,
+            )?;
+            executed_partitions.push(ExecutedPartition {
+                role,
+                range: run.global_range,
+                dataset_id: run.dataset_id,
+                run_id: run.report.run_id().to_string(),
+                report_id: run.report.report_id().to_string(),
+                score: run.score,
+            });
+        }
+    }
+    executed_partitions.sort_by_key(|partition| {
+        (
+            partition.range.start,
+            partition.range.end,
+            sample_role_key(partition.role),
+        )
+    });
+    Ok(ExecutedOosScheme {
+        source_dataset_id: source_manifest.dataset_id.clone(),
+        membership,
+        seams,
+        executed_partitions,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WalkForwardOptimizationSpec {
+    pub config: WalkForwardConfig,
+    pub minimum_windows: usize,
+    pub metric_id: String,
+    pub direction: ObjectiveDirection,
+    pub root_seed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DegradationObservation {
+    pub in_sample_score: f64,
+    pub out_of_sample_score: f64,
+    pub delta: f64,
+    pub ratio_bps: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WalkForwardWindowResult {
+    pub ordinal: usize,
+    pub selected_candidate_id: String,
+    pub evaluations_n: usize,
+    pub in_sample: ExactBarMembership,
+    pub purged: ExactBarMembership,
+    pub embargoed: ExactBarMembership,
+    pub out_of_sample: ExactBarMembership,
+    pub in_sample_run_id: String,
+    pub in_sample_report_id: String,
+    pub oos_run_id: String,
+    pub oos_report_id: String,
+    pub degradation: DegradationObservation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConcatenatedOosResult {
+    pub ranges: Vec<Range<usize>>,
+    pub run_ids: Vec<String>,
+    pub report_ids: Vec<String>,
+    pub scores: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutedWalkForward {
+    source_dataset_id: String,
+    metric_id: String,
+    windows: Vec<WalkForwardWindowResult>,
+    concatenated_oos: ConcatenatedOosResult,
+    degradation_distribution: Vec<DegradationObservation>,
+}
+impl ExecutedWalkForward {
+    pub fn source_dataset_id(&self) -> &str {
+        &self.source_dataset_id
+    }
+    pub fn metric_id(&self) -> &str {
+        &self.metric_id
+    }
+    pub fn windows(&self) -> &[WalkForwardWindowResult] {
+        &self.windows
+    }
+    pub fn concatenated_oos(&self) -> &ConcatenatedOosResult {
+        &self.concatenated_oos
+    }
+    pub fn degradation_distribution(&self) -> &[DegradationObservation] {
+        &self.degradation_distribution
+    }
+}
+
+/// Re-optimize every exact IS window from report-derived observations, then execute only the
+/// selected canonical candidate on the following OOS content. No metric can enter from callers.
+pub fn execute_walk_forward_optimization(
+    config: &StrategyExecutionConfig,
+    source_manifest: &DatasetManifest,
+    bars: &[Bar],
+    source_lease: SearchDataLease,
+    candidates: &SearchBatch,
+    spec: WalkForwardOptimizationSpec,
+) -> Result<ExecutedWalkForward, RetestError> {
+    validate_source_content(source_manifest, bars, &source_lease)?;
+    validate_candidate_batch(candidates)?;
+    if spec.metric_id.trim().is_empty()
+        || spec.minimum_windows < 2
+        || spec.minimum_windows > MAX_STUDY_WINDOWS
+    {
+        return Err(RetestError::Invalid(
+            "invalid walk-forward observation contract".into(),
+        ));
+    }
+    let plan = FoldPlan::walk_forward(bars.len(), spec.config)?;
+    if plan.folds().len() < spec.minimum_windows {
+        return Err(RetestError::Invalid(
+            "insufficient complete walk-forward windows".into(),
+        ));
+    }
+    let objective = ObjectiveSpec::new(&spec.metric_id, spec.direction)?;
+    let source_start = source_lease.range().start;
+    let mut windows = Vec::with_capacity(plan.folds().len());
+    for (ordinal, fold) in plan.folds().iter().enumerate() {
+        let mut candidate_runs = Vec::with_capacity(candidates.candidates.len());
+        for candidate in &candidates.candidates {
+            candidate_runs.push(execute_partition(
+                &candidate.strategy,
+                config,
+                source_manifest,
+                bars,
+                &source_lease,
+                fold.train.clone(),
+                ObservationRole::SearchEvaluation,
+                &spec.metric_id,
+                spec.root_seed,
+            )?);
+        }
+        let observations = candidate_runs
+            .iter()
+            .map(|run| run.observation.clone())
+            .collect::<Vec<_>>();
+        let best = select_best(&observations, &objective)?;
+        let selected_index = candidate_runs
+            .iter()
+            .position(|run| run.observation.candidate_id() == best.candidate_id())
+            .ok_or_else(|| RetestError::Invalid("selected candidate is absent".into()))?;
+        let selected_is = &candidate_runs[selected_index];
+        let selected = &candidates.candidates[selected_index];
+        let selected_oos = execute_partition(
+            &selected.strategy,
+            config,
+            source_manifest,
+            bars,
+            &source_lease,
+            fold.test.clone(),
+            ObservationRole::OutOfSample,
+            &spec.metric_id,
+            spec.root_seed,
+        )?;
+        let purge_start = fold.train.end;
+        let purge_end = purge_start
+            .checked_add(spec.config.purge_bars)
+            .ok_or_else(|| RetestError::Invalid("walk-forward purge overflow".into()))?;
+        let embargo_end = purge_end
+            .checked_add(spec.config.embargo_bars)
+            .ok_or_else(|| RetestError::Invalid("walk-forward embargo overflow".into()))?;
+        if embargo_end != fold.test.start {
+            return Err(RetestError::Invalid(
+                "walk-forward fold does not prove its purge/embargo seam".into(),
+            ));
+        }
+        let degradation = degradation(selected_is.score, selected_oos.score)?;
+        windows.push(WalkForwardWindowResult {
+            ordinal,
+            selected_candidate_id: selected.candidate_id.clone(),
+            evaluations_n: candidates.evaluations_n,
+            in_sample: exact_membership(
+                SampleRole::InSample,
+                std::slice::from_ref(&fold.train),
+                bars,
+                source_start,
+            ),
+            purged: exact_membership(
+                SampleRole::Purged,
+                &[purge_start..purge_end],
+                bars,
+                source_start,
+            ),
+            embargoed: exact_membership(
+                SampleRole::Embargoed,
+                &[purge_end..embargo_end],
+                bars,
+                source_start,
+            ),
+            out_of_sample: exact_membership(
+                SampleRole::OutOfSample,
+                std::slice::from_ref(&fold.test),
+                bars,
+                source_start,
+            ),
+            in_sample_run_id: selected_is.report.run_id().to_string(),
+            in_sample_report_id: selected_is.report.report_id().to_string(),
+            oos_run_id: selected_oos.report.run_id().to_string(),
+            oos_report_id: selected_oos.report.report_id().to_string(),
+            degradation,
+        });
+    }
+    let concatenated_oos = ConcatenatedOosResult {
+        ranges: windows
+            .iter()
+            .map(|window| range_from_membership(&window.out_of_sample))
+            .collect::<Result<_, _>>()?,
+        run_ids: windows
+            .iter()
+            .map(|window| window.oos_run_id.clone())
+            .collect(),
+        report_ids: windows
+            .iter()
+            .map(|window| window.oos_report_id.clone())
+            .collect(),
+        scores: windows
+            .iter()
+            .map(|window| window.degradation.out_of_sample_score)
+            .collect(),
+    };
+    let degradation_distribution = windows
+        .iter()
+        .map(|window| window.degradation.clone())
+        .collect();
+    Ok(ExecutedWalkForward {
+        source_dataset_id: source_manifest.dataset_id.clone(),
+        metric_id: spec.metric_id,
+        windows,
+        concatenated_oos,
+        degradation_distribution,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WalkForwardMatrixSpec {
+    pub dimensions: Vec<(usize, usize)>,
+    pub step_bars: usize,
+    pub purge_bars: usize,
+    pub embargo_bars: usize,
+    pub anchored: bool,
+    pub minimum_windows: usize,
+    pub metric_id: String,
+    pub direction: ObjectiveDirection,
+    pub root_seed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutedWalkForwardMatrixCell {
+    pub train_bars: usize,
+    pub test_bars: usize,
+    pub result: ExecutedWalkForward,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutedWalkForwardMatrix {
+    cells: Vec<ExecutedWalkForwardMatrixCell>,
+}
+impl ExecutedWalkForwardMatrix {
+    pub fn cells(&self) -> &[ExecutedWalkForwardMatrixCell] {
+        &self.cells
+    }
+}
+
+pub fn execute_walk_forward_matrix(
+    config: &StrategyExecutionConfig,
+    source_manifest: &DatasetManifest,
+    bars: &[Bar],
+    source_lease: SearchDataLease,
+    candidates: &SearchBatch,
+    mut spec: WalkForwardMatrixSpec,
+) -> Result<ExecutedWalkForwardMatrix, RetestError> {
+    validate_source_content(source_manifest, bars, &source_lease)?;
+    if spec.dimensions.is_empty() || spec.dimensions.len() > MAX_WALK_FORWARD_MATRIX_CELLS {
+        return Err(RetestError::Invalid(
+            "walk-forward matrix exceeds its cell bound".into(),
+        ));
+    }
+    spec.dimensions.sort_unstable();
+    if spec.dimensions.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(RetestError::Invalid(
+            "walk-forward matrix contains duplicate dimensions".into(),
+        ));
+    }
+    let stage = source_lease.stage();
+    let source_range = source_lease.range();
+    let mut cells = Vec::with_capacity(spec.dimensions.len());
+    for (train_bars, test_bars) in spec.dimensions {
+        let lease = SearchDataLease::exact_partition(
+            stage,
+            source_manifest.dataset_id.clone(),
+            source_range.clone(),
+        )?;
+        let result = execute_walk_forward_optimization(
+            config,
+            source_manifest,
+            bars,
+            lease,
+            candidates,
+            WalkForwardOptimizationSpec {
+                config: WalkForwardConfig {
+                    train_bars,
+                    test_bars,
+                    step_bars: spec.step_bars,
+                    purge_bars: spec.purge_bars,
+                    embargo_bars: spec.embargo_bars,
+                    anchored: spec.anchored,
+                },
+                minimum_windows: spec.minimum_windows,
+                metric_id: spec.metric_id.clone(),
+                direction: spec.direction,
+                root_seed: spec.root_seed,
+            },
+        )?;
+        cells.push(ExecutedWalkForwardMatrixCell {
+            train_bars,
+            test_bars,
+            result,
+        });
+    }
+    Ok(ExecutedWalkForwardMatrix { cells })
+}
+
+struct PartitionRun {
+    global_range: Range<usize>,
+    dataset_id: String,
+    report: StrategyReportArtifact,
+    observation: ReportObservation,
+    score: f64,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_partition(
+    strategy: &StrategyIr,
+    config: &StrategyExecutionConfig,
+    source_manifest: &DatasetManifest,
+    bars: &[Bar],
+    source_lease: &SearchDataLease,
+    local_range: Range<usize>,
+    role: ObservationRole,
+    metric_id: &str,
+    root_seed: u64,
+) -> Result<PartitionRun, RetestError> {
+    if local_range.start >= local_range.end || local_range.end > bars.len() {
+        return Err(RetestError::Invalid("invalid study partition range".into()));
+    }
+    let partition_bars = &bars[local_range.clone()];
+    let partition_manifest =
+        DatasetManifest::build(&source_manifest.to_input(), partition_bars).map_err(invalid)?;
+    let source_start = source_lease.range().start;
+    let global_range = source_start + local_range.start..source_start + local_range.end;
+    let partition_lease = SearchDataLease::exact_partition(
+        source_lease.stage(),
+        partition_manifest.dataset_id.clone(),
+        global_range.clone(),
     )?;
-    Ok(CompletedRetest {
-        request_id: request.request_id,
+    let request = RetestExecutionRequest::seal(
+        strategy,
+        config,
+        &partition_manifest,
+        partition_bars,
+        partition_lease,
+        role,
+        metric_id,
+        root_seed,
+    )?;
+    let (report, observation, score) = execute_bound_observation(&request)?;
+    Ok(PartitionRun {
+        global_range,
+        dataset_id: partition_manifest.dataset_id,
         report,
         observation,
-        robustness: outcome.artifact().clone(),
-        evaluations_n,
-        metric_id: request.metric_id,
-        metric_value,
+        score,
     })
+}
+
+fn validate_source_content(
+    source_manifest: &DatasetManifest,
+    bars: &[Bar],
+    source_lease: &SearchDataLease,
+) -> Result<(), RetestError> {
+    source_manifest.verify(bars).map_err(invalid)?;
+    let range = source_lease.range();
+    if !matches!(
+        source_lease.stage(),
+        StageAccess::Search | StageAccess::Robustness
+    ) || source_lease.dataset_id() != source_manifest.dataset_id
+        || range.start >= range.end
+        || range.len() != bars.len()
+    {
+        return Err(RetestError::Invalid(
+            "source lease and exact content disagree".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_candidate_batch(candidates: &SearchBatch) -> Result<(), RetestError> {
+    if candidates.candidates.is_empty()
+        || candidates.evaluations_n != candidates.candidates.len()
+        || candidates.evaluations_n > crate::core::strategy_optimization::MAX_TRIAL_BUDGET
+    {
+        return Err(RetestError::Invalid(
+            "invalid candidate evaluation set".into(),
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for candidate in &candidates.candidates {
+        candidate.strategy.verify().map_err(invalid)?;
+        if candidate.candidate_id != candidate.strategy.strategy_id()
+            || !ids.insert(candidate.candidate_id.as_str())
+        {
+            return Err(RetestError::Invalid(
+                "candidate set identity mismatch".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn exact_membership(
+    role: SampleRole,
+    ranges: &[Range<usize>],
+    bars: &[Bar],
+    source_start: usize,
+) -> ExactBarMembership {
+    let mut indices = Vec::new();
+    let mut timestamps = Vec::new();
+    let global_ranges = ranges
+        .iter()
+        .map(|range| {
+            for index in range.clone() {
+                indices.push(source_start + index);
+                timestamps.push(bars[index].timestamp.clone());
+            }
+            source_start + range.start..source_start + range.end
+        })
+        .collect();
+    ExactBarMembership {
+        role,
+        ranges: global_ranges,
+        indices,
+        timestamps,
+    }
+}
+
+fn range_from_membership(membership: &ExactBarMembership) -> Result<Range<usize>, RetestError> {
+    if membership.ranges.len() != 1 {
+        return Err(RetestError::Invalid(
+            "walk-forward OOS membership is not contiguous".into(),
+        ));
+    }
+    Ok(membership.ranges[0].clone())
+}
+
+fn degradation(in_sample: f64, out_of_sample: f64) -> Result<DegradationObservation, RetestError> {
+    if !in_sample.is_finite() || !out_of_sample.is_finite() {
+        return Err(RetestError::Invalid("undefined degradation metric".into()));
+    }
+    let ratio_bps = if in_sample == 0.0 {
+        None
+    } else {
+        let ratio = (out_of_sample / in_sample * 10_000.0).round();
+        if ratio < f64::from(i32::MIN) || ratio > f64::from(i32::MAX) {
+            return Err(RetestError::Invalid("degradation ratio overflow".into()));
+        }
+        Some(ratio as i32)
+    };
+    Ok(DegradationObservation {
+        in_sample_score: in_sample,
+        out_of_sample_score: out_of_sample,
+        delta: out_of_sample - in_sample,
+        ratio_bps,
+    })
+}
+
+fn sample_role_key(role: SampleRole) -> u8 {
+    match role {
+        SampleRole::InSample => 0,
+        SampleRole::OutOfSample => 1,
+        SampleRole::Purged => 2,
+        SampleRole::Embargoed => 3,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

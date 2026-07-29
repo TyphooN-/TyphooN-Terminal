@@ -5,11 +5,14 @@ use crate::core::strategy_dataset::{
     AdjustmentPolicy, CalendarPolicy, DatasetManifest, DatasetManifestInput, DatasetProvenance,
     DatasetQaPolicy,
 };
-use crate::core::strategy_ir::{ExecutionSettings, StrategyExecutionConfig};
+use crate::core::strategy_ir::{
+    ExecutionSettings, ParamRange, ParamValue, StrategyExecutionConfig, StrategyParameter,
+};
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_optimization::{
-    HoldoutQuarantine, ObservationRole, Percentile, RobustnessPipeline, RobustnessStageSpec,
-    StageAccess, StageVerdict, Threshold,
+    HoldoutQuarantine, ObjectiveDirection, ObservationRole, OosScheme, ParameterDomain, Percentile,
+    RobustnessPipeline, RobustnessStageSpec, SampleRole, SearchBatch, SearchMethod, SearchSpace,
+    StageAccess, StageVerdict, Threshold, WalkForwardConfig, generate_candidates,
 };
 
 fn bars() -> Vec<Bar> {
@@ -381,4 +384,258 @@ fn bounded_worker_runs_off_thread_and_reports_cancel_stale_and_failure_without_i
     }
     assert!(cancelled && failed);
     assert_ne!(worker_thread.unwrap(), submitter);
+}
+
+fn study_fixture(
+    count: usize,
+) -> (
+    crate::core::strategy_ir::StrategyIr,
+    StrategyExecutionConfig,
+    Vec<Bar>,
+    DatasetManifest,
+) {
+    let mut definition = GeneralStrategyBuilder::new("study", "test")
+        .definition()
+        .clone();
+    definition.parameters = vec![StrategyParameter {
+        id: "lookback".into(),
+        value: ParamValue::Int(2),
+        range: Some(ParamRange::Int { min: 2, max: 4 }),
+    }];
+    let strategy = crate::core::strategy_ir::StrategyIr::build(&definition).unwrap();
+    let config =
+        StrategyExecutionConfig::build(&ExecutionSettings::conservative_defaults()).unwrap();
+    let bars = (0..count)
+        .map(|index| {
+            let open = 100.0 + index as f64;
+            Bar {
+                timestamp: format!("2026-03-{:02}T00:00:00Z", index + 1),
+                open,
+                high: open + 2.0,
+                low: open - 1.0,
+                close: open + 1.0,
+                volume: 100.0,
+            }
+        })
+        .collect::<Vec<_>>();
+    let manifest = manifest(&bars);
+    (strategy, config, bars, manifest)
+}
+
+fn study_lease(manifest: &DatasetManifest, bars: usize) -> SearchDataLease {
+    HoldoutQuarantine::new(&manifest.dataset_id, "f".repeat(64), bars + 4, 4)
+        .unwrap()
+        .lease(StageAccess::Robustness)
+        .unwrap()
+}
+
+fn candidate_batch(strategy: &crate::core::strategy_ir::StrategyIr) -> SearchBatch {
+    let space = SearchSpace::new(
+        strategy.clone(),
+        vec![
+            ParameterDomain::new(
+                "lookback",
+                vec![ParamValue::Int(2), ParamValue::Int(3), ParamValue::Int(4)],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    generate_candidates(&space, SearchMethod::Grid, 3).unwrap()
+}
+
+#[test]
+fn every_written_oos_scheme_executes_exact_content_and_proves_membership_seams() {
+    let (strategy, config, bars, manifest) = study_fixture(24);
+    let schemes = [
+        OosScheme::Leading { oos_bars: 4 },
+        OosScheme::Trailing { oos_bars: 4 },
+        OosScheme::Interleaved {
+            in_sample_bars: 4,
+            oos_bars: 2,
+        },
+        OosScheme::Disjoint {
+            windows: vec![4..6, 14..17],
+        },
+    ];
+    for scheme in schemes {
+        let result = execute_oos_scheme(
+            &strategy,
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            OosExecutionSpec {
+                scheme,
+                purge_bars: 1,
+                embargo_bars: 1,
+                metric_id: "total_return".into(),
+                root_seed: 91,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.source_dataset_id(), manifest.dataset_id);
+        assert_eq!(result.membership().len(), bars.len());
+        assert!(
+            result
+                .executed_partitions()
+                .iter()
+                .all(|partition| !partition.run_id.is_empty()
+                    && !partition.report_id.is_empty()
+                    && partition.score.is_finite()
+                    && matches!(
+                        partition.role,
+                        SampleRole::InSample | SampleRole::OutOfSample
+                    ))
+        );
+        let mut seen = std::collections::BTreeSet::new();
+        for member in result.membership() {
+            assert!(seen.insert(member.source_index));
+            assert_eq!(member.timestamp, bars[member.source_index].timestamp);
+        }
+        assert_eq!(seen.len(), bars.len());
+        for seam in result.seams() {
+            assert!(seam.purged.end <= seam.oos.start || seam.purged.is_empty());
+            assert!(seam.oos.end <= seam.embargoed.start || seam.embargoed.is_empty());
+        }
+    }
+}
+
+#[test]
+fn rolling_and_anchored_walk_forward_reoptimize_on_exact_is_then_execute_oos() {
+    let (strategy, config, bars, manifest) = study_fixture(30);
+    let candidates = candidate_batch(&strategy);
+    for anchored in [false, true] {
+        let result = execute_walk_forward_optimization(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &candidates,
+            WalkForwardOptimizationSpec {
+                config: WalkForwardConfig {
+                    train_bars: 10,
+                    test_bars: 4,
+                    step_bars: 4,
+                    purge_bars: 1,
+                    embargo_bars: 1,
+                    anchored,
+                },
+                minimum_windows: 2,
+                metric_id: "total_return".into(),
+                direction: ObjectiveDirection::Maximize,
+                root_seed: 17,
+            },
+        )
+        .unwrap();
+        assert!(result.windows().len() >= 2);
+        assert_eq!(
+            result.degradation_distribution().len(),
+            result.windows().len()
+        );
+        assert_eq!(
+            result.concatenated_oos().report_ids.len(),
+            result.windows().len()
+        );
+        for window in result.windows() {
+            assert_eq!(window.evaluations_n, candidates.evaluations_n);
+            assert!(!window.selected_candidate_id.is_empty());
+            assert_eq!(window.in_sample.role, SampleRole::InSample);
+            assert_eq!(window.out_of_sample.role, SampleRole::OutOfSample);
+            assert!(window.in_sample.indices.iter().all(|index| {
+                !window.out_of_sample.indices.contains(index)
+                    && !window.purged.indices.contains(index)
+                    && !window.embargoed.indices.contains(index)
+            }));
+            assert!(window.in_sample_report_id.len() == 64 && window.oos_report_id.len() == 64);
+        }
+    }
+}
+
+#[test]
+fn walk_forward_matrix_is_bounded_deterministic_and_refuses_insufficient_or_invalid_evidence() {
+    let (strategy, config, bars, manifest) = study_fixture(30);
+    let candidates = candidate_batch(&strategy);
+    let dimensions = vec![(8, 3), (10, 4), (12, 3)];
+    let execute = |dimensions: Vec<(usize, usize)>| {
+        execute_walk_forward_matrix(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &candidates,
+            WalkForwardMatrixSpec {
+                dimensions,
+                step_bars: 4,
+                purge_bars: 1,
+                embargo_bars: 1,
+                anchored: false,
+                minimum_windows: 2,
+                metric_id: "total_return".into(),
+                direction: ObjectiveDirection::Maximize,
+                root_seed: 27,
+            },
+        )
+    };
+    let matrix = execute(dimensions.clone()).unwrap();
+    assert_eq!(matrix.cells().len(), dimensions.len());
+    assert_eq!(matrix, execute(dimensions).unwrap());
+    assert!(matrix.cells().windows(2).all(|pair| {
+        (pair[0].train_bars, pair[0].test_bars) < (pair[1].train_bars, pair[1].test_bars)
+    }));
+
+    assert!(execute(vec![(28, 4)]).is_err());
+    assert!(execute(vec![(8, 3); MAX_WALK_FORWARD_MATRIX_CELLS + 1]).is_err());
+
+    let wrong_partition = HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), 34, 4)
+        .unwrap()
+        .lease(StageAccess::Robustness)
+        .unwrap();
+    assert!(
+        execute_walk_forward_optimization(
+            &config,
+            &manifest,
+            &bars,
+            wrong_partition,
+            &candidates,
+            WalkForwardOptimizationSpec {
+                config: WalkForwardConfig {
+                    train_bars: 10,
+                    test_bars: 4,
+                    step_bars: 4,
+                    purge_bars: 1,
+                    embargo_bars: 1,
+                    anchored: false,
+                },
+                minimum_windows: 2,
+                metric_id: "total_return".into(),
+                direction: ObjectiveDirection::Maximize,
+                root_seed: 17,
+            },
+        )
+        .is_err()
+    );
+
+    let undefined = execute_walk_forward_optimization(
+        &config,
+        &manifest,
+        &bars,
+        study_lease(&manifest, bars.len()),
+        &candidates,
+        WalkForwardOptimizationSpec {
+            config: WalkForwardConfig {
+                train_bars: 10,
+                test_bars: 4,
+                step_bars: 4,
+                purge_bars: 1,
+                embargo_bars: 1,
+                anchored: false,
+            },
+            minimum_windows: 2,
+            metric_id: "profit_factor".into(),
+            direction: ObjectiveDirection::Maximize,
+            root_seed: 17,
+        },
+    );
+    assert!(undefined.is_err());
 }
