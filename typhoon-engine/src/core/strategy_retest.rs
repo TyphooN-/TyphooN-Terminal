@@ -7,6 +7,7 @@
 //! indexed windows.
 
 use crate::broker::alpaca::Bar;
+use crate::core::strategy_bayesian::BayesianStudyArtifact;
 use crate::core::strategy_dataset::DatasetManifest;
 use crate::core::strategy_ir::{
     DatasetBinding, RunBinding, StrategyExecutionConfig, StrategyIr, StrategyRunManifest,
@@ -135,14 +136,28 @@ impl RetestExecutionRequest {
         METRICS_SCHEMA_VERSION
     }
     fn compute_id(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(REQUEST_DOMAIN);
-        frame(&mut hasher, self.retest.request_id().as_bytes());
-        frame(&mut hasher, self.dataset.manifest_id.as_bytes());
-        hasher.update([role_key(self.role)]);
-        frame(&mut hasher, self.metric_id.as_bytes());
-        hex(hasher.finalize())
+        execution_request_id(
+            &self.retest,
+            &self.dataset.manifest_id,
+            self.role,
+            &self.metric_id,
+        )
     }
+}
+
+pub(crate) fn execution_request_id(
+    retest: &RetestRequest,
+    manifest_id: &str,
+    role: ObservationRole,
+    metric_id: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(REQUEST_DOMAIN);
+    frame(&mut hasher, retest.request_id().as_bytes());
+    frame(&mut hasher, manifest_id.as_bytes());
+    hasher.update([role_key(role)]);
+    frame(&mut hasher, metric_id.as_bytes());
+    hex(hasher.finalize())
 }
 
 #[derive(Debug)]
@@ -201,7 +216,7 @@ pub fn execute_retest(
 
 /// The shared content-bound execution core. Both one-off retests and multi-window studies pass
 /// through this exact `VerifiedRun` → canonical simulator → sealed report boundary.
-fn execute_bound_observation(
+pub(crate) fn execute_bound_observation(
     request: &RetestExecutionRequest,
 ) -> Result<(StrategyReportArtifact, ReportObservation, f64), RetestError> {
     if request.request_id != request.compute_id() {
@@ -2092,6 +2107,7 @@ pub enum StudyArtifactKind {
     WalkForwardMatrix,
     TradeMonteCarlo,
     CalendarWalkForward,
+    BayesianOptimization,
 }
 impl StudyArtifactKind {
     fn key(self) -> i64 {
@@ -2101,6 +2117,7 @@ impl StudyArtifactKind {
             Self::WalkForwardMatrix => 2,
             Self::TradeMonteCarlo => 3,
             Self::CalendarWalkForward => 4,
+            Self::BayesianOptimization => 5,
         }
     }
     fn decode(value: i64) -> Result<Self, RetestError> {
@@ -2110,6 +2127,7 @@ impl StudyArtifactKind {
             2 => Ok(Self::WalkForwardMatrix),
             3 => Ok(Self::TradeMonteCarlo),
             4 => Ok(Self::CalendarWalkForward),
+            5 => Ok(Self::BayesianOptimization),
             _ => Err(RetestError::Invalid("unknown study artifact kind".into())),
         }
     }
@@ -2122,6 +2140,7 @@ pub enum StudyArtifact {
     WalkForwardMatrix(ExecutedWalkForwardMatrix),
     TradeMonteCarlo(TradeMonteCarloArtifact),
     CalendarWalkForward(ExecutedCalendarWalkForward),
+    BayesianOptimization(BayesianStudyArtifact),
 }
 impl StudyArtifact {
     fn decode(kind: StudyArtifactKind, bytes: &[u8]) -> Result<Self, RetestError> {
@@ -2139,6 +2158,9 @@ impl StudyArtifact {
             StudyArtifactKind::CalendarWalkForward => {
                 Self::CalendarWalkForward(ExecutedCalendarWalkForward::from_json_slice(bytes)?)
             }
+            StudyArtifactKind::BayesianOptimization => {
+                Self::BayesianOptimization(BayesianStudyArtifact::from_json_slice(bytes)?)
+            }
         })
     }
     fn artifact_id(&self) -> &str {
@@ -2148,6 +2170,7 @@ impl StudyArtifact {
             Self::WalkForwardMatrix(value) => value.artifact_id(),
             Self::TradeMonteCarlo(value) => value.artifact_id(),
             Self::CalendarWalkForward(value) => value.artifact_id(),
+            Self::BayesianOptimization(value) => value.artifact_id(),
         }
     }
     fn source_dataset_id(&self) -> &str {
@@ -2157,6 +2180,7 @@ impl StudyArtifact {
             Self::WalkForwardMatrix(value) => value.source_dataset_id(),
             Self::TradeMonteCarlo(value) => value.dataset_id(),
             Self::CalendarWalkForward(value) => value.source_dataset_id(),
+            Self::BayesianOptimization(value) => value.source_dataset_id(),
         }
     }
 }
@@ -2397,6 +2421,19 @@ impl RetestEvidenceStore {
             StudyArtifactKind::TradeMonteCarlo,
             artifact.artifact_id(),
             artifact.dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_bayesian_study(
+        &self,
+        artifact: &BayesianStudyArtifact,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::BayesianOptimization,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
             artifact.to_json_vec()?,
             created_sequence,
         )

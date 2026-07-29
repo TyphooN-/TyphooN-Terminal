@@ -151,6 +151,12 @@ impl SearchSpace {
     pub fn combinations(&self) -> usize {
         self.combinations
     }
+    pub(crate) fn base(&self) -> &StrategyIr {
+        &self.base
+    }
+    pub(crate) fn domains(&self) -> &[ParameterDomain] {
+        &self.domains
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,7 +289,10 @@ pub fn generate_candidates(
     })
 }
 
-fn instantiate(space: &SearchSpace, ordinal: usize) -> Result<Candidate, OptimizationError> {
+pub(crate) fn instantiate(
+    space: &SearchSpace,
+    ordinal: usize,
+) -> Result<Candidate, OptimizationError> {
     let indices = ordinal_indices(space, ordinal);
     let assignments: Vec<_> = space
         .domains
@@ -307,7 +316,7 @@ fn instantiate(space: &SearchSpace, ordinal: usize) -> Result<Candidate, Optimiz
     })
 }
 
-fn ordinal_indices(space: &SearchSpace, mut ordinal: usize) -> Vec<usize> {
+pub(crate) fn ordinal_indices(space: &SearchSpace, mut ordinal: usize) -> Vec<usize> {
     let mut indices = vec![0; space.domains.len()];
     for index in (0..space.domains.len()).rev() {
         indices[index] = ordinal % space.domains[index].values.len();
@@ -1659,7 +1668,8 @@ impl PipelineOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ObjectiveDirection {
     Maximize,
     Minimize,

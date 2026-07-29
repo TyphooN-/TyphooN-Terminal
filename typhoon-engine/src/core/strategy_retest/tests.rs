@@ -1188,3 +1188,271 @@ fn disk_backed_worker_persists_completed_retest_across_restart() {
     assert_eq!(page.records.len(), 1);
     let _ = std::fs::remove_file(path);
 }
+
+fn bayesian_fixture(
+    descending: bool,
+) -> (
+    crate::core::strategy_ir::StrategyIr,
+    StrategyExecutionConfig,
+    Vec<Bar>,
+    DatasetManifest,
+    SearchSpace,
+) {
+    let mut definition = GeneralStrategyBuilder::new("bayesian", "test")
+        .definition()
+        .clone();
+    definition.parameters = vec![StrategyParameter {
+        id: "threshold".into(),
+        value: ParamValue::Float(100.0),
+        range: Some(ParamRange::Float {
+            min: 95.0,
+            max: 115.0,
+        }),
+    }];
+    definition.long.enabled = true;
+    definition.long.entry = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Parameter("threshold".into()),
+    };
+    definition.long.exit = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Less,
+        right: Operand::Parameter("threshold".into()),
+    };
+    let strategy = crate::core::strategy_ir::StrategyIr::build(&definition).unwrap();
+    let config =
+        StrategyExecutionConfig::build(&ExecutionSettings::conservative_defaults()).unwrap();
+    let closes = if descending {
+        vec![114.0, 111.0, 108.0, 105.0, 102.0, 99.0, 96.0, 93.0]
+    } else {
+        vec![96.0, 99.0, 102.0, 105.0, 108.0, 111.0, 114.0, 117.0]
+    };
+    let bars = closes
+        .into_iter()
+        .enumerate()
+        .map(|(index, close)| Bar {
+            timestamp: format!("2026-04-{:02}T00:00:00Z", index + 1),
+            open: close - 1.0,
+            high: close + 2.0,
+            low: close - 2.0,
+            close,
+            volume: 100.0,
+        })
+        .collect::<Vec<_>>();
+    let manifest = manifest(&bars);
+    let space = SearchSpace::new(
+        strategy.clone(),
+        vec![
+            ParameterDomain::new(
+                "threshold",
+                vec![95.0, 99.0, 103.0, 107.0, 111.0, 115.0]
+                    .into_iter()
+                    .map(ParamValue::Float)
+                    .collect(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    (strategy, config, bars, manifest, space)
+}
+
+fn bayesian_spec() -> crate::core::strategy_bayesian::BayesianOptimizationSpec {
+    crate::core::strategy_bayesian::BayesianOptimizationSpec {
+        budget: 5,
+        initial_design_size: 2,
+        acquisition_pool_limit: 64,
+        nearest_neighbors: 2,
+        exploration_bps: 2_500,
+        metric_id: "net_profit".into(),
+        direction: ObjectiveDirection::Maximize,
+        root_seed: 0x135,
+    }
+}
+
+#[test]
+fn adaptive_bayesian_study_replays_verified_observations_and_persists_immutably() {
+    use crate::core::strategy_bayesian::{
+        BayesianProposalKind, BayesianStudyArtifact, execute_bayesian_optimization,
+    };
+
+    let (_, config, bars, manifest, space) = bayesian_fixture(false);
+    let execute = || {
+        execute_bayesian_optimization(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            bayesian_spec(),
+        )
+    };
+    let artifact = execute().unwrap();
+    artifact.verify().unwrap();
+    assert_eq!(artifact, execute().unwrap());
+    assert_eq!(artifact.evaluations_n(), 5);
+    assert_eq!(artifact.decisions().len(), 5);
+    assert_eq!(artifact.observations().len(), 5);
+    assert!(
+        artifact.decisions()[..2]
+            .iter()
+            .all(|decision| decision.kind == BayesianProposalKind::SeededDesign)
+    );
+    assert!(
+        artifact.decisions()[2..]
+            .iter()
+            .all(|decision| decision.kind == BayesianProposalKind::Acquisition)
+    );
+    assert!(
+        artifact
+            .observations()
+            .iter()
+            .enumerate()
+            .all(|(index, observation)| {
+                observation.evaluation_n == index + 1
+                    && observation.run_id.len() == 64
+                    && observation.report_id.len() == 64
+                    && observation.value.is_finite()
+            })
+    );
+    let ids = artifact
+        .decisions()
+        .iter()
+        .map(|decision| decision.candidate_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(ids.len(), 5);
+    assert_eq!(
+        artifact,
+        BayesianStudyArtifact::from_json_slice(&artifact.to_json_vec().unwrap()).unwrap()
+    );
+
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    store.persist_bayesian_study(&artifact, 9).unwrap();
+    assert!(matches!(
+        store.persist_bayesian_study(&artifact, 10),
+        Err(RetestError::DuplicateLineage)
+    ));
+    let page = store
+        .query_studies(&StudyArtifactQuery {
+            source_dataset_id: manifest.dataset_id.clone(),
+            kind: Some(StudyArtifactKind::BayesianOptimization),
+            after_sequence: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert!(matches!(
+        &page.records[0].artifact,
+        StudyArtifact::BayesianOptimization(value) if value == &artifact
+    ));
+}
+
+#[test]
+fn adaptive_bayesian_later_proposals_depend_on_canonical_report_values() {
+    use crate::core::strategy_bayesian::execute_bayesian_optimization;
+
+    let (_, rising_config, rising_bars, rising_manifest, rising_space) = bayesian_fixture(false);
+    let (_, falling_config, falling_bars, falling_manifest, falling_space) = bayesian_fixture(true);
+    let rising = execute_bayesian_optimization(
+        &rising_config,
+        &rising_manifest,
+        &rising_bars,
+        study_lease(&rising_manifest, rising_bars.len()),
+        &rising_space,
+        bayesian_spec(),
+    )
+    .unwrap();
+    let falling = execute_bayesian_optimization(
+        &falling_config,
+        &falling_manifest,
+        &falling_bars,
+        study_lease(&falling_manifest, falling_bars.len()),
+        &falling_space,
+        bayesian_spec(),
+    )
+    .unwrap();
+
+    let rising_seeded = rising.decisions()[..2]
+        .iter()
+        .map(|decision| &decision.assignments)
+        .collect::<Vec<_>>();
+    let falling_seeded = falling.decisions()[..2]
+        .iter()
+        .map(|decision| &decision.assignments)
+        .collect::<Vec<_>>();
+    assert_eq!(rising_seeded, falling_seeded);
+    assert_ne!(
+        rising.observations()[..2]
+            .iter()
+            .map(|observation| observation.value.to_bits())
+            .collect::<Vec<_>>(),
+        falling.observations()[..2]
+            .iter()
+            .map(|observation| observation.value.to_bits())
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(
+        rising.decisions()[2].assignments,
+        falling.decisions()[2].assignments
+    );
+}
+
+#[test]
+fn adaptive_bayesian_fails_closed_on_bounds_holdout_undefined_and_tampering() {
+    use crate::core::strategy_bayesian::{BayesianStudyArtifact, execute_bayesian_optimization};
+
+    let (_, config, bars, manifest, space) = bayesian_fixture(false);
+    let execute = |spec| {
+        execute_bayesian_optimization(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            spec,
+        )
+    };
+    for budget in [0, space.combinations() + 1, MAX_TRIAL_BUDGET + 1] {
+        let mut spec = bayesian_spec();
+        spec.budget = budget;
+        assert!(execute(spec).is_err());
+    }
+    let mut undefined = bayesian_spec();
+    undefined.metric_id = "profit_factor".into();
+    assert!(execute(undefined).is_err());
+
+    let foreign = HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), 12, 4)
+        .unwrap()
+        .lease(StageAccess::Search)
+        .unwrap();
+    assert!(
+        execute_bayesian_optimization(&config, &manifest, &bars, foreign, &space, bayesian_spec(),)
+            .is_err()
+    );
+    assert!(
+        HoldoutQuarantine::new(&manifest.dataset_id, "f".repeat(64), 12, 4)
+            .unwrap()
+            .lease(StageAccess::FinalReview)
+            .is_err()
+    );
+
+    let artifact = execute(bayesian_spec()).unwrap();
+    let mut tampered: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+    tampered["observations"][0]["value"] = serde_json::json!(999999.0);
+    assert!(
+        BayesianStudyArtifact::from_json_slice(&serde_json::to_vec(&tampered).unwrap()).is_err()
+    );
+    let mut duplicate: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+    duplicate["decisions"][1]["candidate_id"] = duplicate["decisions"][0]["candidate_id"].clone();
+    assert!(
+        BayesianStudyArtifact::from_json_slice(&serde_json::to_vec(&duplicate).unwrap()).is_err()
+    );
+}
