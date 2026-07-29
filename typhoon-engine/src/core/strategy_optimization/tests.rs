@@ -263,6 +263,115 @@ fn purged_embargoed_holdout_and_walk_forward_folds_are_causal_and_deterministic(
 }
 
 #[test]
+fn calendar_walk_forward_uses_irregular_time_not_bar_counts_and_distinguishes_rolling_from_anchored()
+ {
+    let timestamps = [
+        "2026-01-01T14:30:00Z",
+        "2026-01-02T14:30:00Z",
+        "2026-01-05T14:30:00Z",
+        "2026-01-06T14:30:00Z",
+        "2026-01-10T14:30:00Z",
+        "2026-01-11T14:30:00Z",
+        "2026-01-15T14:30:00Z",
+        "2026-01-16T14:30:00Z",
+        "2026-01-20T14:30:00Z",
+        "2026-01-21T14:30:00Z",
+        "2026-01-25T14:30:00Z",
+    ]
+    .map(str::to_string);
+    let config = CalendarWalkForwardConfig {
+        train_seconds: 4 * 86_400,
+        test_seconds: 4 * 86_400,
+        step_seconds: 5 * 86_400,
+        purge_seconds: 86_400,
+        embargo_seconds: 86_400,
+        anchored: false,
+    };
+    let rolling = CalendarFoldPlan::walk_forward(&timestamps, config).unwrap();
+    let anchored = CalendarFoldPlan::walk_forward(
+        &timestamps,
+        CalendarWalkForwardConfig {
+            anchored: true,
+            ..config
+        },
+    )
+    .unwrap();
+
+    assert_eq!(rolling.folds()[0].train, 0..2);
+    assert_eq!(rolling.folds()[0].purged, 2..3);
+    assert_eq!(rolling.folds()[0].embargoed, 3..4);
+    assert_eq!(rolling.folds()[0].test, 4..5);
+    assert_eq!(rolling.folds()[1].train, 3..4);
+    assert_eq!(anchored.folds()[1].train, 0..4);
+    assert_ne!(
+        rolling.folds()[0].train,
+        FoldPlan::walk_forward(
+            timestamps.len(),
+            WalkForwardConfig {
+                train_bars: 4,
+                test_bars: 4,
+                step_bars: 5,
+                purge_bars: 1,
+                embargo_bars: 1,
+                anchored: false,
+            },
+        )
+        .unwrap()
+        .folds()[0]
+            .train
+    );
+    assert_eq!(
+        rolling,
+        CalendarFoldPlan::walk_forward(&timestamps, config).unwrap()
+    );
+}
+
+#[test]
+fn calendar_walk_forward_fails_closed_on_bad_or_unbounded_time_evidence() {
+    let valid = [
+        "2026-01-01T00:00:00Z".to_string(),
+        "2026-02-01T00:00:00Z".to_string(),
+    ];
+    let config = CalendarWalkForwardConfig {
+        train_seconds: 86_400,
+        test_seconds: 86_400,
+        step_seconds: 86_400,
+        purge_seconds: 0,
+        embargo_seconds: 0,
+        anchored: false,
+    };
+    for timestamps in [
+        vec!["not-iso-8601".into(), valid[1].clone()],
+        vec![valid[1].clone(), valid[0].clone()],
+        vec![valid[0].clone(), valid[0].clone()],
+        vec![
+            "2026-01-01T00:00:00Z".into(),
+            "2025-12-31T19:00:00-05:00".into(),
+        ],
+    ] {
+        assert!(CalendarFoldPlan::walk_forward(&timestamps, config).is_err());
+    }
+    assert!(
+        CalendarFoldPlan::walk_forward(
+            &valid,
+            CalendarWalkForwardConfig {
+                train_seconds: MAX_CALENDAR_WINDOW_SECONDS + 1,
+                ..config
+            },
+        )
+        .is_err()
+    );
+    assert!(
+        CalendarFoldPlan::walk_forward(
+            &["9999-12-30T00:00:00Z".into(), "9999-12-31T00:00:00Z".into()],
+            config,
+        )
+        .is_err()
+    );
+    assert!(CalendarFoldPlan::walk_forward(&valid[..1], config).is_err());
+}
+
+#[test]
 fn search_api_refuses_holdout_and_holdout_is_one_way_burned() {
     let quarantine = HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), 100, 20).unwrap();
     assert_eq!(quarantine.search_range().unwrap(), 0..80);

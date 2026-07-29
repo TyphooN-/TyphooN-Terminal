@@ -20,6 +20,7 @@
 use crate::core::strategy_ir::{ParamRange, ParamValue, StrategyIr};
 use crate::core::strategy_metrics::MetricValue;
 use crate::core::strategy_report::StrategyReportArtifact;
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -656,6 +657,202 @@ impl FoldPlan {
     pub fn folds(&self) -> &[Fold] {
         &self.folds
     }
+}
+
+/// Maximum span of any declared calendar walk-forward schedule (ten Julian years).
+pub const MAX_CALENDAR_WINDOW_SECONDS: i64 = 315_576_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarWalkForwardConfig {
+    pub train_seconds: i64,
+    pub test_seconds: i64,
+    pub step_seconds: i64,
+    pub purge_seconds: i64,
+    pub embargo_seconds: i64,
+    pub anchored: bool,
+}
+
+impl CalendarWalkForwardConfig {
+    pub fn validate(self) -> Result<(), OptimizationError> {
+        validate_calendar_config(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarWindowBounds {
+    pub train_start: String,
+    pub train_end: String,
+    pub purge_end: String,
+    pub test_start: String,
+    pub test_end: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarFold {
+    pub train: Range<usize>,
+    pub purged: Range<usize>,
+    pub embargoed: Range<usize>,
+    pub test: Range<usize>,
+    pub bounds: CalendarWindowBounds,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarFoldPlan {
+    folds: Vec<CalendarFold>,
+}
+
+impl CalendarFoldPlan {
+    pub fn walk_forward(
+        timestamps: &[String],
+        config: CalendarWalkForwardConfig,
+    ) -> Result<Self, OptimizationError> {
+        validate_calendar_config(config)?;
+        if timestamps.len() < 2 || timestamps.len() > MAX_SEARCH_COMBINATIONS {
+            return Err(invalid_fold(
+                "insufficient or unbounded timestamp population",
+            ));
+        }
+        let mut parsed = Vec::with_capacity(timestamps.len());
+        for timestamp in timestamps {
+            let instant = DateTime::parse_from_rfc3339(timestamp)
+                .map_err(|_| invalid_fold("malformed ISO-8601 bar timestamp"))?
+                .with_timezone(&Utc);
+            if parsed.last().is_some_and(|previous| previous >= &instant) {
+                return Err(invalid_fold(
+                    "bar timestamps must be strictly increasing and unique",
+                ));
+            }
+            parsed.push(instant);
+        }
+
+        let first = parsed[0];
+        let last = *parsed
+            .last()
+            .ok_or_else(|| invalid_fold("missing timestamp horizon"))?;
+        let train = TimeDelta::try_seconds(config.train_seconds)
+            .ok_or_else(|| invalid_fold("calendar train duration overflow"))?;
+        let test = TimeDelta::try_seconds(config.test_seconds)
+            .ok_or_else(|| invalid_fold("calendar test duration overflow"))?;
+        let step = TimeDelta::try_seconds(config.step_seconds)
+            .ok_or_else(|| invalid_fold("calendar step duration overflow"))?;
+        let purge = TimeDelta::try_seconds(config.purge_seconds)
+            .ok_or_else(|| invalid_fold("calendar purge duration overflow"))?;
+        let embargo = TimeDelta::try_seconds(config.embargo_seconds)
+            .ok_or_else(|| invalid_fold("calendar embargo duration overflow"))?;
+        let initial_train_end = first
+            .checked_add_signed(train)
+            .ok_or_else(|| invalid_fold("calendar train boundary overflow"))?;
+        let initial_purge_end = initial_train_end
+            .checked_add_signed(purge)
+            .ok_or_else(|| invalid_fold("calendar purge boundary overflow"))?;
+        let mut test_start = initial_purge_end
+            .checked_add_signed(embargo)
+            .ok_or_else(|| invalid_fold("calendar embargo boundary overflow"))?;
+        let mut folds = Vec::new();
+        loop {
+            let test_end = test_start
+                .checked_add_signed(test)
+                .ok_or_else(|| invalid_fold("calendar test boundary overflow"))?;
+            if test_end > last {
+                break;
+            }
+            let purge_end = test_start
+                .checked_sub_signed(embargo)
+                .ok_or_else(|| invalid_fold("calendar embargo boundary underflow"))?;
+            let train_end = purge_end
+                .checked_sub_signed(purge)
+                .ok_or_else(|| invalid_fold("calendar purge boundary underflow"))?;
+            let train_start = if config.anchored {
+                first
+            } else {
+                train_end
+                    .checked_sub_signed(train)
+                    .ok_or_else(|| invalid_fold("calendar train boundary underflow"))?
+            };
+            let train_range = timestamp_range(&parsed, train_start, train_end);
+            let purge_range = timestamp_range(&parsed, train_end, purge_end);
+            let embargo_range = timestamp_range(&parsed, purge_end, test_start);
+            let test_range = timestamp_range(&parsed, test_start, test_end);
+            if train_range.is_empty() || test_range.is_empty() {
+                return Err(invalid_fold(
+                    "calendar window has insufficient train or test bars",
+                ));
+            }
+            if folds.len() >= MAX_ROBUSTNESS_STAGES {
+                return Err(invalid_fold("calendar fold count exceeds its bound"));
+            }
+            folds.push(CalendarFold {
+                train: train_range,
+                purged: purge_range,
+                embargoed: embargo_range,
+                test: test_range,
+                bounds: CalendarWindowBounds {
+                    train_start: iso_utc(train_start),
+                    train_end: iso_utc(train_end),
+                    purge_end: iso_utc(purge_end),
+                    test_start: iso_utc(test_start),
+                    test_end: iso_utc(test_end),
+                },
+            });
+            test_start = test_start
+                .checked_add_signed(step)
+                .ok_or_else(|| invalid_fold("calendar step boundary overflow"))?;
+        }
+        if folds.is_empty() {
+            return Err(invalid_fold("no complete calendar-time causal fold"));
+        }
+        Ok(Self { folds })
+    }
+
+    pub fn folds(&self) -> &[CalendarFold] {
+        &self.folds
+    }
+}
+
+fn validate_calendar_config(config: CalendarWalkForwardConfig) -> Result<(), OptimizationError> {
+    let values = [
+        config.train_seconds,
+        config.test_seconds,
+        config.step_seconds,
+        config.purge_seconds,
+        config.embargo_seconds,
+    ];
+    if config.train_seconds <= 0
+        || config.test_seconds <= 0
+        || config.step_seconds <= 0
+        || config.purge_seconds < 0
+        || config.embargo_seconds < 0
+        || config.step_seconds < config.test_seconds
+        || values
+            .iter()
+            .any(|value| *value > MAX_CALENDAR_WINDOW_SECONDS)
+    {
+        return Err(invalid_fold("invalid or unbounded calendar window"));
+    }
+    config
+        .train_seconds
+        .checked_add(config.test_seconds)
+        .and_then(|value| value.checked_add(config.purge_seconds))
+        .and_then(|value| value.checked_add(config.embargo_seconds))
+        .filter(|value| *value <= MAX_CALENDAR_WINDOW_SECONDS)
+        .ok_or_else(|| invalid_fold("calendar schedule span overflow"))?;
+    Ok(())
+}
+
+fn timestamp_range(
+    timestamps: &[DateTime<Utc>],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Range<usize> {
+    let range_start = timestamps.partition_point(|timestamp| timestamp < &start);
+    let range_end = timestamps.partition_point(|timestamp| timestamp < &end);
+    range_start..range_end
+}
+
+fn iso_utc(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

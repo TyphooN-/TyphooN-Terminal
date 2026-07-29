@@ -11,10 +11,10 @@ use crate::core::strategy_ir::{
 };
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_optimization::{
-    HoldoutQuarantine, MAX_MONTE_CARLO_TRIALS, ObjectiveDirection, ObservationRole, OosScheme,
-    ParameterDomain, Percentile, RobustnessPipeline, RobustnessStageSpec, SampleRole, SearchBatch,
-    SearchMethod, SearchSpace, StageAccess, StageVerdict, Threshold, WalkForwardConfig,
-    generate_candidates,
+    HoldoutQuarantine, MAX_CALENDAR_WINDOW_SECONDS, MAX_MONTE_CARLO_TRIALS, ObjectiveDirection,
+    ObservationRole, OosScheme, ParameterDomain, Percentile, RobustnessPipeline,
+    RobustnessStageSpec, SampleRole, SearchBatch, SearchMethod, SearchSpace, StageAccess,
+    StageVerdict, Threshold, WalkForwardConfig, generate_candidates,
 };
 
 fn bars() -> Vec<Bar> {
@@ -725,6 +725,146 @@ fn rolling_and_anchored_walk_forward_reoptimize_on_exact_is_then_execute_oos() {
             assert!(window.in_sample_report_id.len() == 64 && window.oos_report_id.len() == 64);
         }
     }
+}
+
+#[test]
+fn calendar_walk_forward_executes_exact_irregular_membership_without_leakage_and_replays() {
+    let (strategy, config, mut bars, _) = study_fixture(11);
+    let timestamps = [
+        "2026-01-01T14:30:00Z",
+        "2026-01-02T14:30:00Z",
+        "2026-01-05T14:30:00Z",
+        "2026-01-06T14:30:00Z",
+        "2026-01-10T14:30:00Z",
+        "2026-01-11T14:30:00Z",
+        "2026-01-15T14:30:00Z",
+        "2026-01-16T14:30:00Z",
+        "2026-01-20T14:30:00Z",
+        "2026-01-21T14:30:00Z",
+        "2026-01-25T14:30:00Z",
+    ];
+    for (bar, timestamp) in bars.iter_mut().zip(timestamps) {
+        bar.timestamp = timestamp.into();
+    }
+    let manifest = manifest(&bars);
+    let candidates = candidate_batch(&strategy);
+    let execute = |anchored| {
+        execute_calendar_walk_forward_optimization(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &candidates,
+            CalendarWalkForwardOptimizationSpec {
+                config: CalendarWalkForwardConfig {
+                    train_seconds: 4 * 86_400,
+                    test_seconds: 4 * 86_400,
+                    step_seconds: 5 * 86_400,
+                    purge_seconds: 86_400,
+                    embargo_seconds: 86_400,
+                    anchored,
+                },
+                minimum_windows: 2,
+                metric_id: "total_return".into(),
+                direction: ObjectiveDirection::Maximize,
+                root_seed: 117,
+            },
+        )
+    };
+    let rolling = execute(false).unwrap();
+    let anchored = execute(true).unwrap();
+    assert_eq!(rolling, execute(false).unwrap());
+    assert_ne!(rolling.artifact_id(), anchored.artifact_id());
+    assert_eq!(rolling.windows()[0].in_sample.indices, vec![0, 1]);
+    assert_eq!(rolling.windows()[0].purged.indices, vec![2]);
+    assert_eq!(rolling.windows()[0].embargoed.indices, vec![3]);
+    assert_eq!(rolling.windows()[0].out_of_sample.indices, vec![4]);
+    assert_eq!(rolling.windows()[1].in_sample.indices, vec![3]);
+    assert_eq!(anchored.windows()[1].in_sample.indices, vec![0, 1, 2, 3]);
+    assert_eq!(
+        rolling,
+        ExecutedCalendarWalkForward::from_json_slice(&rolling.to_json_vec().unwrap()).unwrap()
+    );
+    for window in rolling.windows() {
+        let mut exact = std::collections::BTreeSet::new();
+        for membership in [
+            &window.in_sample,
+            &window.purged,
+            &window.embargoed,
+            &window.out_of_sample,
+        ] {
+            for index in &membership.indices {
+                assert!(exact.insert(*index));
+            }
+        }
+        assert_eq!(window.in_sample_run_id.len(), 64);
+        assert_eq!(window.oos_run_id.len(), 64);
+    }
+    assert_eq!(
+        rolling.concatenated_oos().scores.len(),
+        rolling.degradation_distribution().len()
+    );
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    store.persist_calendar_walk_forward(&rolling, 1).unwrap();
+    let page = store
+        .query_studies(&StudyArtifactQuery {
+            source_dataset_id: manifest.dataset_id.clone(),
+            kind: Some(StudyArtifactKind::CalendarWalkForward),
+            after_sequence: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(page.records.len(), 1);
+    assert!(matches!(
+        &page.records[0].artifact,
+        StudyArtifact::CalendarWalkForward(value) if value == &rolling
+    ));
+}
+
+#[test]
+fn calendar_walk_forward_rejects_timestamp_and_window_failures_before_execution() {
+    let (strategy, config, bars, _) = study_fixture(8);
+    let candidates = candidate_batch(&strategy);
+    let execute = |bars: &[Bar], calendar: CalendarWalkForwardConfig| {
+        let manifest = manifest(bars);
+        execute_calendar_walk_forward_optimization(
+            &config,
+            &manifest,
+            bars,
+            study_lease(&manifest, bars.len()),
+            &candidates,
+            CalendarWalkForwardOptimizationSpec {
+                config: calendar,
+                minimum_windows: 2,
+                metric_id: "total_return".into(),
+                direction: ObjectiveDirection::Maximize,
+                root_seed: 1,
+            },
+        )
+    };
+    let calendar = CalendarWalkForwardConfig {
+        train_seconds: 2 * 86_400,
+        test_seconds: 86_400,
+        step_seconds: 86_400,
+        purge_seconds: 0,
+        embargo_seconds: 0,
+        anchored: false,
+    };
+    for replacement in ["bad", "2026-03-31T00:00:00Z", "2026-03-01T00:00:00Z"] {
+        let mut invalid = bars.clone();
+        invalid[1].timestamp = replacement.into();
+        assert!(execute(&invalid, calendar).is_err());
+    }
+    assert!(
+        execute(
+            &bars,
+            CalendarWalkForwardConfig {
+                test_seconds: MAX_CALENDAR_WINDOW_SECONDS + 1,
+                ..calendar
+            },
+        )
+        .is_err()
+    );
 }
 
 #[test]

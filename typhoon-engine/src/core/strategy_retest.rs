@@ -13,11 +13,12 @@ use crate::core::strategy_ir::{
 };
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_optimization::{
-    BurnedHoldout, FoldPlan, MAX_ARTIFACT_BYTES, MAX_MONTE_CARLO_TRIALS, MAX_SEARCH_COMBINATIONS,
-    MAX_TRIAL_BUDGET, ObjectiveDirection, ObjectiveSpec, ObservationRole, OosPlan, OosScheme,
-    OptimizationError, ReportObservation, RetestRequest, RetestResult, RobustnessArtifact,
-    RobustnessPipeline, SampleRole, SearchBatch, SearchDataLease, SplitMix64, StageAccess,
-    StageVerdict, WalkForwardConfig, max_drawdown, percentile_index, select_best,
+    BurnedHoldout, CalendarFoldPlan, CalendarWalkForwardConfig, CalendarWindowBounds, FoldPlan,
+    MAX_ARTIFACT_BYTES, MAX_MONTE_CARLO_TRIALS, MAX_SEARCH_COMBINATIONS, MAX_TRIAL_BUDGET,
+    ObjectiveDirection, ObjectiveSpec, ObservationRole, OosPlan, OosScheme, OptimizationError,
+    ReportObservation, RetestRequest, RetestResult, RobustnessArtifact, RobustnessPipeline,
+    SampleRole, SearchBatch, SearchDataLease, SplitMix64, StageAccess, StageVerdict,
+    WalkForwardConfig, max_drawdown, percentile_index, select_best,
 };
 use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
@@ -704,6 +705,8 @@ const MAX_STUDY_WINDOWS: usize = 128;
 pub const STUDY_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 const OOS_ARTIFACT_DOMAIN: &[u8] = b"typhoon.strategy_retest.oos_artifact.v1";
 const WALK_FORWARD_ARTIFACT_DOMAIN: &[u8] = b"typhoon.strategy_retest.walk_forward_artifact.v1";
+const CALENDAR_WALK_FORWARD_ARTIFACT_DOMAIN: &[u8] =
+    b"typhoon.strategy_retest.calendar_walk_forward_artifact.v1";
 const WALK_FORWARD_MATRIX_ARTIFACT_DOMAIN: &[u8] =
     b"typhoon.strategy_retest.walk_forward_matrix_artifact.v1";
 
@@ -1291,6 +1294,344 @@ pub fn execute_walk_forward_optimization(
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CalendarWalkForwardOptimizationSpec {
+    pub config: CalendarWalkForwardConfig,
+    pub minimum_windows: usize,
+    pub metric_id: String,
+    pub direction: ObjectiveDirection,
+    pub root_seed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarWalkForwardWindowResult {
+    pub ordinal: usize,
+    pub bounds: CalendarWindowBounds,
+    pub selected_candidate_id: String,
+    pub evaluations_n: usize,
+    pub in_sample: ExactBarMembership,
+    pub purged: ExactBarMembership,
+    pub embargoed: ExactBarMembership,
+    pub out_of_sample: ExactBarMembership,
+    pub in_sample_run_id: String,
+    pub in_sample_report_id: String,
+    pub oos_run_id: String,
+    pub oos_report_id: String,
+    pub degradation: DegradationObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutedCalendarWalkForward {
+    schema_version: u32,
+    artifact_id: String,
+    candidate_set_id: String,
+    source_manifest_id: String,
+    source_dataset_id: String,
+    source_range: Range<usize>,
+    config_id: String,
+    calendar_config: CalendarWalkForwardConfig,
+    minimum_windows: usize,
+    metric_id: String,
+    root_seed: u64,
+    windows: Vec<CalendarWalkForwardWindowResult>,
+    concatenated_oos: ConcatenatedOosResult,
+    degradation_distribution: Vec<DegradationObservation>,
+}
+
+impl ExecutedCalendarWalkForward {
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+    pub fn source_dataset_id(&self) -> &str {
+        &self.source_dataset_id
+    }
+    pub fn windows(&self) -> &[CalendarWalkForwardWindowResult] {
+        &self.windows
+    }
+    pub fn concatenated_oos(&self) -> &ConcatenatedOosResult {
+        &self.concatenated_oos
+    }
+    pub fn degradation_distribution(&self) -> &[DegradationObservation] {
+        &self.degradation_distribution
+    }
+    pub fn verify(&self) -> Result<(), RetestError> {
+        self.calendar_config.validate()?;
+        let count = self.windows.len();
+        if self.schema_version != STUDY_ARTIFACT_SCHEMA_VERSION
+            || !is_id(&self.artifact_id)
+            || !is_id(&self.candidate_set_id)
+            || !is_id(&self.source_manifest_id)
+            || !is_id(&self.source_dataset_id)
+            || !is_id(&self.config_id)
+            || self.source_range.is_empty()
+            || self.metric_id.trim().is_empty()
+            || self.minimum_windows < 2
+            || self.minimum_windows > MAX_STUDY_WINDOWS
+            || count < self.minimum_windows
+            || count > MAX_STUDY_WINDOWS
+            || self.degradation_distribution.len() != count
+            || self.concatenated_oos.ranges.len() != count
+            || self.concatenated_oos.run_ids.len() != count
+            || self.concatenated_oos.report_ids.len() != count
+            || self.concatenated_oos.scores.len() != count
+        {
+            return Err(RetestError::Invalid(
+                "invalid calendar walk-forward artifact bounds".into(),
+            ));
+        }
+        let mut previous_test_end = None;
+        for (ordinal, window) in self.windows.iter().enumerate() {
+            if window.ordinal != ordinal
+                || !is_id(&window.selected_candidate_id)
+                || window.evaluations_n == 0
+                || window.evaluations_n > MAX_TRIAL_BUDGET
+                || !is_id(&window.in_sample_run_id)
+                || !is_id(&window.in_sample_report_id)
+                || !is_id(&window.oos_run_id)
+                || !is_id(&window.oos_report_id)
+                || !window.degradation.in_sample_score.is_finite()
+                || !window.degradation.out_of_sample_score.is_finite()
+                || !window.degradation.delta.is_finite()
+                || self.concatenated_oos.run_ids[ordinal] != window.oos_run_id
+                || self.concatenated_oos.report_ids[ordinal] != window.oos_report_id
+                || self.concatenated_oos.scores[ordinal] != window.degradation.out_of_sample_score
+                || self.degradation_distribution[ordinal] != window.degradation
+                || self.concatenated_oos.ranges[ordinal]
+                    != range_from_membership(&window.out_of_sample)?
+            {
+                return Err(RetestError::Invalid(
+                    "invalid calendar walk-forward evidence binding".into(),
+                ));
+            }
+            let boundaries = verify_calendar_bounds(&window.bounds)?;
+            if window.in_sample.role != SampleRole::InSample
+                || window.purged.role != SampleRole::Purged
+                || window.embargoed.role != SampleRole::Embargoed
+                || window.out_of_sample.role != SampleRole::OutOfSample
+            {
+                return Err(RetestError::Invalid(
+                    "calendar membership role mismatch".into(),
+                ));
+            }
+            if previous_test_end.is_some_and(|previous| previous > boundaries[3]) {
+                return Err(RetestError::Invalid(
+                    "calendar OOS windows overlap or regress".into(),
+                ));
+            }
+            previous_test_end = Some(boundaries[4]);
+            for membership in [
+                &window.in_sample,
+                &window.purged,
+                &window.embargoed,
+                &window.out_of_sample,
+            ] {
+                verify_membership(membership, &self.source_range)?;
+            }
+            verify_calendar_membership(&window.in_sample, boundaries[0], boundaries[1])?;
+            verify_calendar_membership(&window.purged, boundaries[1], boundaries[2])?;
+            verify_calendar_membership(&window.embargoed, boundaries[2], boundaries[3])?;
+            verify_calendar_membership(&window.out_of_sample, boundaries[3], boundaries[4])?;
+        }
+        if self.compute_id()? != self.artifact_id {
+            return Err(RetestError::Invalid(
+                "calendar walk-forward identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
+        encode_study(self, Self::verify)
+    }
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, RetestError> {
+        decode_study(bytes, Self::verify)
+    }
+    fn compute_id(&self) -> Result<String, RetestError> {
+        study_identity(
+            CALENDAR_WALK_FORWARD_ARTIFACT_DOMAIN,
+            &(
+                self.schema_version,
+                &self.candidate_set_id,
+                &self.source_manifest_id,
+                &self.source_dataset_id,
+                &self.source_range,
+                &self.config_id,
+                &self.calendar_config,
+                self.minimum_windows,
+                &self.metric_id,
+                self.root_seed,
+                &self.windows,
+                &self.concatenated_oos,
+                &self.degradation_distribution,
+            ),
+        )
+    }
+}
+
+pub fn execute_calendar_walk_forward_optimization(
+    config: &StrategyExecutionConfig,
+    source_manifest: &DatasetManifest,
+    bars: &[Bar],
+    source_lease: SearchDataLease,
+    candidates: &SearchBatch,
+    spec: CalendarWalkForwardOptimizationSpec,
+) -> Result<ExecutedCalendarWalkForward, RetestError> {
+    validate_source_content(source_manifest, bars, &source_lease)?;
+    validate_candidate_batch(candidates)?;
+    if spec.metric_id.trim().is_empty()
+        || spec.minimum_windows < 2
+        || spec.minimum_windows > MAX_STUDY_WINDOWS
+    {
+        return Err(RetestError::Invalid(
+            "invalid calendar walk-forward observation contract".into(),
+        ));
+    }
+    let candidate_set_id = candidate_set_id(candidates)?;
+    let timestamps = bars
+        .iter()
+        .map(|bar| bar.timestamp.clone())
+        .collect::<Vec<_>>();
+    let plan = CalendarFoldPlan::walk_forward(&timestamps, spec.config)?;
+    if plan.folds().len() < spec.minimum_windows {
+        return Err(RetestError::Invalid(
+            "insufficient complete calendar walk-forward windows".into(),
+        ));
+    }
+    let objective = ObjectiveSpec::new(&spec.metric_id, spec.direction)?;
+    let source_start = source_lease.range().start;
+    let mut windows = Vec::with_capacity(plan.folds().len());
+    for (ordinal, fold) in plan.folds().iter().enumerate() {
+        let mut candidate_runs = Vec::with_capacity(candidates.candidates.len());
+        for candidate in &candidates.candidates {
+            candidate_runs.push(execute_partition(
+                &candidate.strategy,
+                config,
+                source_manifest,
+                bars,
+                &source_lease,
+                fold.train.clone(),
+                ObservationRole::SearchEvaluation,
+                &spec.metric_id,
+                spec.root_seed,
+            )?);
+        }
+        let observations = candidate_runs
+            .iter()
+            .map(|run| run.observation.clone())
+            .collect::<Vec<_>>();
+        let best = select_best(&observations, &objective)?;
+        let selected_index = candidate_runs
+            .iter()
+            .position(|run| run.observation.candidate_id() == best.candidate_id())
+            .ok_or_else(|| RetestError::Invalid("selected candidate is absent".into()))?;
+        let selected_is = &candidate_runs[selected_index];
+        let selected = &candidates.candidates[selected_index];
+        let selected_oos = execute_partition(
+            &selected.strategy,
+            config,
+            source_manifest,
+            bars,
+            &source_lease,
+            fold.test.clone(),
+            ObservationRole::OutOfSample,
+            &spec.metric_id,
+            spec.root_seed,
+        )?;
+        let degradation = degradation(selected_is.score, selected_oos.score)?;
+        windows.push(CalendarWalkForwardWindowResult {
+            ordinal,
+            bounds: fold.bounds.clone(),
+            selected_candidate_id: selected.candidate_id.clone(),
+            evaluations_n: candidates.evaluations_n,
+            in_sample: exact_membership(
+                SampleRole::InSample,
+                std::slice::from_ref(&fold.train),
+                bars,
+                source_start,
+            ),
+            purged: exact_membership(
+                SampleRole::Purged,
+                std::slice::from_ref(&fold.purged),
+                bars,
+                source_start,
+            ),
+            embargoed: exact_membership(
+                SampleRole::Embargoed,
+                std::slice::from_ref(&fold.embargoed),
+                bars,
+                source_start,
+            ),
+            out_of_sample: exact_membership(
+                SampleRole::OutOfSample,
+                std::slice::from_ref(&fold.test),
+                bars,
+                source_start,
+            ),
+            in_sample_run_id: selected_is.report.run_id().to_string(),
+            in_sample_report_id: selected_is.report.report_id().to_string(),
+            oos_run_id: selected_oos.report.run_id().to_string(),
+            oos_report_id: selected_oos.report.report_id().to_string(),
+            degradation,
+        });
+    }
+    let concatenated_oos = ConcatenatedOosResult {
+        ranges: windows
+            .iter()
+            .map(|window| range_from_membership(&window.out_of_sample))
+            .collect::<Result<_, _>>()?,
+        run_ids: windows
+            .iter()
+            .map(|window| window.oos_run_id.clone())
+            .collect(),
+        report_ids: windows
+            .iter()
+            .map(|window| window.oos_report_id.clone())
+            .collect(),
+        scores: windows
+            .iter()
+            .map(|window| window.degradation.out_of_sample_score)
+            .collect(),
+    };
+    let degradation_distribution = windows
+        .iter()
+        .map(|window| window.degradation.clone())
+        .collect();
+    let mut artifact = ExecutedCalendarWalkForward {
+        schema_version: STUDY_ARTIFACT_SCHEMA_VERSION,
+        artifact_id: String::new(),
+        candidate_set_id,
+        source_manifest_id: source_manifest.manifest_id.clone(),
+        source_dataset_id: source_manifest.dataset_id.clone(),
+        source_range: source_lease.range(),
+        config_id: config.config_id().to_string(),
+        calendar_config: spec.config,
+        minimum_windows: spec.minimum_windows,
+        metric_id: spec.metric_id,
+        root_seed: spec.root_seed,
+        windows,
+        concatenated_oos,
+        degradation_distribution,
+    };
+    artifact.artifact_id = artifact.compute_id()?;
+    artifact.verify()?;
+    Ok(artifact)
+}
+
+fn candidate_set_id(candidates: &SearchBatch) -> Result<String, RetestError> {
+    study_identity(
+        b"typhoon.strategy_retest.candidate_set.v1",
+        &(
+            candidates.evaluations_n,
+            candidates
+                .candidates
+                .iter()
+                .map(|candidate| candidate.candidate_id.as_str())
+                .collect::<Vec<_>>(),
+        ),
+    )
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct WalkForwardMatrixSpec {
     pub dimensions: Vec<(usize, usize)>,
     pub step_bars: usize,
@@ -1566,6 +1907,7 @@ fn exact_membership(
     let mut timestamps = Vec::new();
     let global_ranges = ranges
         .iter()
+        .filter(|range| !range.is_empty())
         .map(|range| {
             for index in range.clone() {
                 indices.push(source_start + index);
@@ -1696,12 +2038,60 @@ fn verify_membership(
     Ok(())
 }
 
+fn verify_calendar_bounds(
+    bounds: &CalendarWindowBounds,
+) -> Result<[chrono::DateTime<chrono::Utc>; 5], RetestError> {
+    let parse = |value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .map(|instant| instant.with_timezone(&chrono::Utc))
+            .map_err(|_| RetestError::Invalid("malformed calendar artifact boundary".into()))
+    };
+    let values = [
+        parse(&bounds.train_start)?,
+        parse(&bounds.train_end)?,
+        parse(&bounds.purge_end)?,
+        parse(&bounds.test_start)?,
+        parse(&bounds.test_end)?,
+    ];
+    if values[0] >= values[1]
+        || values[1] > values[2]
+        || values[2] > values[3]
+        || values[3] >= values[4]
+    {
+        return Err(RetestError::Invalid(
+            "non-causal calendar artifact boundaries".into(),
+        ));
+    }
+    Ok(values)
+}
+
+fn verify_calendar_membership(
+    membership: &ExactBarMembership,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+) -> Result<(), RetestError> {
+    let mut previous = None;
+    for timestamp in &membership.timestamps {
+        let instant = chrono::DateTime::parse_from_rfc3339(timestamp)
+            .map_err(|_| RetestError::Invalid("malformed exact membership timestamp".into()))?
+            .with_timezone(&chrono::Utc);
+        if instant < start || instant >= end || previous.is_some_and(|prior| prior >= instant) {
+            return Err(RetestError::Invalid(
+                "calendar membership falls outside its exact window".into(),
+            ));
+        }
+        previous = Some(instant);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StudyArtifactKind {
     Oos,
     WalkForward,
     WalkForwardMatrix,
     TradeMonteCarlo,
+    CalendarWalkForward,
 }
 impl StudyArtifactKind {
     fn key(self) -> i64 {
@@ -1710,6 +2100,7 @@ impl StudyArtifactKind {
             Self::WalkForward => 1,
             Self::WalkForwardMatrix => 2,
             Self::TradeMonteCarlo => 3,
+            Self::CalendarWalkForward => 4,
         }
     }
     fn decode(value: i64) -> Result<Self, RetestError> {
@@ -1718,6 +2109,7 @@ impl StudyArtifactKind {
             1 => Ok(Self::WalkForward),
             2 => Ok(Self::WalkForwardMatrix),
             3 => Ok(Self::TradeMonteCarlo),
+            4 => Ok(Self::CalendarWalkForward),
             _ => Err(RetestError::Invalid("unknown study artifact kind".into())),
         }
     }
@@ -1729,6 +2121,7 @@ pub enum StudyArtifact {
     WalkForward(ExecutedWalkForward),
     WalkForwardMatrix(ExecutedWalkForwardMatrix),
     TradeMonteCarlo(TradeMonteCarloArtifact),
+    CalendarWalkForward(ExecutedCalendarWalkForward),
 }
 impl StudyArtifact {
     fn decode(kind: StudyArtifactKind, bytes: &[u8]) -> Result<Self, RetestError> {
@@ -1743,6 +2136,9 @@ impl StudyArtifact {
             StudyArtifactKind::TradeMonteCarlo => {
                 Self::TradeMonteCarlo(TradeMonteCarloArtifact::from_json_slice(bytes)?)
             }
+            StudyArtifactKind::CalendarWalkForward => {
+                Self::CalendarWalkForward(ExecutedCalendarWalkForward::from_json_slice(bytes)?)
+            }
         })
     }
     fn artifact_id(&self) -> &str {
@@ -1751,6 +2147,7 @@ impl StudyArtifact {
             Self::WalkForward(value) => value.artifact_id(),
             Self::WalkForwardMatrix(value) => value.artifact_id(),
             Self::TradeMonteCarlo(value) => value.artifact_id(),
+            Self::CalendarWalkForward(value) => value.artifact_id(),
         }
     }
     fn source_dataset_id(&self) -> &str {
@@ -1759,6 +2156,7 @@ impl StudyArtifact {
             Self::WalkForward(value) => value.source_dataset_id(),
             Self::WalkForwardMatrix(value) => value.source_dataset_id(),
             Self::TradeMonteCarlo(value) => value.dataset_id(),
+            Self::CalendarWalkForward(value) => value.source_dataset_id(),
         }
     }
 }
@@ -1958,6 +2356,19 @@ impl RetestEvidenceStore {
     ) -> Result<(), RetestError> {
         self.persist_study(
             StudyArtifactKind::WalkForward,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_calendar_walk_forward(
+        &self,
+        artifact: &ExecutedCalendarWalkForward,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::CalendarWalkForward,
             artifact.artifact_id(),
             artifact.source_dataset_id(),
             artifact.to_json_vec()?,
