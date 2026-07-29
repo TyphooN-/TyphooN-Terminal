@@ -827,6 +827,20 @@ impl BarSyncInputs {
             &checked_or_complete_parts,
             &no_data_contains,
         );
+        // Kraken and Alpaca expose provider-native bars only through weekly.
+        // Calendar-month bars are constructed from cached daily bars, so show
+        // one provenance-bearing Merged row instead of empty native-provider
+        // rows left behind by historical cache metadata.
+        rows.retain(|row| row.tf != "1Month" || row.broker == "Merged");
+        for row in rows
+            .iter_mut()
+            .filter(|row| row.broker == "Merged" && row.tf == "1Month")
+        {
+            row.note = Some(
+                "Constructed calendar-month bars from cached daily data; Kraken and Alpaca provider-native intervals stop at weekly."
+                    .to_string(),
+            );
+        }
         // Disabled Sync TFs (e.g. M1/M5 unchecked) are skipped by automated
         // sync, so their cached-leftover rows must neither render in the
         // window nor drag down the broker/overall %s (which would otherwise
@@ -1312,6 +1326,55 @@ mod tests {
             assert_eq!(row.healthy, 1, "{row:?}");
             assert!(row.note.is_none(), "{row:?}");
         }
+    }
+
+    #[test]
+    fn monthly_status_is_merged_constructed_only() {
+        let inputs = BarSyncInputs {
+            detailed_stats: vec![
+                ("kraken:BTCUSD:1Month".to_string(), 0, 0),
+                ("alpaca:AAPL:1Month".to_string(), 0, 0),
+            ],
+            bar_ts_cache: std::collections::HashMap::new(),
+            cache_stats_present: true,
+            catalog_symbol_count: 1,
+            catalog_symbols: vec!["AAPL.EQ".to_string()],
+            demand_symbols: vec!["AAPL.EQ".to_string()],
+            ws_sweep_symbols: vec!["AAPL.EQ".to_string()],
+            spot_symbols: vec!["BTC/USD".to_string()],
+            futures_symbols: Vec::new(),
+            timeframes: vec!["1Month".to_string()],
+            backfill_alpaca_kraken_equities_enabled: true,
+            backfill_yahoo_chart_enabled: false,
+            kraken_ws_fresh_until: std::collections::HashMap::new(),
+            alpaca_backfill_keys: std::collections::HashSet::new(),
+            kraken_backfill_keys: std::collections::HashSet::new(),
+            kraken_futures_backfill_keys: std::collections::HashSet::new(),
+            yahoo_chart_backfill_keys: std::collections::HashSet::new(),
+            no_data_keys_by_source: std::collections::HashMap::new(),
+        };
+
+        let result = inputs.compute();
+        assert!(
+            result
+                .rows
+                .iter()
+                .all(|row| row.tf != "1Month" || row.broker == "Merged"),
+            "provider-native monthly rows must not appear: {:?}",
+            result.rows
+        );
+        let merged = result
+            .rows
+            .iter()
+            .find(|row| row.broker == "Merged" && row.tf == "1Month")
+            .expect("constructed Merged monthly row");
+        assert!(
+            merged
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("Constructed calendar-month")),
+            "Merged monthly must explain its provenance: {merged:?}"
+        );
     }
 
     #[test]

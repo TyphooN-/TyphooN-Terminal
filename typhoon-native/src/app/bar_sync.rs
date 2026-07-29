@@ -160,11 +160,6 @@ pub(super) fn compute_bar_sync_stats(
             } else {
                 (healthy as f32 / total as f32) * 100.0
             };
-            // Kraken serves no native monthly bars (MN1 is built from D1 on the
-            // merged path), so the seeded Kraken Spot 1Month row is always empty;
-            // label it instead of showing a misleading 0.0%.
-            let note = (broker == "Kraken Spot" && tf == "1Month")
-                .then(|| "no native monthly".to_string());
             SyncStatsRow {
                 broker,
                 tf,
@@ -174,7 +169,7 @@ pub(super) fn compute_bar_sync_stats(
                 empty,
                 settled,
                 unreachable: 0,
-                note,
+                note: None,
                 pct_healthy,
             }
         })
