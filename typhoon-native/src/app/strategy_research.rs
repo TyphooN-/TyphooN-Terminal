@@ -12,10 +12,14 @@ use typhoon_engine::core::strategy_builder::{
     NnfxProfile,
 };
 use typhoon_engine::core::strategy_databank::{
-    DatabankJob, DatabankPage, DatabankQuery, DatabankSort, DatabankSubmitError, DatabankWorker,
-    DatabankWorkerEvent, MAX_COMPARE_RUNS, PutStrategyOutcome, StoredRun,
+    DatabankJob, DatabankPage, DatabankQuery, DatabankRunInput, DatabankSort, DatabankSubmitError,
+    DatabankWorker, DatabankWorkerEvent, MAX_COMPARE_RUNS, PutStrategyOutcome, StoredRun,
 };
-use typhoon_engine::core::strategy_ir::{IndicatorKind, StrategyIr};
+use typhoon_engine::core::strategy_ir::{
+    DatasetBinding, FidelityLevel, IndicatorKind, RunBinding, StrategyIr, StrategyRunManifest,
+    SubBarDatasetBinding,
+};
+use typhoon_engine::core::strategy_report::StrategyReportArtifact;
 
 use super::*;
 
@@ -30,20 +34,162 @@ pub(crate) struct StrategyResearchState {
     pub(crate) palette_kind: usize,
     pub(crate) baseline_id: String,
     pub(crate) strategy_load_id: String,
+    pub(crate) run_seed: String,
+    pub(crate) run_tags: String,
+    saved_strategy: Option<StrategyIr>,
+    native_run_flow: NativeRunFlowState,
+    last_native_job: Option<super::strategy_sub_bar_run::StrategyRunJob>,
+    pending_native_job: Option<super::strategy_sub_bar_run::StrategyRunJob>,
+    next_run_created_sequence: i64,
+    next_native_databank_request_id: u64,
     artifact_request: Option<ArtifactRequest>,
     next_artifact_request_id: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum ArtifactRequest {
     Save {
         request_id: u64,
         strategy_id: String,
+        strategy: Box<StrategyIr>,
     },
     Load {
         request_id: u64,
         strategy_id: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeRunMode {
+    Append,
+    VerifyRerun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeRunPhase {
+    Idle,
+    Running {
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+        mode: NativeRunMode,
+    },
+    Databank {
+        request_id: u64,
+        mode: NativeRunMode,
+        run_id: String,
+        metric_count: usize,
+    },
+}
+
+impl Default for NativeRunPhase {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Debug, Default)]
+struct NativeRunFlowState {
+    phase: NativeRunPhase,
+    status: String,
+}
+
+impl NativeRunFlowState {
+    fn is_busy(&self) -> bool {
+        !matches!(self.phase, NativeRunPhase::Idle)
+    }
+
+    fn begin_run(
+        &mut self,
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+        mode: NativeRunMode,
+    ) -> Result<(), String> {
+        if self.is_busy() {
+            return Err("a native saved-strategy run action is already active".into());
+        }
+        self.phase = NativeRunPhase::Running { identity, mode };
+        self.status = match mode {
+            NativeRunMode::Append => "Running exact saved strategy for databank append".into(),
+            NativeRunMode::VerifyRerun => {
+                "Rerunning exact saved strategy for metric comparison".into()
+            }
+        };
+        Ok(())
+    }
+
+    fn accept_run_failure(
+        &mut self,
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+        message: &str,
+    ) -> bool {
+        if !matches!(self.phase, NativeRunPhase::Running { identity: active, .. } if active == identity)
+        {
+            return false;
+        }
+        self.phase = NativeRunPhase::Idle;
+        self.status = format!("Error: {message}");
+        true
+    }
+
+    fn running_mode(
+        &self,
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+    ) -> Option<NativeRunMode> {
+        match self.phase {
+            NativeRunPhase::Running {
+                identity: active,
+                mode,
+            } if active == identity => Some(mode),
+            _ => None,
+        }
+    }
+
+    fn begin_databank(
+        &mut self,
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+        request_id: u64,
+        run_id: String,
+        metric_count: usize,
+    ) -> Result<NativeRunMode, String> {
+        let mode = self
+            .running_mode(identity)
+            .ok_or("native run completion is stale")?;
+        self.phase = NativeRunPhase::Databank {
+            request_id,
+            mode,
+            run_id,
+            metric_count,
+        };
+        self.status = match mode {
+            NativeRunMode::Append => "Appending sealed report metrics on databank worker".into(),
+            NativeRunMode::VerifyRerun => "Comparing rerun metric vector on databank worker".into(),
+        };
+        Ok(mode)
+    }
+
+    fn active_databank_request(&self) -> Option<u64> {
+        match self.phase {
+            NativeRunPhase::Databank { request_id, .. } => Some(request_id),
+            _ => None,
+        }
+    }
+
+    fn cancel_run(&mut self, identity: super::strategy_sub_bar_run::RunRequestIdentity) -> bool {
+        if !matches!(self.phase, NativeRunPhase::Running { identity: active, .. } if active == identity)
+        {
+            return false;
+        }
+        self.phase = NativeRunPhase::Idle;
+        self.status = "Native saved-strategy run cancelled; late completion is stale".into();
+        true
+    }
+
+    fn cancel_databank(&mut self, request_id: u64) -> bool {
+        if self.active_databank_request() != Some(request_id) {
+            return false;
+        }
+        self.phase = NativeRunPhase::Idle;
+        self.status = "Native databank action cancelled; late completion is stale".into();
+        true
+    }
 }
 
 impl ArtifactRequest {
@@ -67,6 +213,14 @@ impl StrategyResearchState {
             palette_kind: 2,
             baseline_id: "baseline".into(),
             strategy_load_id: String::new(),
+            run_seed: "135".into(),
+            run_tags: "native,m3".into(),
+            saved_strategy: None,
+            native_run_flow: NativeRunFlowState::default(),
+            last_native_job: None,
+            pending_native_job: None,
+            next_run_created_sequence: 1,
+            next_native_databank_request_id: 1_u64 << 62,
             artifact_request: None,
             // Keep artifact ids disjoint from the browser's low-half sequence.
             next_artifact_request_id: 1_u64 << 63,
@@ -103,6 +257,7 @@ impl StrategyResearchState {
 
     pub(crate) fn clear_general(&mut self) {
         self.general = GeneralStrategyBuilder::new("Native strategy", "TyphooN operator");
+        self.saved_strategy = None;
         self.status = "Cleared transient general-builder draft".into();
     }
 
@@ -145,12 +300,13 @@ impl StrategyResearchState {
         worker
             .submit(DatabankJob::PutStrategy {
                 request_id,
-                strategy: Box::new(strategy),
+                strategy: Box::new(strategy.clone()),
             })
             .map_err(submit_error)?;
         self.artifact_request = Some(ArtifactRequest::Save {
             request_id,
             strategy_id: strategy_id.clone(),
+            strategy: Box::new(strategy),
         });
         self.status = format!("Saving canonical strategy {strategy_id} off the render thread");
         Ok(())
@@ -198,11 +354,16 @@ impl StrategyResearchState {
         }
         match (active, event) {
             (
-                ArtifactRequest::Save { strategy_id, .. },
+                ArtifactRequest::Save {
+                    strategy_id,
+                    strategy,
+                    ..
+                },
                 DatabankWorkerEvent::StrategyPut { outcome, .. },
             ) => {
                 self.artifact_request = None;
                 self.strategy_load_id = strategy_id.clone();
+                self.saved_strategy = Some(*strategy);
                 let verb = match outcome {
                     PutStrategyOutcome::Inserted => "Saved",
                     PutStrategyOutcome::AlreadyPresent => "Verified existing",
@@ -234,6 +395,7 @@ impl StrategyResearchState {
                             }
                         };
                         self.general = general;
+                        self.saved_strategy = Some(*strategy);
                         self.status =
                             format!("Reloaded exact verified canonical strategy {strategy_id}");
                     }
@@ -273,7 +435,151 @@ impl StrategyResearchState {
         }
     }
 
+    fn next_native_databank_request(&mut self) -> u64 {
+        let request_id = self.next_native_databank_request_id;
+        self.next_native_databank_request_id = self
+            .next_native_databank_request_id
+            .checked_add(1)
+            .unwrap_or(1_u64 << 62);
+        request_id
+    }
+
+    pub(crate) fn native_run_is_busy(&self) -> bool {
+        self.native_run_flow.is_busy()
+    }
+
+    pub(crate) fn native_run_status(&self) -> &str {
+        &self.native_run_flow.status
+    }
+
+    pub(crate) fn accept_native_run_failure(
+        &mut self,
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+        message: &str,
+    ) -> bool {
+        self.pending_native_job = None;
+        self.native_run_flow.accept_run_failure(identity, message)
+    }
+
+    pub(crate) fn accept_native_run_output(
+        &mut self,
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+        output: &super::strategy_sub_bar_run::StrategyRunOutput,
+        worker: &DatabankWorker,
+    ) -> Result<bool, String> {
+        let Some(mode) = self.native_run_flow.running_mode(identity) else {
+            return Ok(false);
+        };
+        let artifact = StrategyReportArtifact::from_json_slice(&output.view.report_artifact_json)
+            .map_err(|error| format!("sealed report reload failed: {error}"))?;
+        if artifact.run_id() != output.manifest.run_id() {
+            return Err("sealed report run identity does not match completed run manifest".into());
+        }
+        let metrics = artifact.analysis().metrics.clone();
+        let request_id = self.next_native_databank_request();
+        let run_id = output.manifest.run_id().to_owned();
+        let job = match mode {
+            NativeRunMode::Append => {
+                let dataset_id = output
+                    .manifest
+                    .binding()
+                    .datasets
+                    .first()
+                    .ok_or("completed run has no parent dataset binding")?
+                    .dataset_id
+                    .clone();
+                let tags: Vec<String> = self
+                    .run_tags
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|tag| !tag.is_empty())
+                    .take(16)
+                    .map(|tag| tag.chars().take(64).collect())
+                    .collect();
+                let created_sequence = self.next_run_created_sequence;
+                self.next_run_created_sequence = self.next_run_created_sequence.saturating_add(1);
+                DatabankJob::AppendRun {
+                    request_id,
+                    run: DatabankRunInput {
+                        run_id: run_id.clone(),
+                        strategy_id: output.manifest.binding().strategy_id.clone(),
+                        dataset_id,
+                        config_id: output.manifest.binding().config_id.clone(),
+                        metrics_version: artifact.metrics_version().into(),
+                        seed: output.manifest.binding().seed,
+                        created_sequence,
+                        metrics: metrics.clone(),
+                        tags,
+                        parent_run_id: None,
+                        retest_of_run_id: None,
+                    },
+                }
+            }
+            NativeRunMode::VerifyRerun => DatabankJob::VerifyRerun {
+                request_id,
+                run_id: run_id.clone(),
+                metrics: metrics.clone(),
+            },
+        };
+        worker.submit(job).map_err(submit_error)?;
+        self.native_run_flow
+            .begin_databank(identity, request_id, run_id, metrics.len())?;
+        Ok(true)
+    }
+
+    fn accept_native_databank_event(&mut self, event: DatabankWorkerEvent) -> bool {
+        let NativeRunPhase::Databank {
+            request_id,
+            mode,
+            run_id,
+            metric_count,
+        } = self.native_run_flow.phase.clone()
+        else {
+            return false;
+        };
+        if event.request_id() != request_id {
+            return false;
+        }
+        match event {
+            DatabankWorkerEvent::Started { .. } => true,
+            DatabankWorkerEvent::RunAppended { .. } if mode == NativeRunMode::Append => {
+                self.native_run_flow.status = format!(
+                    "Appended sealed run {} with {metric_count} real metrics; exact rerun is ready",
+                    run_id.get(..12).unwrap_or(&run_id)
+                );
+                self.native_run_flow.phase = NativeRunPhase::Idle;
+                self.last_native_job = self.pending_native_job.take();
+                true
+            }
+            DatabankWorkerEvent::RerunVerified { .. } if mode == NativeRunMode::VerifyRerun => {
+                self.native_run_flow.status = format!(
+                    "EXACT MATCH · rerun {} reproduced all {metric_count} stored metrics",
+                    run_id.get(..12).unwrap_or(&run_id)
+                );
+                self.native_run_flow.phase = NativeRunPhase::Idle;
+                self.pending_native_job = None;
+                true
+            }
+            DatabankWorkerEvent::Failed { message, .. } => {
+                self.native_run_flow.phase = NativeRunPhase::Idle;
+                self.native_run_flow.status = format!("Error: {message}");
+                self.pending_native_job = None;
+                true
+            }
+            DatabankWorkerEvent::Cancelled { .. } => {
+                self.native_run_flow.phase = NativeRunPhase::Idle;
+                self.native_run_flow.status = "Native databank action cancelled".into();
+                self.pending_native_job = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn accept_databank_event(&mut self, event: DatabankWorkerEvent) -> bool {
+        if self.native_run_flow.active_databank_request() == Some(event.request_id()) {
+            return self.accept_native_databank_event(event);
+        }
         if self
             .artifact_request
             .as_ref()
@@ -490,6 +796,184 @@ impl TyphooNApp {
         }
     }
 
+    fn build_native_saved_run_job(
+        &self,
+        rerun: bool,
+        identity: super::strategy_sub_bar_run::RunRequestIdentity,
+    ) -> Result<super::strategy_sub_bar_run::StrategyRunJob, String> {
+        let Some(chart) = self.charts.get(self.active_tab) else {
+            return Err("no active chart is available".into());
+        };
+        if chart.bars.is_empty() {
+            return Err("active chart must have a timeline for the selected dataset".into());
+        }
+        let chart_context = super::strategy_sub_bar_run::RunChartContext {
+            chart_index: self.active_tab,
+            bars_generation: chart.bars_generation,
+            symbol: chart.symbol.clone(),
+            bar_times_ms: Arc::from(chart.bars.iter().map(|bar| bar.ts_ms).collect::<Vec<_>>()),
+        };
+        if rerun {
+            let mut job = self
+                .strategy_research
+                .last_native_job
+                .clone()
+                .ok_or("run and append a saved strategy before requesting an exact rerun")?;
+            let selected = self
+                .strategy_research
+                .saved_strategy
+                .as_ref()
+                .ok_or("reload an exact stored strategy before rerunning")?;
+            if selected.strategy_id() != job.strategy.strategy_id() {
+                return Err("reloaded saved strategy does not match the appended run".into());
+            }
+            if !chart.symbol_matches(&job.chart.symbol) {
+                return Err(format!(
+                    "active chart must have a {} timeline",
+                    job.chart.symbol
+                ));
+            }
+            job.identity = identity;
+            job.chart = chart_context;
+            return Ok(job);
+        }
+
+        let selection = super::strategy_sub_bar_run::validate_run_selection(
+            &self.sub_bar_run_ui.parent_dataset_id,
+            &self.sub_bar_run_ui.finer_dataset_id,
+            &self.dataset_inspector.records,
+        )?;
+        if !chart.symbol_matches(&selection.parent.symbol) {
+            return Err(format!(
+                "active chart must have a {} timeline",
+                selection.parent.symbol
+            ));
+        }
+        let strategy = self
+            .strategy_research
+            .saved_strategy
+            .clone()
+            .ok_or("save, clear, and reload an exact stored strategy before running")?;
+        let config =
+            super::strategy_sub_bar_run::load_execution_config(&self.sub_bar_run_ui.config_path)?;
+        let FidelityLevel::SubBar { sub_bar_seconds } = config.settings().fidelity else {
+            return Err("selected execution config must use sub-bar fidelity".into());
+        };
+        if sub_bar_seconds != selection.sub_bar_seconds {
+            return Err(format!(
+                "selected config binds {sub_bar_seconds}s sub-bars but finer dataset is {}s",
+                selection.sub_bar_seconds
+            ));
+        }
+        let seed = self
+            .strategy_research
+            .run_seed
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| "root seed must be an unsigned 64-bit integer".to_string())?;
+        let manifest = StrategyRunManifest::build(&RunBinding {
+            datasets: vec![DatasetBinding {
+                input_id: "primary".into(),
+                dataset_id: selection.parent.dataset_id,
+            }],
+            sub_bar_datasets: vec![SubBarDatasetBinding {
+                parent_input_id: "primary".into(),
+                dataset_id: selection.finer.dataset_id,
+            }],
+            strategy_id: strategy.strategy_id().into(),
+            config_id: config.config_id().into(),
+            seed,
+            engine_version: concat!("typhoon-native/", env!("CARGO_PKG_VERSION")).into(),
+            metrics_version: typhoon_engine::core::strategy_metrics::METRICS_SCHEMA_VERSION.into(),
+            intervention_log_id: None,
+            repaint_qa: vec![],
+        })
+        .map_err(|error| format!("cannot seal selected run identity: {error}"))?;
+        Ok(super::strategy_sub_bar_run::StrategyRunJob {
+            identity,
+            strategy,
+            config,
+            manifest,
+            chart: chart_context,
+        })
+    }
+
+    fn submit_native_saved_run(&mut self, rerun: bool) {
+        if self.strategy_research.native_run_is_busy() || self.sub_bar_run_state.is_busy() {
+            self.strategy_research.native_run_flow.status =
+                "Error: another verified run action is already active".into();
+            return;
+        }
+        let identity = self.sub_bar_run_state.begin_request();
+        let mode = if rerun {
+            NativeRunMode::VerifyRerun
+        } else {
+            NativeRunMode::Append
+        };
+        let job = match self.build_native_saved_run_job(rerun, identity) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = self
+                    .sub_bar_run_state
+                    .accept_terminal(identity, Err(&error));
+                self.strategy_research.native_run_flow.status = format!("Error: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self
+            .strategy_research
+            .native_run_flow
+            .begin_run(identity, mode)
+        {
+            let _ = self
+                .sub_bar_run_state
+                .accept_terminal(identity, Err(&error));
+            return;
+        }
+        self.strategy_research.pending_native_job = Some(job.clone());
+        let result = self
+            .strategy_run_worker
+            .as_ref()
+            .ok_or("verified-run worker did not start".to_string())
+            .and_then(|worker| worker.submit(job).map_err(|error| error.to_string()));
+        if let Err(error) = result {
+            let _ = self
+                .sub_bar_run_state
+                .accept_terminal(identity, Err(&error));
+            let _ = self
+                .strategy_research
+                .accept_native_run_failure(identity, &error);
+        }
+    }
+
+    fn cancel_native_saved_run(&mut self) {
+        if let NativeRunPhase::Running { identity, .. } =
+            self.strategy_research.native_run_flow.phase
+        {
+            let superseding = self.sub_bar_run_state.cancel();
+            if let Some(worker) = &self.strategy_run_worker {
+                worker.supersede_with(superseding);
+            }
+            let _ = self.strategy_research.native_run_flow.cancel_run(identity);
+            self.strategy_research.pending_native_job = None;
+            return;
+        }
+        if let Some(request_id) = self
+            .strategy_research
+            .native_run_flow
+            .active_databank_request()
+        {
+            if let Some(worker) = &self.strategy_databank_worker {
+                worker.cancel(request_id);
+            }
+            let _ = self
+                .strategy_research
+                .native_run_flow
+                .cancel_databank(request_id);
+            self.strategy_research.pending_native_job = None;
+        }
+    }
+
     pub(super) fn render_strategy_research_windows(&mut self, ctx: &egui::Context) {
         if self.show_strategy_builder || self.show_nnfx_builder || self.show_strategy_databank {
             self.ensure_databank_worker();
@@ -512,6 +996,7 @@ impl TyphooNApp {
             return;
         }
         let mut open = self.show_strategy_builder;
+        let mut native_action = None;
         egui::Window::new("Strategy Builder · Canonical IR").open(&mut open)
             .resizable(true).default_size([760.0, 620.0]).show(ctx, |ui| {
             ui.small("Bounded transient typed graph; only validated canonical Strategy IR is sealed.");
@@ -557,8 +1042,49 @@ impl TyphooNApp {
                 { let _ = self.strategy_research.cancel_artifact_request(worker); }
             });
             ui.label(&self.strategy_research.status);
+            ui.separator();
+            ui.strong("Saved strategy · verified run · databank");
+            ui.small("Uses the exact reloaded strategy plus the existing identity-bound dataset/config selections. The bounded verified-run worker seals the report; the databank worker appends or compares its real metric vector.");
+            let records = &self.dataset_inspector.records;
+            egui::ComboBox::from_label("Parent dataset")
+                .selected_text(if self.sub_bar_run_ui.parent_dataset_id.is_empty() { "Select sealed parent" } else { &self.sub_bar_run_ui.parent_dataset_id })
+                .show_ui(ui, |ui| for record in records { ui.selectable_value(&mut self.sub_bar_run_ui.parent_dataset_id, record.dataset_id.clone(), format!("{} {} · {}", record.symbol, record.timeframe, &record.dataset_id[..12])); });
+            egui::ComboBox::from_label("Finer dataset")
+                .selected_text(if self.sub_bar_run_ui.finer_dataset_id.is_empty() { "Select sealed finer dataset" } else { &self.sub_bar_run_ui.finer_dataset_id })
+                .show_ui(ui, |ui| for record in records { ui.selectable_value(&mut self.sub_bar_run_ui.finer_dataset_id, record.dataset_id.clone(), format!("{} {} · {}", record.symbol, record.timeframe, &record.dataset_id[..12])); });
+            ui.horizontal(|ui| {
+                ui.label("Execution config JSON");
+                ui.add(egui::TextEdit::singleline(&mut self.sub_bar_run_ui.config_path).char_limit(4096).desired_width(360.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Root seed");
+                ui.add(egui::TextEdit::singleline(&mut self.strategy_research.run_seed).char_limit(20).desired_width(120.0));
+                ui.label("Tags");
+                ui.add(egui::TextEdit::singleline(&mut self.strategy_research.run_tags).char_limit(1024).desired_width(260.0));
+            });
+            let saved_identity = self.strategy_research.saved_strategy.as_ref().map(|strategy| {
+                format!(
+                    "strategy {} · timing {:?}",
+                    strategy.strategy_id(),
+                    strategy.definition().timing
+                )
+            }).unwrap_or_else(|| "No exact saved/reloaded strategy selected".into());
+            ui.monospace(saved_identity);
+            ui.horizontal(|ui| {
+                let busy = self.strategy_research.native_run_is_busy() || self.sub_bar_run_state.is_busy();
+                if ui.add_enabled(!busy && self.strategy_research.saved_strategy.is_some(), egui::Button::new("Run + append sealed metrics")).clicked() { native_action = Some(false); }
+                if ui.add_enabled(!busy && self.strategy_research.last_native_job.is_some(), egui::Button::new("Rerun + exact compare")).clicked() { native_action = Some(true); }
+                if ui.add_enabled(self.strategy_research.native_run_is_busy(), egui::Button::new("Cancel native action")).clicked() { self.cancel_native_saved_run(); }
+                if self.strategy_research.native_run_is_busy() { ui.spinner(); }
+            });
+            if !self.strategy_research.native_run_status().is_empty() { ui.strong(self.strategy_research.native_run_status()); }
             ui.add(egui::TextEdit::multiline(&mut self.strategy_research.canonical_text).code_editor().desired_rows(15).desired_width(f32::INFINITY).char_limit(1_048_576));
         });
+        if let Some(rerun) = native_action {
+            if !self.strategy_research.native_run_is_busy() {
+                self.submit_native_saved_run(rerun);
+            }
+        }
         self.show_strategy_builder = open;
     }
 
@@ -696,7 +1222,7 @@ mod tests {
     use super::*;
     use typhoon_engine::core::strategy_builder::IndicatorDraft;
     use typhoon_engine::core::strategy_databank::{
-        DatabankRow, DatabankRunInput, MAX_COMPARE_RUNS,
+        DatabankRow, DatabankStore, MAX_COMPARE_RUNS, MAX_DATABANK_PAGE_SIZE,
     };
     use typhoon_engine::core::strategy_ir::IndicatorKind;
 
@@ -824,31 +1350,6 @@ mod tests {
             }
         }
 
-        fn wait_for(
-            worker: &DatabankWorker,
-            request_id: u64,
-            accept: impl Fn(&DatabankWorkerEvent) -> bool,
-        ) {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                for event in worker.poll() {
-                    if event.request_id() == request_id {
-                        if let DatabankWorkerEvent::Failed { message, .. } = &event {
-                            panic!("databank request failed: {message}");
-                        }
-                        if accept(&event) {
-                            return;
-                        }
-                    }
-                }
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "databank worker timeout"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(2));
-            }
-        }
-
         let databank = DatabankWorker::spawn_in_memory().expect("databank");
         let mut state = StrategyResearchState::new();
         state.general = GeneralStrategyBuilder::new("literal M3 gate", "native test");
@@ -972,7 +1473,12 @@ mod tests {
             },
         };
         let first = execute_strategy_run_job(&root, &run_job).expect("first verified run");
-        let second = execute_strategy_run_job(&root, &run_job).expect("verified rerun");
+        let mut rerun_job = run_job.clone();
+        rerun_job.identity = RunRequestIdentity {
+            request_id: 2,
+            generation: 2,
+        };
+        let second = execute_strategy_run_job(&root, &rerun_job).expect("verified rerun");
         let first_artifact =
             StrategyReportArtifact::from_json_slice(&first.view.report_artifact_json)
                 .expect("first artifact");
@@ -985,40 +1491,77 @@ mod tests {
             second_artifact.analysis().metrics
         );
 
-        let append_request = 77;
-        databank
-            .submit(DatabankJob::AppendRun {
-                request_id: append_request,
-                run: DatabankRunInput {
-                    run_id: manifest.run_id().into(),
-                    strategy_id: authored.strategy_id().into(),
-                    dataset_id: parent.manifest.dataset_id.clone(),
-                    config_id: config.config_id().into(),
-                    metrics_version: first_artifact.metrics_version().into(),
-                    seed: 135,
-                    created_sequence: 1,
-                    metrics: first_artifact.analysis().metrics.clone(),
-                    tags: vec!["native-m3-literal-gate".into()],
-                    parent_run_id: None,
-                    retest_of_run_id: None,
-                },
-            })
-            .expect("append submit");
-        wait_for(&databank, append_request, |event| {
-            matches!(event, DatabankWorkerEvent::RunAppended { .. })
-        });
-        let verify_request = 78;
-        databank
-            .submit(DatabankJob::VerifyRerun {
-                request_id: verify_request,
-                run_id: manifest.run_id().into(),
-                metrics: second_artifact.analysis().metrics.clone(),
-            })
-            .expect("verify submit");
-        wait_for(&databank, verify_request, |event| {
-            matches!(event, DatabankWorkerEvent::RerunVerified { .. })
-        });
+        state.pending_native_job = Some(run_job.clone());
+        state
+            .native_run_flow
+            .begin_run(run_job.identity, NativeRunMode::Append)
+            .unwrap();
+        assert!(
+            state
+                .accept_native_run_output(run_job.identity, &first, &databank)
+                .unwrap()
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.native_run_is_busy() {
+            for event in databank.poll() {
+                let _ = state.accept_databank_event(event);
+            }
+            assert!(std::time::Instant::now() < deadline, "append timeout");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(state.native_run_status().contains("real metrics"));
+        assert!(state.last_native_job.is_some());
+
+        state.pending_native_job = Some(rerun_job.clone());
+        state
+            .native_run_flow
+            .begin_run(rerun_job.identity, NativeRunMode::VerifyRerun)
+            .unwrap();
+        assert!(
+            state
+                .accept_native_run_output(rerun_job.identity, &second, &databank)
+                .unwrap()
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.native_run_is_busy() {
+            for event in databank.poll() {
+                let _ = state.accept_databank_event(event);
+            }
+            assert!(std::time::Instant::now() < deadline, "rerun verify timeout");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(state.native_run_status().starts_with("EXACT MATCH"));
+        assert!(state.native_run_status().contains("stored metrics"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_run_flow_rejects_stale_cancelled_and_failed_terminals() {
+        let mut flow = NativeRunFlowState::default();
+        let active = RunRequestIdentity {
+            request_id: 9,
+            generation: 4,
+        };
+        flow.begin_run(active, NativeRunMode::Append).unwrap();
+        assert!(!flow.accept_run_failure(
+            RunRequestIdentity {
+                request_id: 8,
+                generation: 3,
+            },
+            "stale"
+        ));
+        assert!(flow.is_busy());
+        assert!(flow.cancel_run(active));
+        assert!(!flow.is_busy());
+        assert!(!flow.accept_run_failure(active, "late failure"));
+
+        let failed = RunRequestIdentity {
+            request_id: 10,
+            generation: 5,
+        };
+        flow.begin_run(failed, NativeRunMode::VerifyRerun).unwrap();
+        assert!(flow.accept_run_failure(failed, "precise run failure"));
+        assert_eq!(flow.status, "Error: precise run failure");
     }
 
     #[test]
@@ -1052,5 +1595,62 @@ mod tests {
         }
         assert!(!browser.toggle_compare("overflow".into()));
         assert_eq!(browser.compare_selection.len(), MAX_COMPARE_RUNS);
+    }
+
+    #[test]
+    fn hundred_thousand_run_browser_path_installs_only_a_bounded_worker_page() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "typhoon-m3-browser-{}-{unique}.sqlite3",
+            std::process::id()
+        ));
+        let store = DatabankStore::open(&path).expect("store");
+        let strategy = NnfxBuilderConfig::default().to_ir().expect("strategy");
+        store.put_strategy(&strategy).expect("put strategy");
+        store
+            .seed_synthetic_runs(100_000, strategy.strategy_id())
+            .expect("seed corpus");
+        drop(store);
+
+        let worker = DatabankWorker::spawn(path.clone()).expect("worker");
+        let submitter = std::thread::current().id();
+        let mut browser = DatabankBrowserState {
+            page_size: MAX_DATABANK_PAGE_SIZE,
+            ..DatabankBrowserState::default()
+        };
+        browser.submit_query(&worker).expect("submit query");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut worker_thread = None;
+        while browser.page.is_none() {
+            for event in worker.poll() {
+                if let DatabankWorkerEvent::Started {
+                    worker_thread: thread,
+                    ..
+                } = &event
+                {
+                    worker_thread = Some(*thread);
+                }
+                let _ = browser.accept_event(event);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "bounded browser query timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        assert_ne!(worker_thread, Some(submitter));
+        assert_eq!(
+            browser.page.as_ref().expect("prepared page").rows.len(),
+            MAX_DATABANK_PAGE_SIZE
+        );
+        drop(worker);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
     }
 }

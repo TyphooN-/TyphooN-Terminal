@@ -1373,17 +1373,18 @@ over a synthetic 10⁵-run corpus stay bounded and off the render thread. Every 
 profile/slot/rule configuration round-trips through the canonical IR and produces the same IR
 as the equivalent general-builder graph.
 
-**Native checkpoint (2026-07-29; M3 remains open):** the wired egui backing model now covers a
-transient general builder, constrained NNFX builder, canonical text, bounded worker save/load
-with explicit cancellation/failure/stale-response handling, and an immutable prepared-page
-databank browser. A native model test authors a strategy, saves it through the databank worker,
-clears both editor and canonical text, reloads the exact verified artifact, executes it twice
-through the existing identity-bound sub-bar simulation/report path, appends the first report's
-real metric vector, and verifies the rerun vector by exact equality. This is independently
-useful evidence, but it does **not** complete the literal user-driven GUI gate: dataset/config
-selection, run submission, report-to-databank append, and rerun verification are not yet wired
-as one native action flow. The exhaustive guided configuration-space round-trip test and a
-render-path assertion that the 10⁵-run corpus is never touched directly also remain required.
+**Gate evidence (2026-07-29; M3 passed):** the wired egui workflow covers a transient general
+builder, constrained NNFX builder, canonical text, bounded worker save/load with explicit
+cancellation/failure/stale-response handling, and an immutable prepared-page databank browser.
+The user selects exact stored strategy, immutable parent/finer datasets, execution config, seed,
+tags, and active chart; the existing bounded verified-run worker seals the manifest, simulation,
+and report; and the databank worker appends the report's real metric vector or verifies an exact
+rerun. The gate test authors, saves, clears, reloads, runs, appends, reruns, and compares the
+sealed metric vector exactly. Builder tests cover every profile × entry mode × direction × all
+16 rule-toggle combinations plus every selectable indicator kind in every role slot, with each
+guided artifact round-tripped and compared to the equivalent general graph. The synthetic
+100,000-run native browser test confirms SQL executes on the worker thread and only a capped
+prepared page crosses into UI state; the engine test independently verifies indexed query plans.
 
 ### M4 — Optimizer, retester & robustness pipeline
 **Prereqs:** M1–M3.

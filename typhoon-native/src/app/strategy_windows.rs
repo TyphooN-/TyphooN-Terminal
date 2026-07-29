@@ -375,11 +375,31 @@ impl TyphooNApp {
                                     .all(|(bar, time)| bar.ts_ms == *time)
                         });
                     if !current {
+                        let _ = self.strategy_research.accept_native_run_failure(
+                            identity,
+                            "active chart identity/timeline changed; stale result ignored",
+                        );
                         let _ = self.sub_bar_run_state.accept_terminal(
                             identity,
                             Err("active chart identity/timeline changed; stale result ignored"),
                         );
                         continue;
+                    }
+                    if self.strategy_research.native_run_is_busy() {
+                        let native_result = self
+                            .strategy_databank_worker
+                            .as_ref()
+                            .ok_or("databank worker did not start".to_string())
+                            .and_then(|worker| {
+                                self.strategy_research
+                                    .accept_native_run_output(identity, &output, worker)
+                                    .map(|_| ())
+                            });
+                        if let Err(error) = native_result {
+                            let _ = self
+                                .strategy_research
+                                .accept_native_run_failure(identity, &error);
+                        }
                     }
                     let report_id = output.view.report_id.clone();
                     let run_id = output.manifest.run_id().to_owned();
@@ -405,10 +425,17 @@ impl TyphooNApp {
                 }
                 strategy_sub_bar_run::StrategyRunEvent::Failed { message, .. } => {
                     let _ = self
+                        .strategy_research
+                        .accept_native_run_failure(identity, &message);
+                    let _ = self
                         .sub_bar_run_state
                         .accept_terminal(identity, Err(&message));
                 }
-                strategy_sub_bar_run::StrategyRunEvent::Cancelled { .. } => {}
+                strategy_sub_bar_run::StrategyRunEvent::Cancelled { .. } => {
+                    let _ = self
+                        .strategy_research
+                        .accept_native_run_failure(identity, "verified run was cancelled");
+                }
             }
         }
     }

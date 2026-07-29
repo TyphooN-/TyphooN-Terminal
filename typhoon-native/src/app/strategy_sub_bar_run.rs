@@ -52,16 +52,17 @@ fn read_bounded(path: &str, label: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|error| format!("{label} `{path}`: {error}"))
 }
 
+pub(crate) fn load_execution_config(path: &str) -> Result<StrategyExecutionConfig, String> {
+    StrategyExecutionConfig::from_json_slice(&read_bounded(path, "execution config")?)
+        .map_err(|error| format!("execution config artifact: {error}"))
+}
+
 pub(crate) fn load_sealed_artifacts(
     ui: &SubBarRunUiState,
 ) -> Result<(StrategyIr, StrategyExecutionConfig, StrategyRunManifest), String> {
     let strategy = StrategyIr::from_json_slice(&read_bounded(&ui.strategy_path, "strategy")?)
         .map_err(|error| format!("strategy artifact: {error}"))?;
-    let config = StrategyExecutionConfig::from_json_slice(&read_bounded(
-        &ui.config_path,
-        "execution config",
-    )?)
-    .map_err(|error| format!("execution config artifact: {error}"))?;
+    let config = load_execution_config(&ui.config_path)?;
     let manifest =
         StrategyRunManifest::from_json_slice(&read_bounded(&ui.manifest_path, "run manifest")?)
             .map_err(|error| format!("run manifest artifact: {error}"))?;

@@ -99,6 +99,51 @@ fn every_guided_profile_entry_toggle_direction_and_slot_variant_is_the_general_g
             IndicatorRole::Volume,
         ]
     );
+
+    let selectable_kinds = [
+        IndicatorKind::Atr,
+        IndicatorKind::Sma,
+        IndicatorKind::Ema,
+        IndicatorKind::Kama,
+        IndicatorKind::Rsi,
+        IndicatorKind::FisherTransform,
+        IndicatorKind::Macd,
+        IndicatorKind::Adx,
+        IndicatorKind::StdDev,
+    ];
+    for slot_index in 0..7 {
+        for kind in &selectable_kinds {
+            let mut guided = NnfxBuilderConfig::default();
+            let slot = match slot_index {
+                0 => &mut guided.slots.atr,
+                1 => &mut guided.slots.baseline,
+                2 => &mut guided.slots.confirmation_1,
+                3 => &mut guided.slots.confirmation_2,
+                4 => &mut guided.slots.volume,
+                5 => &mut guided.slots.exit,
+                6 => &mut guided.slots.continuation,
+                _ => unreachable!(),
+            };
+            slot.kind = kind.clone();
+            slot.period = 37 + slot_index;
+
+            let guided_ir = guided.to_ir().expect("guided slot variant lowers");
+            let mut general = GeneralStrategyBuilder::from_definition(
+                guided
+                    .equivalent_general_definition()
+                    .expect("general slot graph"),
+            );
+            assert_eq!(
+                guided_ir,
+                general.seal().expect("general slot graph seals"),
+                "slot {slot_index} with {kind:?}"
+            );
+            assert_eq!(
+                StrategyIr::from_json_slice(&serde_json::to_vec(&guided_ir).unwrap()).unwrap(),
+                guided_ir
+            );
+        }
+    }
 }
 
 #[test]
