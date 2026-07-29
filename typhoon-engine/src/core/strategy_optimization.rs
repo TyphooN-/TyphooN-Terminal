@@ -581,7 +581,8 @@ pub struct Fold {
 pub struct FoldPlan {
     folds: Vec<Fold>,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WalkForwardConfig {
     pub train_bars: usize,
     pub test_bars: usize,
@@ -657,14 +658,16 @@ impl FoldPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SampleRole {
     InSample,
     OutOfSample,
     Purged,
     Embargoed,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OosScheme {
     Leading {
         oos_bars: usize,

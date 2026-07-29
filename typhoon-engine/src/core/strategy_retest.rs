@@ -701,15 +701,22 @@ fn derive_trade_monte_carlo_seed(
 
 pub const MAX_WALK_FORWARD_MATRIX_CELLS: usize = 32;
 const MAX_STUDY_WINDOWS: usize = 128;
+pub const STUDY_ARTIFACT_SCHEMA_VERSION: u32 = 1;
+const OOS_ARTIFACT_DOMAIN: &[u8] = b"typhoon.strategy_retest.oos_artifact.v1";
+const WALK_FORWARD_ARTIFACT_DOMAIN: &[u8] = b"typhoon.strategy_retest.walk_forward_artifact.v1";
+const WALK_FORWARD_MATRIX_ARTIFACT_DOMAIN: &[u8] =
+    b"typhoon.strategy_retest.walk_forward_matrix_artifact.v1";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExactBarMember {
     pub source_index: usize,
     pub timestamp: String,
     pub role: SampleRole,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExactBarMembership {
     pub role: SampleRole,
     pub ranges: Vec<Range<usize>>,
@@ -717,14 +724,16 @@ pub struct ExactBarMembership {
     pub timestamps: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OosSeamProof {
     pub purged: Range<usize>,
     pub oos: Range<usize>,
     pub embargoed: Range<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutedPartition {
     pub role: SampleRole,
     pub range: Range<usize>,
@@ -743,14 +752,32 @@ pub struct OosExecutionSpec {
     pub root_seed: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutedOosScheme {
+    schema_version: u32,
+    artifact_id: String,
+    candidate_id: String,
+    source_manifest_id: String,
     source_dataset_id: String,
+    source_range: Range<usize>,
+    config_id: String,
+    scheme: OosScheme,
+    purge_bars: usize,
+    embargo_bars: usize,
+    metric_id: String,
+    root_seed: u64,
     membership: Vec<ExactBarMember>,
     seams: Vec<OosSeamProof>,
     executed_partitions: Vec<ExecutedPartition>,
 }
 impl ExecutedOosScheme {
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+    pub fn candidate_id(&self) -> &str {
+        &self.candidate_id
+    }
     pub fn source_dataset_id(&self) -> &str {
         &self.source_dataset_id
     }
@@ -762,6 +789,67 @@ impl ExecutedOosScheme {
     }
     pub fn executed_partitions(&self) -> &[ExecutedPartition] {
         &self.executed_partitions
+    }
+    pub fn verify(&self) -> Result<(), RetestError> {
+        if self.schema_version != STUDY_ARTIFACT_SCHEMA_VERSION
+            || !is_id(&self.artifact_id)
+            || !is_id(&self.candidate_id)
+            || !is_id(&self.source_manifest_id)
+            || !is_id(&self.source_dataset_id)
+            || !is_id(&self.config_id)
+            || self.source_range.start >= self.source_range.end
+            || self.source_range.len() != self.membership.len()
+            || self.membership.is_empty()
+            || self.membership.len() > MAX_SEARCH_COMBINATIONS
+            || self.metric_id.trim().is_empty()
+            || self.executed_partitions.is_empty()
+            || self.executed_partitions.len() > MAX_STUDY_WINDOWS
+            || self.membership.iter().enumerate().any(|(offset, member)| {
+                member.source_index != self.source_range.start + offset
+                    || member.timestamp.trim().is_empty()
+            })
+            || self.executed_partitions.iter().any(|partition| {
+                partition.range.start < self.source_range.start
+                    || partition.range.end > self.source_range.end
+                    || partition.range.start >= partition.range.end
+                    || !is_id(&partition.dataset_id)
+                    || !is_id(&partition.run_id)
+                    || !is_id(&partition.report_id)
+                    || !partition.score.is_finite()
+            })
+            || self.seams.len() > MAX_STUDY_WINDOWS
+            || self.compute_id()? != self.artifact_id
+        {
+            return Err(RetestError::Invalid("invalid OOS study artifact".into()));
+        }
+        Ok(())
+    }
+    pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
+        encode_study(self, Self::verify)
+    }
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, RetestError> {
+        decode_study(bytes, Self::verify)
+    }
+    fn compute_id(&self) -> Result<String, RetestError> {
+        study_identity(
+            OOS_ARTIFACT_DOMAIN,
+            &(
+                self.schema_version,
+                &self.candidate_id,
+                &self.source_manifest_id,
+                &self.source_dataset_id,
+                &self.source_range,
+                &self.config_id,
+                &self.scheme,
+                self.purge_bars,
+                self.embargo_bars,
+                &self.metric_id,
+                self.root_seed,
+                &self.membership,
+                &self.seams,
+                &self.executed_partitions,
+            ),
+        )
     }
 }
 
@@ -780,6 +868,7 @@ pub fn execute_oos_scheme(
     if spec.metric_id.trim().is_empty() {
         return Err(RetestError::Invalid("metric id is empty".into()));
     }
+    let scheme = spec.scheme.clone();
     let plan = OosPlan::new(bars.len(), spec.scheme, spec.purge_bars, spec.embargo_bars)?;
     let source_start = source_lease.range().start;
     let membership = plan
@@ -839,12 +928,26 @@ pub fn execute_oos_scheme(
             sample_role_key(partition.role),
         )
     });
-    Ok(ExecutedOosScheme {
+    let mut artifact = ExecutedOosScheme {
+        schema_version: STUDY_ARTIFACT_SCHEMA_VERSION,
+        artifact_id: String::new(),
+        candidate_id: strategy.strategy_id().to_string(),
+        source_manifest_id: source_manifest.manifest_id.clone(),
         source_dataset_id: source_manifest.dataset_id.clone(),
+        source_range: source_lease.range(),
+        config_id: config.config_id().to_string(),
+        scheme,
+        purge_bars: spec.purge_bars,
+        embargo_bars: spec.embargo_bars,
+        metric_id: spec.metric_id,
+        root_seed: spec.root_seed,
         membership,
         seams,
         executed_partitions,
-    })
+    };
+    artifact.artifact_id = artifact.compute_id()?;
+    artifact.verify()?;
+    Ok(artifact)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -856,7 +959,8 @@ pub struct WalkForwardOptimizationSpec {
     pub root_seed: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DegradationObservation {
     pub in_sample_score: f64,
     pub out_of_sample_score: f64,
@@ -864,7 +968,8 @@ pub struct DegradationObservation {
     pub ratio_bps: Option<i32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WalkForwardWindowResult {
     pub ordinal: usize,
     pub selected_candidate_id: String,
@@ -880,7 +985,8 @@ pub struct WalkForwardWindowResult {
     pub degradation: DegradationObservation,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConcatenatedOosResult {
     pub ranges: Vec<Range<usize>>,
     pub run_ids: Vec<String>,
@@ -888,15 +994,31 @@ pub struct ConcatenatedOosResult {
     pub scores: Vec<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutedWalkForward {
+    schema_version: u32,
+    artifact_id: String,
+    candidate_set_id: String,
+    source_manifest_id: String,
     source_dataset_id: String,
+    source_range: Range<usize>,
+    config_id: String,
+    walk_forward_config: WalkForwardConfig,
+    minimum_windows: usize,
     metric_id: String,
+    root_seed: u64,
     windows: Vec<WalkForwardWindowResult>,
     concatenated_oos: ConcatenatedOosResult,
     degradation_distribution: Vec<DegradationObservation>,
 }
 impl ExecutedWalkForward {
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+    pub fn candidate_set_id(&self) -> &str {
+        &self.candidate_set_id
+    }
     pub fn source_dataset_id(&self) -> &str {
         &self.source_dataset_id
     }
@@ -911,6 +1033,91 @@ impl ExecutedWalkForward {
     }
     pub fn degradation_distribution(&self) -> &[DegradationObservation] {
         &self.degradation_distribution
+    }
+    pub fn verify(&self) -> Result<(), RetestError> {
+        let count = self.windows.len();
+        if self.schema_version != STUDY_ARTIFACT_SCHEMA_VERSION
+            || !is_id(&self.artifact_id)
+            || !is_id(&self.candidate_set_id)
+            || !is_id(&self.source_manifest_id)
+            || !is_id(&self.source_dataset_id)
+            || !is_id(&self.config_id)
+            || self.source_range.start >= self.source_range.end
+            || self.metric_id.trim().is_empty()
+            || self.minimum_windows < 2
+            || self.minimum_windows > MAX_STUDY_WINDOWS
+            || count < self.minimum_windows
+            || count > MAX_STUDY_WINDOWS
+            || self.degradation_distribution.len() != count
+            || self.concatenated_oos.ranges.len() != count
+            || self.concatenated_oos.run_ids.len() != count
+            || self.concatenated_oos.report_ids.len() != count
+            || self.concatenated_oos.scores.len() != count
+        {
+            return Err(RetestError::Invalid(
+                "invalid walk-forward artifact bounds".into(),
+            ));
+        }
+        for (ordinal, window) in self.windows.iter().enumerate() {
+            if window.ordinal != ordinal
+                || !is_id(&window.selected_candidate_id)
+                || window.evaluations_n == 0
+                || window.evaluations_n > MAX_TRIAL_BUDGET
+                || !is_id(&window.in_sample_run_id)
+                || !is_id(&window.in_sample_report_id)
+                || !is_id(&window.oos_run_id)
+                || !is_id(&window.oos_report_id)
+                || !window.degradation.in_sample_score.is_finite()
+                || !window.degradation.out_of_sample_score.is_finite()
+                || !window.degradation.delta.is_finite()
+                || self.concatenated_oos.run_ids[ordinal] != window.oos_run_id
+                || self.concatenated_oos.report_ids[ordinal] != window.oos_report_id
+                || self.concatenated_oos.scores[ordinal] != window.degradation.out_of_sample_score
+                || self.degradation_distribution[ordinal] != window.degradation
+                || self.concatenated_oos.ranges[ordinal]
+                    != range_from_membership(&window.out_of_sample)?
+            {
+                return Err(RetestError::Invalid(
+                    "invalid walk-forward evidence binding".into(),
+                ));
+            }
+            verify_membership(&window.in_sample, &self.source_range)?;
+            verify_membership(&window.purged, &self.source_range)?;
+            verify_membership(&window.embargoed, &self.source_range)?;
+            verify_membership(&window.out_of_sample, &self.source_range)?;
+        }
+        if self.compute_id()? != self.artifact_id {
+            return Err(RetestError::Invalid(
+                "walk-forward identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
+        encode_study(self, Self::verify)
+    }
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, RetestError> {
+        decode_study(bytes, Self::verify)
+    }
+    fn compute_id(&self) -> Result<String, RetestError> {
+        study_identity(
+            WALK_FORWARD_ARTIFACT_DOMAIN,
+            &(
+                self.schema_version,
+                &self.candidate_set_id,
+                &self.source_manifest_id,
+                &self.source_dataset_id,
+                &self.source_range,
+                &self.config_id,
+                &self.walk_forward_config,
+                self.minimum_windows,
+                &self.metric_id,
+                self.root_seed,
+                &self.windows,
+                &self.concatenated_oos,
+                &self.degradation_distribution,
+            ),
+        )
     }
 }
 
@@ -934,6 +1141,18 @@ pub fn execute_walk_forward_optimization(
             "invalid walk-forward observation contract".into(),
         ));
     }
+    let candidate_set_id = study_identity(
+        b"typhoon.strategy_retest.candidate_set.v1",
+        &(
+            candidates.evaluations_n,
+            candidates
+                .candidates
+                .iter()
+                .map(|candidate| candidate.candidate_id.as_str())
+                .collect::<Vec<_>>(),
+        ),
+    )?;
+    let walk_forward_config = spec.config;
     let plan = FoldPlan::walk_forward(bars.len(), spec.config)?;
     if plan.folds().len() < spec.minimum_windows {
         return Err(RetestError::Invalid(
@@ -1050,13 +1269,25 @@ pub fn execute_walk_forward_optimization(
         .iter()
         .map(|window| window.degradation.clone())
         .collect();
-    Ok(ExecutedWalkForward {
+    let mut artifact = ExecutedWalkForward {
+        schema_version: STUDY_ARTIFACT_SCHEMA_VERSION,
+        artifact_id: String::new(),
+        candidate_set_id,
+        source_manifest_id: source_manifest.manifest_id.clone(),
         source_dataset_id: source_manifest.dataset_id.clone(),
+        source_range: source_lease.range(),
+        config_id: config.config_id().to_string(),
+        walk_forward_config,
+        minimum_windows: spec.minimum_windows,
         metric_id: spec.metric_id,
+        root_seed: spec.root_seed,
         windows,
         concatenated_oos,
         degradation_distribution,
-    })
+    };
+    artifact.artifact_id = artifact.compute_id()?;
+    artifact.verify()?;
+    Ok(artifact)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1072,20 +1303,88 @@ pub struct WalkForwardMatrixSpec {
     pub root_seed: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutedWalkForwardMatrixCell {
     pub train_bars: usize,
     pub test_bars: usize,
     pub result: ExecutedWalkForward,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutedWalkForwardMatrix {
+    schema_version: u32,
+    artifact_id: String,
+    candidate_set_id: String,
+    source_dataset_id: String,
     cells: Vec<ExecutedWalkForwardMatrixCell>,
 }
 impl ExecutedWalkForwardMatrix {
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+    pub fn source_dataset_id(&self) -> &str {
+        &self.source_dataset_id
+    }
+    pub fn candidate_set_id(&self) -> &str {
+        &self.candidate_set_id
+    }
     pub fn cells(&self) -> &[ExecutedWalkForwardMatrixCell] {
         &self.cells
+    }
+    pub fn verify(&self) -> Result<(), RetestError> {
+        if self.schema_version != STUDY_ARTIFACT_SCHEMA_VERSION
+            || !is_id(&self.artifact_id)
+            || !is_id(&self.candidate_set_id)
+            || !is_id(&self.source_dataset_id)
+            || self.cells.is_empty()
+            || self.cells.len() > MAX_WALK_FORWARD_MATRIX_CELLS
+            || self.cells.windows(2).any(|pair| {
+                (pair[0].train_bars, pair[0].test_bars) >= (pair[1].train_bars, pair[1].test_bars)
+            })
+        {
+            return Err(RetestError::Invalid(
+                "invalid walk-forward matrix bounds".into(),
+            ));
+        }
+        for cell in &self.cells {
+            cell.result.verify()?;
+            if cell.train_bars == 0
+                || cell.test_bars == 0
+                || cell.result.walk_forward_config.train_bars != cell.train_bars
+                || cell.result.walk_forward_config.test_bars != cell.test_bars
+                || cell.result.source_dataset_id != self.source_dataset_id
+                || cell.result.candidate_set_id != self.candidate_set_id
+            {
+                return Err(RetestError::Invalid(
+                    "inconsistent walk-forward matrix cell".into(),
+                ));
+            }
+        }
+        if self.compute_id()? != self.artifact_id {
+            return Err(RetestError::Invalid(
+                "walk-forward matrix identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
+        encode_study(self, Self::verify)
+    }
+    pub fn from_json_slice(bytes: &[u8]) -> Result<Self, RetestError> {
+        decode_study(bytes, Self::verify)
+    }
+    fn compute_id(&self) -> Result<String, RetestError> {
+        study_identity(
+            WALK_FORWARD_MATRIX_ARTIFACT_DOMAIN,
+            &(
+                self.schema_version,
+                &self.candidate_set_id,
+                &self.source_dataset_id,
+                &self.cells,
+            ),
+        )
     }
 }
 
@@ -1145,7 +1444,19 @@ pub fn execute_walk_forward_matrix(
             result,
         });
     }
-    Ok(ExecutedWalkForwardMatrix { cells })
+    let first = cells
+        .first()
+        .ok_or_else(|| RetestError::Invalid("empty walk-forward matrix".into()))?;
+    let mut artifact = ExecutedWalkForwardMatrix {
+        schema_version: STUDY_ARTIFACT_SCHEMA_VERSION,
+        artifact_id: String::new(),
+        candidate_set_id: first.result.candidate_set_id.clone(),
+        source_dataset_id: first.result.source_dataset_id.clone(),
+        cells,
+    };
+    artifact.artifact_id = artifact.compute_id()?;
+    artifact.verify()?;
+    Ok(artifact)
 }
 
 struct PartitionRun {
@@ -1310,6 +1621,169 @@ fn sample_role_key(role: SampleRole) -> u8 {
     }
 }
 
+fn is_id(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn study_identity(domain: &[u8], value: &impl Serialize) -> Result<String, RetestError> {
+    let bytes = serde_json::to_vec(value).map_err(invalid)?;
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    frame(&mut hasher, &bytes);
+    Ok(hex(hasher.finalize()))
+}
+
+fn encode_study<T: Serialize>(
+    value: &T,
+    verify: fn(&T) -> Result<(), RetestError>,
+) -> Result<Vec<u8>, RetestError> {
+    verify(value)?;
+    let bytes = serde_json::to_vec(value).map_err(invalid)?;
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(RetestError::Invalid("study artifact is too large".into()));
+    }
+    Ok(bytes)
+}
+
+fn decode_study<T: for<'de> Deserialize<'de>>(
+    bytes: &[u8],
+    verify: fn(&T) -> Result<(), RetestError>,
+) -> Result<T, RetestError> {
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err(RetestError::Invalid("study artifact is too large".into()));
+    }
+    let value = serde_json::from_slice(bytes).map_err(invalid)?;
+    verify(&value)?;
+    Ok(value)
+}
+
+fn verify_membership(
+    membership: &ExactBarMembership,
+    source_range: &Range<usize>,
+) -> Result<(), RetestError> {
+    if membership.ranges.len() > MAX_STUDY_WINDOWS
+        || membership.indices.len() != membership.timestamps.len()
+        || membership.indices.len() > MAX_SEARCH_COMBINATIONS
+        || membership
+            .indices
+            .iter()
+            .any(|index| !source_range.contains(index))
+        || membership
+            .timestamps
+            .iter()
+            .any(|value| value.trim().is_empty())
+        || membership.ranges.iter().any(|range| {
+            range.start >= range.end
+                || range.start < source_range.start
+                || range.end > source_range.end
+        })
+        || membership.indices.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(RetestError::Invalid(
+            "invalid exact study membership".into(),
+        ));
+    }
+    let expanded = membership
+        .ranges
+        .iter()
+        .flat_map(|range| range.clone())
+        .collect::<Vec<_>>();
+    if expanded != membership.indices {
+        return Err(RetestError::Invalid(
+            "membership range evidence disagrees".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StudyArtifactKind {
+    Oos,
+    WalkForward,
+    WalkForwardMatrix,
+    TradeMonteCarlo,
+}
+impl StudyArtifactKind {
+    fn key(self) -> i64 {
+        match self {
+            Self::Oos => 0,
+            Self::WalkForward => 1,
+            Self::WalkForwardMatrix => 2,
+            Self::TradeMonteCarlo => 3,
+        }
+    }
+    fn decode(value: i64) -> Result<Self, RetestError> {
+        match value {
+            0 => Ok(Self::Oos),
+            1 => Ok(Self::WalkForward),
+            2 => Ok(Self::WalkForwardMatrix),
+            3 => Ok(Self::TradeMonteCarlo),
+            _ => Err(RetestError::Invalid("unknown study artifact kind".into())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StudyArtifact {
+    Oos(ExecutedOosScheme),
+    WalkForward(ExecutedWalkForward),
+    WalkForwardMatrix(ExecutedWalkForwardMatrix),
+    TradeMonteCarlo(TradeMonteCarloArtifact),
+}
+impl StudyArtifact {
+    fn decode(kind: StudyArtifactKind, bytes: &[u8]) -> Result<Self, RetestError> {
+        Ok(match kind {
+            StudyArtifactKind::Oos => Self::Oos(ExecutedOosScheme::from_json_slice(bytes)?),
+            StudyArtifactKind::WalkForward => {
+                Self::WalkForward(ExecutedWalkForward::from_json_slice(bytes)?)
+            }
+            StudyArtifactKind::WalkForwardMatrix => {
+                Self::WalkForwardMatrix(ExecutedWalkForwardMatrix::from_json_slice(bytes)?)
+            }
+            StudyArtifactKind::TradeMonteCarlo => {
+                Self::TradeMonteCarlo(TradeMonteCarloArtifact::from_json_slice(bytes)?)
+            }
+        })
+    }
+    fn artifact_id(&self) -> &str {
+        match self {
+            Self::Oos(value) => value.artifact_id(),
+            Self::WalkForward(value) => value.artifact_id(),
+            Self::WalkForwardMatrix(value) => value.artifact_id(),
+            Self::TradeMonteCarlo(value) => value.artifact_id(),
+        }
+    }
+    fn source_dataset_id(&self) -> &str {
+        match self {
+            Self::Oos(value) => value.source_dataset_id(),
+            Self::WalkForward(value) => value.source_dataset_id(),
+            Self::WalkForwardMatrix(value) => value.source_dataset_id(),
+            Self::TradeMonteCarlo(value) => value.dataset_id(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StudyArtifactQuery {
+    pub source_dataset_id: String,
+    pub kind: Option<StudyArtifactKind>,
+    pub after_sequence: Option<i64>,
+    pub limit: usize,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct StudyArtifactRecord {
+    pub artifact_id: String,
+    pub source_dataset_id: String,
+    pub kind: StudyArtifactKind,
+    pub created_sequence: i64,
+    pub artifact: StudyArtifact,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct StudyArtifactPage {
+    pub records: Vec<StudyArtifactRecord>,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetestEvidenceRecord {
     pub run_id: String,
@@ -1378,6 +1852,17 @@ impl RetestEvidenceStore {
              ) WITHOUT ROWID;
              CREATE INDEX IF NOT EXISTS idx_retest_candidate_sequence
                ON retest_evidence(candidate_id, created_sequence, run_id);
+             CREATE TABLE IF NOT EXISTS study_artifact(
+               artifact_id TEXT PRIMARY KEY,
+               source_dataset_id TEXT NOT NULL,
+               kind INTEGER NOT NULL,
+               artifact_json BLOB NOT NULL,
+               created_sequence INTEGER NOT NULL
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS idx_study_dataset_kind_sequence
+               ON study_artifact(source_dataset_id, kind, created_sequence, artifact_id);
+             CREATE INDEX IF NOT EXISTS idx_study_dataset_sequence
+               ON study_artifact(source_dataset_id, created_sequence, artifact_id);
              CREATE TABLE IF NOT EXISTS holdout_consumption(
                dataset_id TEXT PRIMARY KEY,
                range_start INTEGER NOT NULL,
@@ -1389,6 +1874,8 @@ impl RetestEvidenceStore {
                ON holdout_consumption(dataset_id, consumed_sequence);
              CREATE TRIGGER IF NOT EXISTS immutable_retest_update BEFORE UPDATE ON retest_evidence BEGIN SELECT RAISE(ABORT, 'retest evidence is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_retest_delete BEFORE DELETE ON retest_evidence BEGIN SELECT RAISE(ABORT, 'retest evidence is immutable'); END;
+             CREATE TRIGGER IF NOT EXISTS immutable_study_update BEFORE UPDATE ON study_artifact BEGIN SELECT RAISE(ABORT, 'study artifact is immutable'); END;
+             CREATE TRIGGER IF NOT EXISTS immutable_study_delete BEFORE DELETE ON study_artifact BEGIN SELECT RAISE(ABORT, 'study artifact is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_holdout_update BEFORE UPDATE ON holdout_consumption BEGIN SELECT RAISE(ABORT, 'holdout audit is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_holdout_delete BEFORE DELETE ON holdout_consumption BEGIN SELECT RAISE(ABORT, 'holdout audit is immutable'); END;",
         )?;
@@ -1449,6 +1936,170 @@ impl RetestEvidenceStore {
                 Err(RetestError::DuplicateLineage)
             }
             Err(error) => Err(error.into()),
+        }
+    }
+    pub fn persist_oos(
+        &self,
+        artifact: &ExecutedOosScheme,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::Oos,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_walk_forward(
+        &self,
+        artifact: &ExecutedWalkForward,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::WalkForward,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_walk_forward_matrix(
+        &self,
+        artifact: &ExecutedWalkForwardMatrix,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::WalkForwardMatrix,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_trade_monte_carlo(
+        &self,
+        artifact: &TradeMonteCarloArtifact,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::TradeMonteCarlo,
+            artifact.artifact_id(),
+            artifact.dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    fn persist_study(
+        &self,
+        kind: StudyArtifactKind,
+        artifact_id: &str,
+        source_dataset_id: &str,
+        bytes: Vec<u8>,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        if !is_id(artifact_id) || !is_id(source_dataset_id) || bytes.len() > MAX_ARTIFACT_BYTES {
+            return Err(RetestError::Invalid(
+                "invalid study persistence input".into(),
+            ));
+        }
+        let result = self.connection.borrow().execute(
+            "INSERT INTO study_artifact(artifact_id,source_dataset_id,kind,artifact_json,created_sequence) VALUES (?1,?2,?3,?4,?5)",
+            params![artifact_id, source_dataset_id, kind.key(), bytes, created_sequence],
+        );
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) if error.to_string().contains("UNIQUE constraint failed") => {
+                Err(RetestError::DuplicateLineage)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+    pub fn query_studies(
+        &self,
+        query: &StudyArtifactQuery,
+    ) -> Result<StudyArtifactPage, RetestError> {
+        validate_study_query(query)?;
+        let connection = self.connection.borrow();
+        let after = query.after_sequence.unwrap_or(i64::MIN);
+        let limit = to_i64(query.limit + 1)?;
+        let raw = if let Some(kind) = query.kind {
+            let mut statement = connection.prepare_cached(
+                "SELECT artifact_id,source_dataset_id,kind,artifact_json,created_sequence
+                 FROM study_artifact INDEXED BY idx_study_dataset_kind_sequence
+                 WHERE source_dataset_id=?1 AND kind=?2 AND created_sequence>?3
+                 ORDER BY created_sequence,artifact_id LIMIT ?4",
+            )?;
+            statement
+                .query_map(
+                    params![query.source_dataset_id, kind.key(), after, limit],
+                    decode_study_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let mut statement = connection.prepare_cached(
+                "SELECT artifact_id,source_dataset_id,kind,artifact_json,created_sequence
+                 FROM study_artifact INDEXED BY idx_study_dataset_sequence
+                 WHERE source_dataset_id=?1 AND created_sequence>?2
+                 ORDER BY created_sequence,artifact_id LIMIT ?3",
+            )?;
+            statement
+                .query_map(
+                    params![query.source_dataset_id, after, limit],
+                    decode_study_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut records = Vec::with_capacity(raw.len());
+        for (artifact_id, source_dataset_id, kind_key, bytes, created_sequence) in raw {
+            let kind = StudyArtifactKind::decode(kind_key)?;
+            let artifact = StudyArtifact::decode(kind, &bytes)?;
+            if artifact.artifact_id() != artifact_id
+                || artifact.source_dataset_id() != source_dataset_id
+            {
+                return Err(RetestError::Invalid(
+                    "stored study metadata disagrees with artifact".into(),
+                ));
+            }
+            records.push(StudyArtifactRecord {
+                artifact_id,
+                source_dataset_id,
+                kind,
+                created_sequence,
+                artifact,
+            });
+        }
+        let has_more = records.len() > query.limit;
+        records.truncate(query.limit);
+        Ok(StudyArtifactPage { records, has_more })
+    }
+    pub fn explain_study_query(
+        &self,
+        query: &StudyArtifactQuery,
+    ) -> Result<Vec<String>, RetestError> {
+        validate_study_query(query)?;
+        let connection = self.connection.borrow();
+        let after = query.after_sequence.unwrap_or(i64::MIN);
+        let limit = to_i64(query.limit + 1)?;
+        if let Some(kind) = query.kind {
+            let mut statement = connection.prepare(
+                "EXPLAIN QUERY PLAN SELECT artifact_id FROM study_artifact INDEXED BY idx_study_dataset_kind_sequence WHERE source_dataset_id=?1 AND kind=?2 AND created_sequence>?3 ORDER BY created_sequence,artifact_id LIMIT ?4",
+            )?;
+            Ok(statement
+                .query_map(
+                    params![query.source_dataset_id, kind.key(), after, limit],
+                    |row| row.get(3),
+                )?
+                .collect::<Result<Vec<_>, _>>()?)
+        } else {
+            let mut statement = connection.prepare(
+                "EXPLAIN QUERY PLAN SELECT artifact_id FROM study_artifact INDEXED BY idx_study_dataset_sequence WHERE source_dataset_id=?1 AND created_sequence>?2 ORDER BY created_sequence,artifact_id LIMIT ?3",
+            )?;
+            Ok(statement
+                .query_map(params![query.source_dataset_id, after, limit], |row| {
+                    row.get(3)
+                })?
+                .collect::<Result<Vec<_>, _>>()?)
         }
     }
     pub fn query(&self, query: &RetestEvidenceQuery) -> Result<RetestEvidencePage, RetestError> {
@@ -1551,6 +2202,33 @@ impl RetestEvidenceStore {
             .collect::<Result<Vec<_>, _>>()?)
     }
     #[cfg(test)]
+    fn test_only_update_study(&self, artifact_id: &str) -> Result<(), RetestError> {
+        self.connection.borrow().execute(
+            "UPDATE study_artifact SET created_sequence=created_sequence+1 WHERE artifact_id=?1",
+            [artifact_id],
+        )?;
+        Ok(())
+    }
+    #[cfg(test)]
+    fn test_only_delete_study(&self, artifact_id: &str) -> Result<(), RetestError> {
+        self.connection.borrow().execute(
+            "DELETE FROM study_artifact WHERE artifact_id=?1",
+            [artifact_id],
+        )?;
+        Ok(())
+    }
+    #[cfg(test)]
+    fn test_only_tamper_study_json(&self, artifact_id: &str) -> Result<(), RetestError> {
+        self.connection
+            .borrow()
+            .execute_batch("DROP TRIGGER immutable_study_update;")?;
+        self.connection.borrow().execute(
+            "UPDATE study_artifact SET artifact_json=X'7B7D' WHERE artifact_id=?1",
+            [artifact_id],
+        )?;
+        Ok(())
+    }
+    #[cfg(test)]
     fn test_only_update(&self, run_id: &str) -> Result<(), RetestError> {
         self.connection.borrow().execute(
             "UPDATE retest_evidence SET created_sequence=created_sequence+1 WHERE run_id=?1",
@@ -1613,7 +2291,31 @@ pub struct RetestWorker {
 }
 
 impl RetestWorker {
+    pub fn spawn(
+        path: &Path,
+        job_capacity: usize,
+        event_capacity: usize,
+    ) -> Result<Self, RetestError> {
+        Self::spawn_with_store(
+            RetestEvidenceStore::open(path)?,
+            job_capacity,
+            event_capacity,
+        )
+    }
+
     pub fn spawn_in_memory(
+        job_capacity: usize,
+        event_capacity: usize,
+    ) -> Result<Self, RetestError> {
+        Self::spawn_with_store(
+            RetestEvidenceStore::open_in_memory()?,
+            job_capacity,
+            event_capacity,
+        )
+    }
+
+    fn spawn_with_store(
+        store: RetestEvidenceStore,
         job_capacity: usize,
         event_capacity: usize,
     ) -> Result<Self, RetestError> {
@@ -1622,7 +2324,6 @@ impl RetestWorker {
                 "retest worker queue capacities must be positive".into(),
             ));
         }
-        let store = RetestEvidenceStore::open_in_memory()?;
         let (job_tx, job_rx) = std::sync::mpsc::sync_channel(job_capacity);
         let (event_tx, event_rx) = std::sync::mpsc::sync_channel(event_capacity);
         let cancelled = Arc::new(Mutex::new(BTreeSet::new()));
@@ -1738,6 +2439,26 @@ fn take_cancellation(cancelled: &Mutex<BTreeSet<u64>>, request_id: u64) -> bool 
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .remove(&request_id)
+}
+
+fn validate_study_query(query: &StudyArtifactQuery) -> Result<(), RetestError> {
+    if !is_id(&query.source_dataset_id) || query.limit == 0 || query.limit > MAX_RETEST_QUERY_LIMIT
+    {
+        return Err(RetestError::Invalid("invalid study query".into()));
+    }
+    Ok(())
+}
+
+fn decode_study_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, String, i64, Vec<u8>, i64)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+    ))
 }
 
 fn validate_query(query: &RetestEvidenceQuery) -> Result<(), RetestError> {

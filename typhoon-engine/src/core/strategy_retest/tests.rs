@@ -814,3 +814,237 @@ fn walk_forward_matrix_is_bounded_deterministic_and_refuses_insufficient_or_inva
     );
     assert!(undefined.is_err());
 }
+
+fn durable_study_artifacts() -> (
+    ExecutedOosScheme,
+    ExecutedWalkForward,
+    ExecutedWalkForwardMatrix,
+    TradeMonteCarloArtifact,
+) {
+    let (strategy, config, bars, manifest) = study_fixture(30);
+    let candidates = candidate_batch(&strategy);
+    let oos = execute_oos_scheme(
+        &strategy,
+        &config,
+        &manifest,
+        &bars,
+        study_lease(&manifest, bars.len()),
+        OosExecutionSpec {
+            scheme: OosScheme::Trailing { oos_bars: 5 },
+            purge_bars: 1,
+            embargo_bars: 1,
+            metric_id: "total_return".into(),
+            root_seed: 31,
+        },
+    )
+    .unwrap();
+    let walk_forward = execute_walk_forward_optimization(
+        &config,
+        &manifest,
+        &bars,
+        study_lease(&manifest, bars.len()),
+        &candidates,
+        WalkForwardOptimizationSpec {
+            config: WalkForwardConfig {
+                train_bars: 10,
+                test_bars: 4,
+                step_bars: 4,
+                purge_bars: 1,
+                embargo_bars: 1,
+                anchored: false,
+            },
+            minimum_windows: 2,
+            metric_id: "total_return".into(),
+            direction: ObjectiveDirection::Maximize,
+            root_seed: 32,
+        },
+    )
+    .unwrap();
+    let matrix = execute_walk_forward_matrix(
+        &config,
+        &manifest,
+        &bars,
+        study_lease(&manifest, bars.len()),
+        &candidates,
+        WalkForwardMatrixSpec {
+            dimensions: vec![(8, 3), (10, 4)],
+            step_bars: 4,
+            purge_bars: 1,
+            embargo_bars: 1,
+            anchored: false,
+            minimum_windows: 2,
+            metric_id: "total_return".into(),
+            direction: ObjectiveDirection::Maximize,
+            root_seed: 33,
+        },
+    )
+    .unwrap();
+    let (mc_strategy, mc_config, mc_bars, mc_manifest) = trading_fixture();
+    let monte_carlo = execute_trade_monte_carlo(
+        monte_carlo_request(&mc_strategy, &mc_config, &mc_bars, &mc_manifest, 34),
+        TradeMonteCarloConfig {
+            seed: 35,
+            trials: 8,
+            trade_skip_bps: 2_000,
+        },
+        3,
+    )
+    .unwrap();
+    (oos, walk_forward, matrix, monte_carlo)
+}
+
+#[test]
+fn study_artifacts_are_content_addressed_bounded_round_trippable_and_tamper_evident() {
+    let (oos, walk_forward, matrix, _) = durable_study_artifacts();
+    assert_eq!(oos.artifact_id().len(), 64);
+    assert_eq!(walk_forward.artifact_id().len(), 64);
+    assert_eq!(matrix.artifact_id().len(), 64);
+    oos.verify().unwrap();
+    walk_forward.verify().unwrap();
+    matrix.verify().unwrap();
+    assert_eq!(
+        oos,
+        ExecutedOosScheme::from_json_slice(&oos.to_json_vec().unwrap()).unwrap()
+    );
+    assert_eq!(
+        walk_forward,
+        ExecutedWalkForward::from_json_slice(&walk_forward.to_json_vec().unwrap()).unwrap()
+    );
+    assert_eq!(
+        matrix,
+        ExecutedWalkForwardMatrix::from_json_slice(&matrix.to_json_vec().unwrap()).unwrap()
+    );
+
+    let mut tampered: serde_json::Value =
+        serde_json::from_slice(&walk_forward.to_json_vec().unwrap()).unwrap();
+    tampered["source_dataset_id"] = "0".repeat(64).into();
+    assert!(ExecutedWalkForward::from_json_slice(&serde_json::to_vec(&tampered).unwrap()).is_err());
+    assert!(ExecutedOosScheme::from_json_slice(&vec![b'x'; MAX_ARTIFACT_BYTES + 1]).is_err());
+}
+
+#[test]
+fn durable_study_store_survives_restart_rejects_duplicates_tamper_and_unbounded_queries() {
+    let (oos, walk_forward, matrix, monte_carlo) = durable_study_artifacts();
+    let path = std::env::temp_dir().join(format!(
+        "typhoon-study-evidence-{}-{}.sqlite",
+        std::process::id(),
+        oos.artifact_id()
+    ));
+    {
+        let store = RetestEvidenceStore::open(&path).unwrap();
+        store.persist_oos(&oos, 1).unwrap();
+        store.persist_walk_forward(&walk_forward, 2).unwrap();
+        store.persist_walk_forward_matrix(&matrix, 3).unwrap();
+        store.persist_trade_monte_carlo(&monte_carlo, 4).unwrap();
+        assert!(matches!(
+            store.persist_oos(&oos, 5),
+            Err(RetestError::DuplicateLineage)
+        ));
+        assert!(store.test_only_update_study(oos.artifact_id()).is_err());
+        assert!(store.test_only_delete_study(oos.artifact_id()).is_err());
+    }
+    {
+        let store = RetestEvidenceStore::open(&path).unwrap();
+        let first = store
+            .query_studies(&StudyArtifactQuery {
+                source_dataset_id: oos.source_dataset_id().to_string(),
+                kind: None,
+                after_sequence: None,
+                limit: 1,
+            })
+            .unwrap();
+        assert_eq!(first.records.len(), 1);
+        assert!(first.has_more);
+        assert_eq!(first.records[0].artifact_id, oos.artifact_id());
+        assert!(matches!(first.records[0].artifact, StudyArtifact::Oos(_)));
+        assert!(
+            store
+                .query_studies(&StudyArtifactQuery {
+                    source_dataset_id: oos.source_dataset_id().to_string(),
+                    kind: None,
+                    after_sequence: None,
+                    limit: MAX_RETEST_QUERY_LIMIT + 1,
+                })
+                .is_err()
+        );
+        assert!(
+            store
+                .explain_study_query(&StudyArtifactQuery {
+                    source_dataset_id: oos.source_dataset_id().to_string(),
+                    kind: None,
+                    after_sequence: None,
+                    limit: 1,
+                })
+                .unwrap()
+                .iter()
+                .any(|line| line.contains("idx_study_dataset_sequence"))
+        );
+        assert!(
+            store
+                .explain_study_query(&StudyArtifactQuery {
+                    source_dataset_id: oos.source_dataset_id().to_string(),
+                    kind: Some(StudyArtifactKind::Oos),
+                    after_sequence: None,
+                    limit: 1,
+                })
+                .unwrap()
+                .iter()
+                .any(|line| line.contains("idx_study_dataset_kind_sequence"))
+        );
+        store
+            .test_only_tamper_study_json(oos.artifact_id())
+            .unwrap();
+        assert!(
+            store
+                .query_studies(&StudyArtifactQuery {
+                    source_dataset_id: oos.source_dataset_id().to_string(),
+                    kind: None,
+                    after_sequence: None,
+                    limit: 1,
+                })
+                .is_err()
+        );
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn disk_backed_worker_persists_completed_retest_across_restart() {
+    let path = std::env::temp_dir().join(format!(
+        "typhoon-retest-worker-{}-{}.sqlite",
+        std::process::id(),
+        execution_request("net_profit").request_id()
+    ));
+    let worker = RetestWorker::spawn(&path, 1, 8).unwrap();
+    worker
+        .try_submit(RetestWorkerJob {
+            request_id: 77,
+            execution: execution_request("net_profit"),
+            pipeline: pipeline(),
+            evaluations_n: 3,
+            parent_run_id: None,
+            created_sequence: 77,
+        })
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut candidate_id = None;
+    while std::time::Instant::now() < deadline && candidate_id.is_none() {
+        for event in worker.poll() {
+            if let RetestWorkerEvent::Completed { result, .. } = event {
+                candidate_id = Some(result.observation().candidate_id().to_string());
+            }
+        }
+        std::thread::yield_now();
+    }
+    drop(worker);
+    let store = RetestEvidenceStore::open(&path).unwrap();
+    let page = store
+        .query(&RetestEvidenceQuery {
+            candidate_id: candidate_id.unwrap(),
+            after_sequence: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(page.records.len(), 1);
+    let _ = std::fs::remove_file(path);
+}
