@@ -21,6 +21,7 @@ use crate::core::strategy_optimization::{
     SampleRole, SearchBatch, SearchDataLease, SplitMix64, StageAccess, StageVerdict,
     WalkForwardConfig, max_drawdown, percentile_index, select_best,
 };
+use crate::core::strategy_perturbation::PerturbationStudyArtifact;
 use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
 use crate::core::strategy_simulator::run_verified_simulation;
@@ -2108,6 +2109,7 @@ pub enum StudyArtifactKind {
     TradeMonteCarlo,
     CalendarWalkForward,
     BayesianOptimization,
+    Perturbation,
 }
 impl StudyArtifactKind {
     fn key(self) -> i64 {
@@ -2118,6 +2120,7 @@ impl StudyArtifactKind {
             Self::TradeMonteCarlo => 3,
             Self::CalendarWalkForward => 4,
             Self::BayesianOptimization => 5,
+            Self::Perturbation => 6,
         }
     }
     fn decode(value: i64) -> Result<Self, RetestError> {
@@ -2128,6 +2131,7 @@ impl StudyArtifactKind {
             3 => Ok(Self::TradeMonteCarlo),
             4 => Ok(Self::CalendarWalkForward),
             5 => Ok(Self::BayesianOptimization),
+            6 => Ok(Self::Perturbation),
             _ => Err(RetestError::Invalid("unknown study artifact kind".into())),
         }
     }
@@ -2141,6 +2145,7 @@ pub enum StudyArtifact {
     TradeMonteCarlo(TradeMonteCarloArtifact),
     CalendarWalkForward(ExecutedCalendarWalkForward),
     BayesianOptimization(BayesianStudyArtifact),
+    Perturbation(PerturbationStudyArtifact),
 }
 impl StudyArtifact {
     fn decode(kind: StudyArtifactKind, bytes: &[u8]) -> Result<Self, RetestError> {
@@ -2161,6 +2166,9 @@ impl StudyArtifact {
             StudyArtifactKind::BayesianOptimization => {
                 Self::BayesianOptimization(BayesianStudyArtifact::from_json_slice(bytes)?)
             }
+            StudyArtifactKind::Perturbation => {
+                Self::Perturbation(PerturbationStudyArtifact::from_json_slice(bytes)?)
+            }
         })
     }
     fn artifact_id(&self) -> &str {
@@ -2171,6 +2179,7 @@ impl StudyArtifact {
             Self::TradeMonteCarlo(value) => value.artifact_id(),
             Self::CalendarWalkForward(value) => value.artifact_id(),
             Self::BayesianOptimization(value) => value.artifact_id(),
+            Self::Perturbation(value) => value.artifact_id(),
         }
     }
     fn source_dataset_id(&self) -> &str {
@@ -2181,6 +2190,7 @@ impl StudyArtifact {
             Self::TradeMonteCarlo(value) => value.dataset_id(),
             Self::CalendarWalkForward(value) => value.source_dataset_id(),
             Self::BayesianOptimization(value) => value.source_dataset_id(),
+            Self::Perturbation(value) => value.source_dataset_id(),
         }
     }
 }
@@ -2432,6 +2442,19 @@ impl RetestEvidenceStore {
     ) -> Result<(), RetestError> {
         self.persist_study(
             StudyArtifactKind::BayesianOptimization,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_perturbation_study(
+        &self,
+        artifact: &PerturbationStudyArtifact,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::Perturbation,
             artifact.artifact_id(),
             artifact.source_dataset_id(),
             artifact.to_json_vec()?,

@@ -6,8 +6,8 @@ use crate::core::strategy_dataset::{
     DatasetQaPolicy,
 };
 use crate::core::strategy_ir::{
-    CompareOp, Condition, ExecutionSettings, Operand, ParamRange, ParamValue,
-    StrategyExecutionConfig, StrategyParameter,
+    CompareOp, Condition, ExecutionSettings, Operand, ParamRange, ParamValue, SlippageModel,
+    SpreadModel, StrategyExecutionConfig, StrategyParameter,
 };
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_optimization::{
@@ -15,6 +15,12 @@ use crate::core::strategy_optimization::{
     ObservationRole, OosScheme, ParameterDomain, Percentile, RobustnessPipeline,
     RobustnessStageSpec, SampleRole, SearchBatch, SearchMethod, SearchSpace, StageAccess,
     StageVerdict, Threshold, WalkForwardConfig, generate_candidates,
+};
+use crate::core::strategy_perturbation::{
+    MAX_PERTURBATION_COST_SCALE_BPS, MAX_PERTURBATION_JITTER_STEPS, MAX_PERTURBATION_NOISE_BPS,
+    MAX_PERTURBATION_START_OFFSET, MAX_PERTURBATION_TRIALS_PER_FAMILY, PerturbationDetail,
+    PerturbationFamily, PerturbationStudyArtifact, PerturbationStudySpec,
+    execute_perturbation_study, replay_perturbation_study,
 };
 
 fn bars() -> Vec<Bar> {
@@ -1454,5 +1460,514 @@ fn adaptive_bayesian_fails_closed_on_bounds_holdout_undefined_and_tampering() {
     duplicate["decisions"][1]["candidate_id"] = duplicate["decisions"][0]["candidate_id"].clone();
     assert!(
         BayesianStudyArtifact::from_json_slice(&serde_json::to_vec(&duplicate).unwrap()).is_err()
+    );
+}
+
+/// An oscillating series, so a threshold is crossed repeatedly from the first bars onward: every
+/// perturbation family — jittered threshold, scaled cost, repriced bar, later start — can move the
+/// realized trade set instead of only the fill prices.
+fn perturbation_bars() -> Vec<Bar> {
+    [
+        96.0, 104.0, 112.0, 108.0, 100.0, 116.0, 106.0, 98.0, 114.0, 102.0, 110.0, 118.0, 94.0,
+        120.0,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, close)| Bar {
+        timestamp: format!("2026-05-{:02}T00:00:00Z", index + 1),
+        open: close - 1.0,
+        high: close + 2.0,
+        low: close - 2.0,
+        close,
+        volume: 100.0,
+    })
+    .collect()
+}
+
+/// A parameterised long-only fixture: entry is gated by the jittered threshold and the exit is
+/// unconditional, so trade count, fill prices and costs all move with a perturbation.
+fn perturbation_fixture(
+    base_threshold: f64,
+    priced_costs: bool,
+) -> (
+    StrategyExecutionConfig,
+    Vec<Bar>,
+    DatasetManifest,
+    SearchSpace,
+) {
+    let mut definition = GeneralStrategyBuilder::new("perturbation", "test")
+        .definition()
+        .clone();
+    definition.parameters = vec![StrategyParameter {
+        id: "threshold".into(),
+        value: ParamValue::Float(base_threshold),
+        range: Some(ParamRange::Float {
+            min: 95.0,
+            max: 115.0,
+        }),
+    }];
+    definition.long.enabled = true;
+    definition.long.entry = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Parameter("threshold".into()),
+    };
+    definition.long.exit = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Constant(0.0),
+    };
+    let strategy = crate::core::strategy_ir::StrategyIr::build(&definition).unwrap();
+    let mut settings = ExecutionSettings::conservative_defaults();
+    if priced_costs {
+        settings.slippage = SlippageModel::FixedPriceDistance { distance: 0.05 };
+        settings.spread = SpreadModel::Constant { price_units: 0.02 };
+    }
+    let config = StrategyExecutionConfig::build(&settings).unwrap();
+    let bars = perturbation_bars();
+    let manifest = manifest(&bars);
+    let space = SearchSpace::new(
+        strategy,
+        vec![
+            ParameterDomain::new(
+                "threshold",
+                vec![95.0, 99.0, 103.0, 107.0, 111.0, 115.0]
+                    .into_iter()
+                    .map(ParamValue::Float)
+                    .collect(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    (config, bars, manifest, space)
+}
+
+fn perturbation_spec() -> PerturbationStudySpec {
+    PerturbationStudySpec {
+        trials_per_family: 4,
+        jitter_steps: 2,
+        cost_scale_bps: 20_000,
+        data_noise_bps: 50,
+        maximum_start_offset: 4,
+        metric_id: "net_profit".into(),
+        evaluations_n: 12,
+        root_seed: 0x4d34,
+    }
+}
+
+#[test]
+fn perturbation_study_bounds_every_supported_family_and_persists_immutably() {
+    let (config, bars, manifest, space) = perturbation_fixture(103.0, true);
+    let source_manifest = manifest.clone();
+    let execute = || {
+        execute_perturbation_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            perturbation_spec(),
+        )
+    };
+    let artifact = execute().unwrap();
+    artifact.verify().unwrap();
+    assert_eq!(artifact, execute().unwrap());
+    assert_eq!(
+        artifact,
+        replay_perturbation_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            &artifact,
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        artifact,
+        PerturbationStudyArtifact::from_json_slice(&artifact.to_json_vec().unwrap()).unwrap()
+    );
+    // Positive control for the re-sealing negative tests below: untouched evidence survives a
+    // recomputed identity, so those tests fail on the invariant and not on the decode.
+    assert_eq!(
+        artifact,
+        PerturbationStudyArtifact::resealed_from_json(&artifact.to_json_vec().unwrap()).unwrap()
+    );
+
+    // Immutable baseline evidence, bound to the exact sealed run it came from.
+    assert_eq!(artifact.baseline_candidate_id(), space.base().strategy_id());
+    assert_eq!(artifact.baseline_run_id().len(), 64);
+    assert_eq!(artifact.baseline_report_id().len(), 64);
+    assert_eq!(artifact.source_dataset_id(), manifest.dataset_id);
+    assert_eq!(artifact.config_id(), config.config_id());
+    assert_eq!(artifact.range(), 0..bars.len());
+    assert_eq!(artifact.metric_id(), "net_profit");
+    assert_eq!(artifact.evaluations_n(), 12);
+    assert!(artifact.baseline_value().is_finite());
+    // The source evidence a perturbation was derived from is still exactly what it was.
+    assert_eq!(manifest, source_manifest);
+    source_manifest.verify(&bars).unwrap();
+
+    assert_eq!(artifact.families().len(), 4);
+    let mut identities = std::collections::BTreeSet::new();
+    let mut dispersed = 0;
+    for family in artifact.families() {
+        assert!(family.unsupported_reason().is_none());
+        assert_eq!(family.trials().len(), 4);
+        assert_ne!(family.component_seed(), artifact.root_seed());
+        let percentiles = family.percentiles().unwrap();
+        assert_eq!(percentiles.confidence_level_bps(), 9_000);
+        assert!(percentiles.p05() <= percentiles.median());
+        assert!(percentiles.median() <= percentiles.p95());
+        if percentiles.p05() < percentiles.p95() {
+            dispersed += 1;
+        }
+        for (index, trial) in family.trials().iter().enumerate() {
+            assert_eq!(trial.trial_n, index + 1);
+            assert_eq!(trial.request_id.len(), 64);
+            assert_eq!(trial.run_id.len(), 64);
+            assert_eq!(trial.report_id.len(), 64);
+            assert!(trial.value.is_finite());
+            assert!(identities.insert(trial.report_id.clone()));
+            assert!(identities.insert(trial.run_id.clone()));
+        }
+    }
+    // Every family is a distribution, not one score: each one actually moved the metric.
+    assert_eq!(dispersed, 4);
+    assert!(identities.insert(artifact.baseline_report_id().to_string()));
+
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    store.persist_perturbation_study(&artifact, 4).unwrap();
+    assert!(matches!(
+        store.persist_perturbation_study(&artifact, 5),
+        Err(RetestError::DuplicateLineage)
+    ));
+    let page = store
+        .query_studies(&StudyArtifactQuery {
+            source_dataset_id: manifest.dataset_id.clone(),
+            kind: Some(StudyArtifactKind::Perturbation),
+            after_sequence: None,
+            limit: 4,
+        })
+        .unwrap();
+    assert!(matches!(
+        &page.records[0].artifact,
+        StudyArtifact::Perturbation(value) if value == &artifact
+    ));
+}
+
+#[test]
+fn perturbation_study_declares_execution_cost_unsupported_for_a_zero_cost_config() {
+    let (config, bars, manifest, space) = perturbation_fixture(103.0, false);
+    let artifact = execute_perturbation_study(
+        &config,
+        &manifest,
+        &bars,
+        study_lease(&manifest, bars.len()),
+        &space,
+        perturbation_spec(),
+    )
+    .unwrap();
+    artifact.verify().unwrap();
+
+    for family in artifact.families() {
+        if family.family() == PerturbationFamily::ExecutionCost {
+            assert!(family.unsupported_reason().is_some());
+            assert!(family.trials().is_empty());
+            assert!(family.percentiles().is_none());
+        } else {
+            assert!(family.unsupported_reason().is_none());
+            assert_eq!(family.trials().len(), 4);
+            assert!(family.percentiles().is_some());
+        }
+    }
+
+    // A recorded support decision is re-derived, never trusted: forging it fails closed even when
+    // the artifact identity is recomputed over the forged content.
+    let mut forged: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+    forged["families"][1]["unsupported_reason"] = serde_json::Value::Null;
+    let forged = serde_json::to_vec(&forged).unwrap();
+    assert!(PerturbationStudyArtifact::from_json_slice(&forged).is_err());
+    assert!(PerturbationStudyArtifact::resealed_from_json(&forged).is_err());
+}
+
+#[test]
+fn perturbation_trials_preserve_source_chronology_and_never_reach_future_bars() {
+    let (config, bars, manifest, space) = perturbation_fixture(103.0, true);
+    let artifact = execute_perturbation_study(
+        &config,
+        &manifest,
+        &bars,
+        study_lease(&manifest, bars.len()),
+        &space,
+        perturbation_spec(),
+    )
+    .unwrap();
+
+    let source_first = bars.first().unwrap().timestamp.clone();
+    let source_last = bars.last().unwrap().timestamp.clone();
+    let mut offsets = std::collections::BTreeSet::new();
+    let mut perturbed_datasets = std::collections::BTreeSet::new();
+    for family in artifact.families() {
+        for trial in family.trials() {
+            assert_eq!(trial.last_timestamp, source_last);
+            match &trial.detail {
+                PerturbationDetail::StartOffset { offset } => {
+                    assert!(*offset >= 1 && *offset <= 4);
+                    assert!(offsets.insert(*offset));
+                    assert_eq!(trial.range_start, *offset);
+                    assert_eq!(trial.range_end, bars.len());
+                    assert!(trial.first_timestamp > source_first);
+                    assert_ne!(trial.dataset_id, manifest.dataset_id);
+                    assert!(perturbed_datasets.insert(trial.dataset_id.clone()));
+                }
+                PerturbationDetail::DataNoise => {
+                    assert_eq!(trial.range_start, 0);
+                    assert_eq!(trial.range_end, bars.len());
+                    assert_eq!(trial.first_timestamp, source_first);
+                    assert_ne!(trial.dataset_id, manifest.dataset_id);
+                    assert!(perturbed_datasets.insert(trial.dataset_id.clone()));
+                }
+                PerturbationDetail::ParameterJitter { ordinal, .. } => {
+                    assert!(*ordinal < space.combinations());
+                    assert_eq!(trial.dataset_id, manifest.dataset_id);
+                    assert_eq!(trial.config_id, config.config_id());
+                    assert_ne!(trial.strategy_id, artifact.baseline_candidate_id());
+                }
+                PerturbationDetail::ExecutionCost { scale_bps } => {
+                    assert!(*scale_bps >= 1 && *scale_bps <= 20_000);
+                    assert_eq!(trial.dataset_id, manifest.dataset_id);
+                    assert_eq!(trial.strategy_id, artifact.baseline_candidate_id());
+                    assert_ne!(trial.config_id, config.config_id());
+                }
+            }
+        }
+    }
+    assert_eq!(offsets.len(), 4);
+    assert_eq!(perturbed_datasets.len(), 8);
+
+    // A trial that reached past the leased range, or moved its chronology, is refused on the
+    // structural evidence alone — not merely because the recorded digest changed.
+    for (field, value) in [
+        ("range_end", serde_json::json!(bars.len() + 1)),
+        ("range_start", serde_json::json!(0)),
+        ("last_timestamp", serde_json::json!("2026-06-01T00:00:00Z")),
+        ("first_timestamp", serde_json::json!("2026-04-01T00:00:00Z")),
+    ] {
+        let mut leaked: serde_json::Value =
+            serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+        leaked["families"][3]["trials"][0][field] = value;
+        let leaked = serde_json::to_vec(&leaked).unwrap();
+        assert!(PerturbationStudyArtifact::from_json_slice(&leaked).is_err());
+        assert!(
+            PerturbationStudyArtifact::resealed_from_json(&leaked).is_err(),
+            "resealed leak through {field} verified"
+        );
+    }
+}
+
+#[test]
+fn perturbation_study_fails_closed_on_bounds_leases_undefined_and_tampering() {
+    let (config, bars, manifest, space) = perturbation_fixture(103.0, true);
+    let execute = |spec| {
+        execute_perturbation_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            spec,
+        )
+    };
+    for mutate in [
+        (|spec: &mut PerturbationStudySpec| spec.trials_per_family = 0)
+            as fn(&mut PerturbationStudySpec),
+        |spec| spec.trials_per_family = MAX_PERTURBATION_TRIALS_PER_FAMILY + 1,
+        |spec| spec.jitter_steps = 0,
+        |spec| spec.jitter_steps = MAX_PERTURBATION_JITTER_STEPS + 1,
+        |spec| spec.cost_scale_bps = 0,
+        |spec| spec.cost_scale_bps = MAX_PERTURBATION_COST_SCALE_BPS + 1,
+        |spec| spec.data_noise_bps = 0,
+        |spec| spec.data_noise_bps = MAX_PERTURBATION_NOISE_BPS + 1,
+        |spec| spec.maximum_start_offset = 0,
+        |spec| spec.maximum_start_offset = MAX_PERTURBATION_START_OFFSET + 1,
+        |spec| spec.evaluations_n = 0,
+        |spec| spec.evaluations_n = MAX_TRIAL_BUDGET + 1,
+        |spec| spec.metric_id = "  ".into(),
+        // A metric the sealed report does not define.
+        |spec| spec.metric_id = "unknown_metric".into(),
+        // Neighbourhood smaller than the requested trial budget.
+        |spec| spec.jitter_steps = 1,
+        // Start offsets cannot be drawn without replacement.
+        |spec| spec.maximum_start_offset = 3,
+        // A start offset that would leave no leased bars behind.
+        |spec| spec.maximum_start_offset = 13,
+    ] {
+        let mut spec = perturbation_spec();
+        mutate(&mut spec);
+        assert!(execute(spec).is_err());
+    }
+
+    // Foreign lease, wrong stage, and holdout access.
+    let foreign = HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), bars.len() + 4, 4)
+        .unwrap()
+        .lease(StageAccess::Robustness)
+        .unwrap();
+    assert!(
+        execute_perturbation_study(
+            &config,
+            &manifest,
+            &bars,
+            foreign,
+            &space,
+            perturbation_spec()
+        )
+        .is_err()
+    );
+    let search = HoldoutQuarantine::new(&manifest.dataset_id, "f".repeat(64), bars.len() + 4, 4)
+        .unwrap()
+        .lease(StageAccess::Search)
+        .unwrap();
+    assert!(
+        execute_perturbation_study(
+            &config,
+            &manifest,
+            &bars,
+            search,
+            &space,
+            perturbation_spec()
+        )
+        .is_err()
+    );
+    assert!(
+        HoldoutQuarantine::new(&manifest.dataset_id, "f".repeat(64), bars.len() + 4, 4)
+            .unwrap()
+            .lease(StageAccess::FinalReview)
+            .is_err()
+    );
+
+    // A baseline whose declared value has no place in its own domain has no neighbourhood.
+    let (off_config, off_bars, off_manifest, off_space) = perturbation_fixture(101.0, true);
+    assert!(
+        execute_perturbation_study(
+            &off_config,
+            &off_manifest,
+            &off_bars,
+            study_lease(&off_manifest, off_bars.len()),
+            &off_space,
+            perturbation_spec(),
+        )
+        .is_err()
+    );
+
+    // Non-finite bars have no manifest at all, so they can only arrive as a payload that does not
+    // belong to the sealed source evidence; non-positive prices have one and are refused directly.
+    let mut non_finite = bars.clone();
+    non_finite[3].close = f64::NAN;
+    assert!(
+        execute_perturbation_study(
+            &config,
+            &manifest,
+            &non_finite,
+            study_lease(&manifest, non_finite.len()),
+            &space,
+            perturbation_spec(),
+        )
+        .is_err()
+    );
+    let mut unpriced = bars.clone();
+    unpriced[3].low = 0.0;
+    let unpriced_manifest = self::manifest(&unpriced);
+    assert!(
+        execute_perturbation_study(
+            &config,
+            &unpriced_manifest,
+            &unpriced,
+            study_lease(&unpriced_manifest, unpriced.len()),
+            &space,
+            perturbation_spec(),
+        )
+        .is_err()
+    );
+
+    let artifact = execute(perturbation_spec()).unwrap();
+    let tamper = |pointer: &str, value: serde_json::Value| {
+        let mut tampered: serde_json::Value =
+            serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+        *tampered.pointer_mut(pointer).unwrap() = value;
+        serde_json::to_vec(&tampered).unwrap()
+    };
+    // Evidence that is re-derived during verification: editing it fails closed even after the
+    // artifact identity is recomputed over the edit.
+    for (pointer, value) in [
+        ("/baseline_value", serde_json::json!(1.0e9)),
+        ("/baseline_run_id", serde_json::json!("0".repeat(64))),
+        ("/families/0/trials/0/value", serde_json::json!(1.0e9)),
+        ("/families/0/trials/0/component_seed", serde_json::json!(1)),
+        (
+            "/families/0/trials/1/strategy_id",
+            serde_json::json!("0".repeat(64)),
+        ),
+        (
+            "/families/1/trials/0/config_id",
+            serde_json::json!("0".repeat(64)),
+        ),
+        (
+            "/families/2/trials/0/dataset_id",
+            serde_json::json!(&artifact.source_dataset_id()),
+        ),
+        ("/spec/root_seed", serde_json::json!(1)),
+        ("/range_end", serde_json::json!(13)),
+    ] {
+        let bytes = tamper(pointer, value);
+        assert!(
+            PerturbationStudyArtifact::from_json_slice(&bytes).is_err(),
+            "tampered {pointer} verified"
+        );
+        assert!(
+            PerturbationStudyArtifact::resealed_from_json(&bytes).is_err(),
+            "resealed {pointer} verified"
+        );
+    }
+    // Evidence the artifact only seals: the recorded digest is what refuses the edit.
+    assert!(
+        PerturbationStudyArtifact::from_json_slice(&tamper(
+            "/spec/evaluations_n",
+            serde_json::json!(13)
+        ))
+        .is_err()
+    );
+
+    // Duplicate trial evidence inside one family.
+    let mut duplicate: serde_json::Value =
+        serde_json::from_slice(&artifact.to_json_vec().unwrap()).unwrap();
+    duplicate["families"][0]["trials"][1] = duplicate["families"][0]["trials"][0].clone();
+    let duplicate = serde_json::to_vec(&duplicate).unwrap();
+    assert!(PerturbationStudyArtifact::from_json_slice(&duplicate).is_err());
+    assert!(PerturbationStudyArtifact::resealed_from_json(&duplicate).is_err());
+
+    // Replay under a different execution config is foreign evidence.
+    let mut other = config.to_input();
+    other.warmup_bars = 1;
+    let other_config = StrategyExecutionConfig::build(&other).unwrap();
+    assert!(
+        replay_perturbation_study(
+            &other_config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            &artifact,
+        )
+        .is_err()
     );
 }
