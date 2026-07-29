@@ -25,6 +25,7 @@ pub mod strategy_bayesian;
 pub mod strategy_builder;
 pub mod strategy_calendar;
 pub mod strategy_corporate;
+pub mod strategy_cross_check;
 pub mod strategy_databank;
 pub mod strategy_dataset;
 pub mod strategy_dataset_store;

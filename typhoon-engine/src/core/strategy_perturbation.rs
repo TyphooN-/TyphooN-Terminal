@@ -15,7 +15,7 @@
 use crate::broker::alpaca::Bar;
 use crate::core::strategy_dataset::DatasetManifest;
 use crate::core::strategy_ir::{
-    ParamValue, SlippageModel, SpreadModel, StrategyExecutionConfig, StrategyIr,
+    CommissionModel, ParamValue, SlippageModel, SpreadModel, StrategyExecutionConfig, StrategyIr,
 };
 use crate::core::strategy_metrics::{METRICS_SCHEMA_VERSION, MetricValue};
 use crate::core::strategy_optimization::{
@@ -1084,7 +1084,7 @@ fn family_support(
     }
 }
 
-fn has_scalable_cost(config: &StrategyExecutionConfig) -> bool {
+pub(crate) fn has_scalable_cost(config: &StrategyExecutionConfig) -> bool {
     let settings = config.settings();
     let slippage = match &settings.slippage {
         SlippageModel::None => 0.0,
@@ -1097,13 +1097,26 @@ fn has_scalable_cost(config: &StrategyExecutionConfig) -> bool {
         SpreadModel::Constant { price_units } => *price_units,
         SpreadModel::PercentOfPrice { percent } => *percent,
     };
-    (slippage.is_finite() && slippage > 0.0) || (spread.is_finite() && spread > 0.0)
+    let commission = match &settings.commission {
+        CommissionModel::None | CommissionModel::VenueSchedule(_) => 0.0,
+        CommissionModel::PerShare { amount, minimum }
+        | CommissionModel::PercentOfNotional {
+            percent: amount,
+            minimum,
+        } => amount.max(*minimum),
+        CommissionModel::PerOrder { amount } => *amount,
+    };
+    (slippage.is_finite() && slippage > 0.0)
+        || (spread.is_finite() && spread > 0.0)
+        || (commission.is_finite() && commission > 0.0)
 }
 
-/// Rebuild the sealed execution config with every positive slippage and spread scalar scaled by
-/// `scale_bps`. The rebuilt config is validated and re-identified by `StrategyExecutionConfig`, so
-/// a stress that the declared model cannot represent fails closed instead of being clamped.
-fn stressed_config(
+/// Rebuild the sealed execution config with every positive slippage, spread, and configurable
+/// commission scalar scaled by `scale_bps`. The rebuilt config is validated and re-identified by
+/// `StrategyExecutionConfig`, so a stress that the declared model cannot represent fails closed
+/// instead of being clamped. Named venue schedules remain immutable because their sealed version
+/// does not declare synthetic multiplier rates.
+pub(crate) fn stressed_config(
     config: &StrategyExecutionConfig,
     scale_bps: u32,
 ) -> Result<StrategyExecutionConfig, RetestError> {
@@ -1136,6 +1149,21 @@ fn stressed_config(
         SpreadModel::None | SpreadModel::RecordedQuotes => {}
         SpreadModel::Constant { price_units } => scale(price_units)?,
         SpreadModel::PercentOfPrice { percent } => scale(percent)?,
+    }
+    match &mut settings.commission {
+        CommissionModel::None => {}
+        CommissionModel::PerShare { amount, minimum }
+        | CommissionModel::PercentOfNotional {
+            percent: amount,
+            minimum,
+        } => {
+            scale(amount)?;
+            scale(minimum)?;
+        }
+        CommissionModel::PerOrder { amount } => scale(amount)?,
+        // Venue schedules are immutable external tariffs. Scaling a named schedule would fabricate
+        // rates that its version never declared, so callers need an explicit configurable model.
+        CommissionModel::VenueSchedule(_) => {}
     }
     if !stressed {
         return Err(RetestError::Invalid(

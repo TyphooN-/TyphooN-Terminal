@@ -8,6 +8,7 @@
 
 use crate::broker::alpaca::Bar;
 use crate::core::strategy_bayesian::BayesianStudyArtifact;
+use crate::core::strategy_cross_check::CrossCheckStudyArtifact;
 use crate::core::strategy_dataset::DatasetManifest;
 use crate::core::strategy_ir::{
     DatasetBinding, RunBinding, StrategyExecutionConfig, StrategyIr, StrategyRunManifest,
@@ -2112,6 +2113,7 @@ pub enum StudyArtifactKind {
     BayesianOptimization,
     Perturbation,
     ParameterField,
+    CrossCheck,
 }
 impl StudyArtifactKind {
     fn key(self) -> i64 {
@@ -2124,6 +2126,7 @@ impl StudyArtifactKind {
             Self::BayesianOptimization => 5,
             Self::Perturbation => 6,
             Self::ParameterField => 7,
+            Self::CrossCheck => 8,
         }
     }
     fn decode(value: i64) -> Result<Self, RetestError> {
@@ -2136,6 +2139,7 @@ impl StudyArtifactKind {
             5 => Ok(Self::BayesianOptimization),
             6 => Ok(Self::Perturbation),
             7 => Ok(Self::ParameterField),
+            8 => Ok(Self::CrossCheck),
             _ => Err(RetestError::Invalid("unknown study artifact kind".into())),
         }
     }
@@ -2151,6 +2155,7 @@ pub enum StudyArtifact {
     BayesianOptimization(BayesianStudyArtifact),
     Perturbation(PerturbationStudyArtifact),
     ParameterField(ParameterFieldStudyArtifact),
+    CrossCheck(CrossCheckStudyArtifact),
 }
 impl StudyArtifact {
     fn decode(kind: StudyArtifactKind, bytes: &[u8]) -> Result<Self, RetestError> {
@@ -2177,6 +2182,9 @@ impl StudyArtifact {
             StudyArtifactKind::ParameterField => {
                 Self::ParameterField(ParameterFieldStudyArtifact::from_json_slice(bytes)?)
             }
+            StudyArtifactKind::CrossCheck => {
+                Self::CrossCheck(CrossCheckStudyArtifact::from_json_slice(bytes)?)
+            }
         })
     }
     fn artifact_id(&self) -> &str {
@@ -2189,6 +2197,7 @@ impl StudyArtifact {
             Self::BayesianOptimization(value) => value.artifact_id(),
             Self::Perturbation(value) => value.artifact_id(),
             Self::ParameterField(value) => value.artifact_id(),
+            Self::CrossCheck(value) => value.artifact_id(),
         }
     }
     fn source_dataset_id(&self) -> &str {
@@ -2201,6 +2210,7 @@ impl StudyArtifact {
             Self::BayesianOptimization(value) => value.source_dataset_id(),
             Self::Perturbation(value) => value.source_dataset_id(),
             Self::ParameterField(value) => value.source_dataset_id(),
+            Self::CrossCheck(value) => value.source_dataset_id(),
         }
     }
 }
@@ -2478,6 +2488,19 @@ impl RetestEvidenceStore {
     ) -> Result<(), RetestError> {
         self.persist_study(
             StudyArtifactKind::ParameterField,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_cross_check_study(
+        &self,
+        artifact: &CrossCheckStudyArtifact,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::CrossCheck,
             artifact.artifact_id(),
             artifact.source_dataset_id(),
             artifact.to_json_vec()?,
