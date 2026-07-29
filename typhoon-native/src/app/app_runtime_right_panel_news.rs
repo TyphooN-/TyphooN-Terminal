@@ -10,12 +10,23 @@ impl TyphooNApp {
             // watchlist / positions / orders / holdings actually match.
             // Falls back to total when news_full_articles is empty
             // (legacy 3-tuple news has no ticker tags to filter by).
+            let news_focus = self.news_focus_symbols();
+            let focused_article_indices: Vec<usize> = self
+                .news_full_articles
+                .iter()
+                .enumerate()
+                .filter(|(_, article)| {
+                    Self::news_article_in_focus(&news_focus, &article.symbol, &article.tickers)
+                })
+                .map(|(index, _)| index)
+                .collect();
+            let focused_story_groups =
+                typhoon_engine::core::news::group_article_indices_by_headline(
+                    &self.news_full_articles,
+                    focused_article_indices,
+                );
             let news_count = if !self.news_full_articles.is_empty() {
-                let focus = self.news_focus_symbols();
-                self.news_full_articles
-                    .iter()
-                    .filter(|a| Self::news_article_in_focus(&focus, &a.symbol, &a.tickers))
-                    .count()
+                focused_story_groups.len()
             } else {
                 self.news_articles.len()
             };
@@ -135,14 +146,11 @@ impl TyphooNApp {
                 });
                 // Build the O(n)-construct, O(1)-lookup focus set once so the
                 // per-article filter below runs in constant time per row.
-                let news_focus = self.news_focus_symbols();
-                let right_news_rows: Vec<(String, String, String, String)> = if !self.news_full_articles.is_empty() {
-                    self.news_full_articles
+                let right_news_rows: Vec<(Option<usize>, String, String, String, String, usize)> = if !self.news_full_articles.is_empty() {
+                    focused_story_groups
                         .iter()
-                        .filter(|a| {
-                            Self::news_article_in_focus(&news_focus, &a.symbol, &a.tickers)
-                        })
-                        .map(|a| {
+                        .map(|(primary_index, alternates)| {
+                            let a = &self.news_full_articles[*primary_index];
                             let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(
                                 a.published_at,
                                 0,
@@ -166,7 +174,14 @@ impl TyphooNApp {
                                     tickers.push(ticker);
                                 }
                             }
-                            (a.headline.clone(), source, dt, tickers.join(", "))
+                            (
+                                Some(*primary_index),
+                                a.headline.clone(),
+                                source,
+                                dt,
+                                tickers.join(", "),
+                                1 + alternates.len(),
+                            )
                         })
                         .collect()
                 } else {
@@ -175,7 +190,14 @@ impl TyphooNApp {
                     self.news_articles
                         .iter()
                         .map(|(headline, source, dt)| {
-                            (headline.clone(), source.clone(), dt.clone(), String::new())
+                            (
+                                None,
+                                headline.clone(),
+                                source.clone(),
+                                dt.clone(),
+                                String::new(),
+                                1,
+                            )
                         })
                         .collect()
                 };
@@ -207,8 +229,10 @@ impl TyphooNApp {
                         .show(ui, |ui| {
                             let have_full = !self.news_full_articles.is_empty();
                             let mut open_idx: Option<usize> = None;
-                            for (i, (headline, source, dt, tickers)) in
-                                right_news_rows.iter().enumerate()
+                            for (
+                                row_index,
+                                (article_index, headline, source, dt, tickers, source_count),
+                            ) in right_news_rows.iter().enumerate()
                             {
                                 let hl = headline.to_lowercase();
                                 let bullish = [
@@ -285,6 +309,16 @@ impl TyphooNApp {
                                             ))
                                             .small(),
                                     );
+                                    if *source_count > 1 {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "+{} sources",
+                                                source_count - 1
+                                            ))
+                                            .color(egui::Color32::from_rgb(200, 160, 100))
+                                            .small(),
+                                        );
+                                    }
                                     if !tickers.is_empty() {
                                         ui.label(
                                             egui::RichText::new(tickers)
@@ -296,7 +330,7 @@ impl TyphooNApp {
                                     }
                                 });
                                 if resp.clicked() {
-                                    open_idx = Some(i);
+                                    open_idx = article_index.or(Some(row_index));
                                 }
                                 ui.add_space(2.0);
                             }

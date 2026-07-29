@@ -538,11 +538,25 @@ pub fn normalize_headline_for_dedup(headline: &str) -> String {
 /// `Vec<(primary_index, alternate_indices)>` so the caller can index
 /// back into the original slice without cloning the articles.
 pub fn group_articles_by_headline(articles: &[NewsArticle]) -> Vec<(usize, Vec<usize>)> {
+    group_article_indices_by_headline(articles, 0..articles.len())
+}
+
+/// Group a selected subset of `articles` without cloning it. Returned indices
+/// always refer to the original slice. This is used by filtered UI surfaces so
+/// they cannot accidentally restore/open a filtered-list offset as though it
+/// were an article index.
+pub fn group_article_indices_by_headline(
+    articles: &[NewsArticle],
+    indices: impl IntoIterator<Item = usize>,
+) -> Vec<(usize, Vec<usize>)> {
     use std::collections::HashMap;
     // Map normalized headline → indices in input order.
     let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
-    for (i, a) in articles.iter().enumerate() {
+    for i in indices {
+        let Some(a) = articles.get(i) else {
+            continue;
+        };
         let key = normalize_headline_for_dedup(&a.headline);
         if !buckets.contains_key(&key) {
             order.push(key.clone());

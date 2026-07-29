@@ -583,6 +583,24 @@ fn group_articles_collapses_same_story_across_sources() {
 }
 
 #[test]
+fn group_selected_article_indices_preserves_original_indices() {
+    let mk = |headline: &str, ts: i64| NewsArticle {
+        headline: headline.into(),
+        published_at: ts,
+        ..Default::default()
+    };
+    let articles = vec![
+        mk("Excluded story", 500),
+        mk("Syndicated chip story", 100),
+        mk("Another excluded story", 400),
+        mk("Syndicated chip story | Local Radio", 200),
+    ];
+
+    let groups = group_article_indices_by_headline(&articles, [1, 3, usize::MAX]);
+    assert_eq!(groups, vec![(3, vec![1])]);
+}
+
+#[test]
 fn count_all_articles_returns_total() {
     let conn = mem_conn();
     assert_eq!(count_all_articles(&conn).unwrap(), 0);
