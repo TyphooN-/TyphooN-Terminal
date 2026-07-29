@@ -51,6 +51,70 @@ fn bar_sync_stats_refresh_interval_for_broad_symbol_count(
     }
 }
 
+fn sync_row_unsynced(row: &SyncStatsRow) -> u64 {
+    row.stale
+        .saturating_add(row.empty)
+        .saturating_sub(row.unreachable)
+}
+
+/// Display order for the Sync Status table. Sorting indices keeps the immutable
+/// worker snapshot shared and avoids cloning row strings on every frame.
+fn sorted_sync_row_indices(rows: &[SyncStatsRow], state: &SortState) -> Vec<usize> {
+    let mut indices = (0..rows.len()).collect::<Vec<_>>();
+    indices.sort_by(|&left_index, &right_index| {
+        let left = &rows[left_index];
+        let right = &rows[right_index];
+        let order = match state.column {
+            0 => left.broker.cmp(&right.broker),
+            1 => sync_timeframe_sort_key(&left.tf).cmp(&sync_timeframe_sort_key(&right.tf)),
+            2 => left.total.cmp(&right.total),
+            3 => left.healthy.cmp(&right.healthy),
+            4 => sync_row_unsynced(left).cmp(&sync_row_unsynced(right)),
+            5 => left.unreachable.cmp(&right.unreachable),
+            6 => left.pct_healthy.total_cmp(&right.pct_healthy),
+            _ => std::cmp::Ordering::Equal,
+        };
+        let order = if state.ascending {
+            order
+        } else {
+            order.reverse()
+        };
+        order
+            .then_with(|| left.broker.cmp(&right.broker))
+            .then_with(|| {
+                sync_timeframe_sort_key(&left.tf).cmp(&sync_timeframe_sort_key(&right.tf))
+            })
+            .then_with(|| left_index.cmp(&right_index))
+    });
+    indices
+}
+
+fn sync_sort_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    column: usize,
+    state: &SortState,
+) -> egui::Response {
+    let arrow = if state.column == column {
+        if state.ascending { " ▲" } else { " ▼" }
+    } else {
+        ""
+    };
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!("{label}{arrow}"))
+                .color(if state.column == column {
+                    egui::Color32::WHITE
+                } else {
+                    AXIS_TEXT
+                })
+                .small()
+                .strong(),
+        )
+        .sense(egui::Sense::click()),
+    )
+}
+
 impl TyphooNApp {
     pub(super) fn tick_bar_sync_status_refresh(&mut self) {
         // Refresh the cached Sync Status coverage % so auto-full-tilt sees
@@ -341,17 +405,31 @@ impl TyphooNApp {
                         return;
                     }
                     egui::Grid::new("sync_grid").striped(true).num_columns(7).min_col_width(56.0).show(ui, |ui| {
-                        ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("TF").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Healthy").color(AXIS_TEXT).small().strong());
-                        ui.label(egui::RichText::new("Unsynced").color(AXIS_TEXT).small().strong())
-                            .on_hover_text("Reachable but not synced yet: some enabled lane can still fill these. This is the actionable backlog — 0 means the row has every bar any lane can give.");
-                        ui.label(egui::RichText::new("No-data").color(AXIS_TEXT).small().strong())
-                            .on_hover_text("Provider-no-data: no enabled lane serves these (symbol/timeframe), so they can never sync. Excluded from the Available % — they are why the raw % Synced stays below 100%.");
-                        ui.label(egui::RichText::new("% Synced").color(AXIS_TEXT).small().strong());
+                        for (column, label) in [
+                            "Broker", "TF", "Symbols", "Healthy", "Unsynced", "No-data", "% Synced",
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            let response = sync_sort_header(ui, label, column, &self.sync_sort);
+                            if response.clicked() {
+                                self.sync_sort.toggle(column);
+                            }
+                            match column {
+                                4 => {
+                                    response.on_hover_text("Reachable but not synced yet: some enabled lane can still fill these. This is the actionable backlog — 0 means the row has every bar any lane can give. Click to sort.");
+                                }
+                                5 => {
+                                    response.on_hover_text("Provider-no-data: no enabled lane serves these (symbol/timeframe), so they can never sync. Excluded from the Available % — they are why the raw % Synced stays below 100%. Click to sort.");
+                                }
+                                _ => {
+                                    response.on_hover_text("Click to sort; click again to reverse.");
+                                }
+                            }
+                        }
                         ui.end_row();
-                        for row in rows.iter() {
+                        for row_index in sorted_sync_row_indices(&rows, &self.sync_sort) {
+                            let row = &rows[row_index];
                             let broker_color = match row.broker.as_str() {
                                 "Alpaca"        => egui::Color32::from_rgb(52, 152, 219),
                                 "Kraken Spot" | "Kraken Equities" | "Kraken Equities (Tradable)" | "Kraken Futures" => egui::Color32::from_rgb(255, 130, 60),
@@ -575,18 +653,22 @@ impl<'a> PreparedFetchSymbols<'a> {
 struct PreparedBarSyncEquitySymbols<'a> {
     catalog_source: &'a [String],
     demand_source: &'a [String],
+    ws_sweep_source: &'a [String],
     catalog: std::sync::OnceLock<Vec<String>>,
     demand: std::sync::OnceLock<Vec<String>>,
+    ws_sweep: std::sync::OnceLock<Vec<String>>,
     catalog_available: bool,
 }
 
 impl<'a> PreparedBarSyncEquitySymbols<'a> {
-    fn new(catalog: &'a [String], demand: &'a [String]) -> Self {
+    fn new(catalog: &'a [String], demand: &'a [String], ws_sweep: &'a [String]) -> Self {
         Self {
             catalog_source: catalog,
             demand_source: demand,
+            ws_sweep_source: ws_sweep,
             catalog: std::sync::OnceLock::new(),
             demand: std::sync::OnceLock::new(),
+            ws_sweep: std::sync::OnceLock::new(),
             catalog_available: !catalog.is_empty(),
         }
     }
@@ -599,6 +681,23 @@ impl<'a> PreparedBarSyncEquitySymbols<'a> {
     fn demand(&self) -> &[String] {
         self.demand
             .get_or_init(|| normalize_kraken_equity_symbol_list(self.demand_source.iter()))
+    }
+
+    fn ws_sweep(&self) -> &[String] {
+        self.ws_sweep
+            .get_or_init(|| normalize_kraken_equity_symbol_list(self.ws_sweep_source.iter()))
+    }
+
+    fn native_reachable(&self, symbol: &str, timeframe: &str) -> bool {
+        kraken_equity_full_universe_timeframe(timeframe)
+            && (self
+                .demand()
+                .binary_search_by(|candidate| candidate.as_str().cmp(symbol))
+                .is_ok()
+                || self
+                    .ws_sweep()
+                    .binary_search_by(|candidate| candidate.as_str().cmp(symbol))
+                    .is_ok())
     }
 
     fn native(&self, timeframe: &str) -> &[String] {
@@ -626,8 +725,11 @@ impl BarSyncInputs {
     /// app state, no I/O — so it is safe to call from a blocking worker thread.
     pub(super) fn compute(self) -> BarSyncResult {
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let prepared_equity_symbols =
-            PreparedBarSyncEquitySymbols::new(&self.catalog_symbols, &self.demand_symbols);
+        let prepared_equity_symbols = PreparedBarSyncEquitySymbols::new(
+            &self.catalog_symbols,
+            &self.demand_symbols,
+            &self.ws_sweep_symbols,
+        );
         let prepared_spot_fetch_symbols = PreparedFetchSymbols::new(&self.spot_symbols);
         let prepared_futures_fetch_symbols = PreparedFetchSymbols::new(&self.futures_symbols);
         let alpaca_backfill_parts = fetch_key_parts(&self.alpaca_backfill_keys);
@@ -725,7 +827,6 @@ impl BarSyncInputs {
             &checked_or_complete_parts,
             &no_data_contains,
         );
-        relabel_kraken_equity_intraday_rows(&mut rows);
         // Disabled Sync TFs (e.g. M1/M5 unchecked) are skipped by automated
         // sync, so their cached-leftover rows must neither render in the
         // window nor drag down the broker/overall %s (which would otherwise
@@ -752,7 +853,10 @@ impl BarSyncInputs {
             .iter()
             .filter(|row| row.broker != "Merged" && !sync_stats_row_is_informational(row))
             .fold((0u64, 0u64), |(t, h), row| {
-                (t + row.total.saturating_sub(row.unreachable), h + row.healthy)
+                (
+                    t + row.total.saturating_sub(row.unreachable),
+                    h + row.healthy,
+                )
             });
         let overall_pct = if total == 0 {
             100.0
@@ -839,6 +943,7 @@ impl BarSyncInputs {
                 let status = self.kraken_equities_merged_symbol_status(
                     symbol,
                     tf,
+                    prepared_equity_symbols.native_reachable(symbol, tf),
                     now_ms,
                     detailed,
                     checked_or_complete_parts,
@@ -912,6 +1017,7 @@ impl BarSyncInputs {
         &self,
         symbol: &str,
         tf: &str,
+        native_kraken_reachable: bool,
         now_ms: i64,
         detailed: &DetailedSyncRows<'_>,
         checked_or_complete_parts: &dyn Fn(&str, &str, &str, &str) -> bool,
@@ -943,7 +1049,7 @@ impl BarSyncInputs {
         let mut supported_sources = 0u32;
         let mut tombstoned_sources = 0u32;
         for source in ["kraken-equities", "alpaca", "yahoo-chart"] {
-            if source == "kraken-equities" && !kraken_equity_full_universe_timeframe(tf) {
+            if source == "kraken-equities" && !native_kraken_reachable {
                 continue;
             }
             if source == "alpaca"
@@ -958,21 +1064,9 @@ impl BarSyncInputs {
             {
                 continue;
             }
-            // Reachability accounting: only count a source toward the
-            // supported/tombstoned ratio when it can actually serve (symbol, tf).
-            // Kraken WS v2 delivers no equity OHLC at 15Min–4Hour (see
-            // kraken_equity_ws_intraday_unservable_timeframe), so crediting
-            // kraken-equities there would keep an Alpaca-no-data intraday cell
-            // "reachable" forever and make the Merged reachable % dishonest. The
-            // Healthy check below still runs for every applicable source, so a
-            // rare WS-fresh intraday bar is never mis-reported as unreachable.
-            let counts_for_reachability = !(source == "kraken-equities"
-                && kraken_equity_ws_intraday_unservable_timeframe(tf));
-            if counts_for_reachability {
-                supported_sources += 1;
-                if no_data_contains(source, symbol, tf) {
-                    tombstoned_sources += 1;
-                }
+            supported_sources += 1;
+            if no_data_contains(source, symbol, tf) {
+                tombstoned_sources += 1;
             }
 
             let Some(row) = detailed.get(&(source, symbol, tf)).copied() else {
@@ -1165,87 +1259,59 @@ fn kraken_equities_merged_timeframe_supported(tf: &str) -> bool {
     kraken_equity_full_universe_timeframe(tf) || kraken_equity_broad_fallback_timeframe(tf)
 }
 
-/// Kraken's WS v2 serves xStock OHLC only at D1/W1 (settled) and M1/M5 (live);
-/// 15Min–4Hour repeatedly return no bars for these illiquid tokens, so a native
-/// "Kraken Equities" intraday row can never become fresh and would show a
-/// misleading 0%. It is not a native lane — intraday breadth is the
-/// Alpaca/Yahoo + Merged lanes' job. Relabel it "WS M1/M5 only" (like the
-/// "no native monthly" Kraken Spot row) and zero the counts so it neither reads
-/// unhealthy nor drags the broker/overall health %.
-fn relabel_kraken_equity_intraday_rows(rows: &mut [SyncStatsRow]) {
-    for row in rows.iter_mut() {
-        if row.broker == "Kraken Equities"
-            && kraken_equity_ws_intraday_unservable_timeframe(row.tf.as_str())
-        {
-            row.total = 0;
-            row.healthy = 0;
-            row.stale = 0;
-            row.empty = 0;
-            row.settled = 0;
-            row.unreachable = 0;
-            row.pct_healthy = 0.0;
-            row.note = Some("WS M1/M5 only".to_string());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn row(broker: &str, tf: &str, healthy: u64, stale: u64) -> SyncStatsRow {
-        SyncStatsRow {
-            broker: broker.to_string(),
-            tf: tf.to_string(),
-            total: healthy + stale,
-            healthy,
-            stale,
-            empty: 0,
-            settled: 0,
-            unreachable: 0,
-            note: None,
-            pct_healthy: if healthy + stale == 0 {
-                0.0
-            } else {
-                healthy as f32 / (healthy + stale) as f32 * 100.0
-            },
-        }
-    }
-
     #[test]
-    fn kraken_equity_intraday_rows_relabelled_and_dropped_from_health() {
-        let mut rows = vec![
-            row("Kraken Equities", "15Min", 0, 142), // WS can't serve -> relabel
-            row("Kraken Equities", "4Hour", 0, 142), // WS can't serve -> relabel
-            row("Kraken Equities", "1Day", 146, 0),  // native lane -> untouched
-            row("Kraken Equities", "1Week", 147, 0), // native lane -> untouched
-            row("Kraken Spot", "15Min", 755, 104),   // different broker -> untouched
+    fn kraken_equity_ws_mid_timeframes_remain_native_health_rows() {
+        let now_s = chrono::Utc::now().timestamp();
+        let detailed_stats = vec![
+            ("kraken-equities:AAPL:15Min".to_string(), 42, now_s),
+            ("kraken-equities:AAPL:4Hour".to_string(), 7, now_s),
         ];
-        relabel_kraken_equity_intraday_rows(&mut rows);
-
-        for r in rows
-            .iter()
-            .filter(|r| r.broker == "Kraken Equities" && matches!(r.tf.as_str(), "15Min" | "4Hour"))
-        {
-            assert_eq!(r.total, 0, "{r:?}");
-            assert_eq!(r.note.as_deref(), Some("WS M1/M5 only"), "{r:?}");
+        let bar_ts_cache = std::collections::HashMap::from([
+            (
+                "kraken-equities:AAPL:15Min".to_string(),
+                (0, now_s * 1000, 0),
+            ),
+            (
+                "kraken-equities:AAPL:4Hour".to_string(),
+                (0, now_s * 1000, 0),
+            ),
+        ]);
+        let result = BarSyncInputs {
+            detailed_stats,
+            bar_ts_cache,
+            cache_stats_present: true,
+            catalog_symbol_count: 1,
+            catalog_symbols: vec!["AAPL".to_string()],
+            demand_symbols: vec!["AAPL".to_string()],
+            ws_sweep_symbols: vec!["AAPL".to_string()],
+            spot_symbols: Vec::new(),
+            futures_symbols: Vec::new(),
+            timeframes: vec!["15Min".to_string(), "4Hour".to_string()],
+            backfill_alpaca_kraken_equities_enabled: false,
+            backfill_yahoo_chart_enabled: false,
+            kraken_ws_fresh_until: std::collections::HashMap::new(),
+            alpaca_backfill_keys: std::collections::HashSet::new(),
+            kraken_backfill_keys: std::collections::HashSet::new(),
+            kraken_futures_backfill_keys: std::collections::HashSet::new(),
+            yahoo_chart_backfill_keys: std::collections::HashSet::new(),
+            no_data_keys_by_source: std::collections::HashMap::new(),
         }
-        // D1/W1 native rows and Kraken Spot are untouched.
-        let d1 = rows
-            .iter()
-            .find(|r| r.broker == "Kraken Equities" && r.tf == "1Day")
-            .unwrap();
-        assert_eq!(d1.total, 146);
-        assert!(d1.note.is_none());
-        let spot = rows.iter().find(|r| r.broker == "Kraken Spot").unwrap();
-        assert_eq!(spot.total, 859);
+        .compute();
 
-        // Health totals now exclude the un-serveable intraday rows (0 total).
-        let (total, healthy): (u64, u64) = rows
-            .iter()
-            .fold((0, 0), |(t, h), r| (t + r.total, h + r.healthy));
-        assert_eq!(total, 146 + 147 + 859);
-        assert_eq!(healthy, 146 + 147 + 755);
+        for timeframe in ["15Min", "4Hour"] {
+            let row = result
+                .rows
+                .iter()
+                .find(|row| row.broker == "Kraken Equities" && row.tf == timeframe)
+                .expect("enabled Kraken Equities row");
+            assert_eq!(row.total, 1, "{row:?}");
+            assert_eq!(row.healthy, 1, "{row:?}");
+            assert!(row.note.is_none(), "{row:?}");
+        }
     }
 
     #[test]
@@ -1369,13 +1435,12 @@ mod tests {
     }
 
     #[test]
-    fn merged_intraday_excludes_kraken_equities_but_daily_keeps_it() {
-        // Kraken WS v2 serves no equity OHLC at 15m–4h (only D1/W1 settled + M1/M5
-        // live), so an Alpaca-no-data intraday cell with no other intraday source
-        // must read Unreachable — not falsely reachable via a kraken-equities
-        // source that can never fill it. At D1 kraken-equities is a real source
-        // and still counts, so the same no-data mark leaves the cell reachable.
-        let build = |tf: &str| -> BarSyncInputs {
+    fn merged_rows_credit_kraken_only_for_demand_or_ws_symbols() {
+        // Native Kraken is reachable for the demand set and WS-tokenized sweep
+        // set at every enabled interval through W1. A catalog-only symbol is not
+        // automatically iapi-swept, so it must not mask an assist-provider
+        // no-data result as reachable.
+        let build = |tf: &str, native: bool| -> BarSyncInputs {
             let mut alpaca_no_data = std::collections::HashSet::new();
             alpaca_no_data.insert(alpaca_fetch_key("WOK", tf));
             let mut no_data_keys_by_source = std::collections::HashMap::new();
@@ -1387,7 +1452,11 @@ mod tests {
                 catalog_symbol_count: 1,
                 catalog_symbols: vec!["WOK.EQ".to_string()],
                 demand_symbols: Vec::new(),
-                ws_sweep_symbols: Vec::new(),
+                ws_sweep_symbols: if native {
+                    vec!["WOK.EQ".to_string()]
+                } else {
+                    Vec::new()
+                },
                 spot_symbols: Vec::new(),
                 futures_symbols: Vec::new(),
                 timeframes: vec![tf.to_string()],
@@ -1411,21 +1480,23 @@ mod tests {
                 .clone()
         };
 
-        let intraday = build("15Min").compute();
-        let merged_15m = merged(&intraday, "15Min");
+        let catalog_only = build("15Min", false).compute();
+        let merged_15m = merged(&catalog_only, "15Min");
         assert_eq!(merged_15m.total, 1);
         assert_eq!(
             merged_15m.unreachable, 1,
-            "Alpaca-no-data 15Min xStock has no intraday source → Unreachable: {merged_15m:?}"
+            "catalog-only symbol has no scheduled native or assist source: {merged_15m:?}"
         );
 
-        let daily = build("1Day").compute();
-        let merged_1d = merged(&daily, "1Day");
-        assert_eq!(merged_1d.total, 1);
+        let ws_native = build("15Min", true).compute();
+        let merged_ws_15m = merged(&ws_native, "15Min");
         assert_eq!(
-            merged_1d.unreachable, 0,
-            "kraken-equities remains a valid D1 source → cell stays reachable: {merged_1d:?}"
+            merged_ws_15m.unreachable, 0,
+            "WS-tokenized xStock remains reachable at 15Min: {merged_ws_15m:?}"
         );
+
+        let daily_catalog_only = build("1Day", false).compute();
+        assert_eq!(merged(&daily_catalog_only, "1Day").unreachable, 1);
     }
 
     #[test]
@@ -1447,10 +1518,7 @@ mod tests {
 
         let inputs = BarSyncInputs {
             detailed_stats: vec![(aapl_key.clone(), 500, now_s)],
-            bar_ts_cache: std::collections::HashMap::from([(
-                aapl_key,
-                (0, now_s * 1000, 0),
-            )]),
+            bar_ts_cache: std::collections::HashMap::from([(aapl_key, (0, now_s * 1000, 0))]),
             cache_stats_present: true,
             catalog_symbol_count: 0,
             catalog_symbols: Vec::new(),
@@ -1536,6 +1604,91 @@ mod tests {
 
         assert_eq!(rows[0].broker, "Kraken Spot");
         assert!(std::sync::Arc::ptr_eq(&rows, &shared));
+    }
+
+    #[test]
+    fn sync_status_columns_sort_rows_and_reverse_on_the_second_click() {
+        let rows = vec![
+            SyncStatsRow {
+                broker: "Yahoo".into(),
+                tf: "1Day".into(),
+                total: 8,
+                healthy: 3,
+                stale: 3,
+                empty: 2,
+                unreachable: 1,
+                pct_healthy: 37.5,
+                ..Default::default()
+            },
+            SyncStatsRow {
+                broker: "Alpaca".into(),
+                tf: "1Hour".into(),
+                total: 5,
+                healthy: 4,
+                stale: 1,
+                pct_healthy: 80.0,
+                ..Default::default()
+            },
+            SyncStatsRow {
+                broker: "Merged".into(),
+                tf: "5Min".into(),
+                total: 12,
+                healthy: 10,
+                empty: 2,
+                unreachable: 2,
+                pct_healthy: 83.3,
+                ..Default::default()
+            },
+        ];
+
+        let labels = |indices: Vec<usize>| {
+            indices
+                .into_iter()
+                .map(|index| rows[index].broker.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(sorted_sync_row_indices(
+                &rows,
+                &SortState {
+                    column: 0,
+                    ascending: true
+                }
+            )),
+            vec!["Alpaca", "Merged", "Yahoo"]
+        );
+        assert_eq!(
+            labels(sorted_sync_row_indices(
+                &rows,
+                &SortState {
+                    column: 1,
+                    ascending: true
+                }
+            )),
+            vec!["Merged", "Alpaca", "Yahoo"],
+            "timeframes sort chronologically, not lexicographically"
+        );
+        assert_eq!(
+            labels(sorted_sync_row_indices(
+                &rows,
+                &SortState {
+                    column: 4,
+                    ascending: true
+                }
+            )),
+            vec!["Merged", "Alpaca", "Yahoo"],
+            "unsynced excludes provider-no-data cells"
+        );
+        assert_eq!(
+            labels(sorted_sync_row_indices(
+                &rows,
+                &SortState {
+                    column: 6,
+                    ascending: false
+                }
+            )),
+            vec!["Merged", "Alpaca", "Yahoo"]
+        );
     }
 
     #[test]
@@ -1644,7 +1797,7 @@ mod tests {
     fn prepared_equity_symbols_reuse_normalized_scopes_without_broad_fallback_drift() {
         let catalog = vec!["WOK.EQ".to_string(), "WOK".to_string()];
         let demand = vec!["ARRAY.EQ".to_string(), "ARRAY".to_string()];
-        let prepared = PreparedBarSyncEquitySymbols::new(&catalog, &demand);
+        let prepared = PreparedBarSyncEquitySymbols::new(&catalog, &demand, &[]);
 
         assert!(prepared.catalog.get().is_none());
         assert!(prepared.demand.get().is_none());
@@ -1674,7 +1827,7 @@ mod tests {
         ));
 
         let invalid_catalog = vec![String::new()];
-        let prepared = PreparedBarSyncEquitySymbols::new(&invalid_catalog, &demand);
+        let prepared = PreparedBarSyncEquitySymbols::new(&invalid_catalog, &demand, &[]);
         assert_eq!(
             prepared.broad("1Day"),
             super::super::market_data_sync::kraken_equity_symbols_for_timeframe(

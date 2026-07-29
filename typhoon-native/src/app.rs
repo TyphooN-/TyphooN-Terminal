@@ -872,6 +872,7 @@ impl TyphooNApp {
                 ascending: false,
             },
             watchlist_sort: SortState::default(),
+            sync_sort: SortState::default(),
             watchlist_sorted_indices: Vec::new(),
             watchlist_last_sorted_column: 0,
             watchlist_last_sorted_ascending: true,

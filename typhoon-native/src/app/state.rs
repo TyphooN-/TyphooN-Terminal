@@ -1464,6 +1464,7 @@ pub struct TyphooNApp {
     /// Sort state for the single-metric outlier table (VAROUTLIER/EVOUTLIER/ATROUTLIER).
     pub(crate) outlier_single_sort: SortState,
     pub(crate) watchlist_sort: SortState,
+    pub(crate) sync_sort: SortState,
     /// Cached sorted display order for the watchlist table (indices into watchlist_rows).
     /// Rebuilt only when rows len changes or sort params change. Avoids collect+sort
     /// every render frame when the section is open.
