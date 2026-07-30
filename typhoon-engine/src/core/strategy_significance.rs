@@ -104,6 +104,14 @@ impl SignificanceStudyArtifact {
     pub fn candidates(&self) -> &[CandidateSignificance] {
         &self.candidates
     }
+    /// The exact sealed parameter-field studies this verdict judged, in candidate order. Each study
+    /// verifies itself as it decodes; the binding between them and this artifact is what `verify`
+    /// re-derives. Consumers that need the immutable field evidence behind a candidate — the §7.6
+    /// ±1-parameter-step gate, for one — read it here instead of accepting a second copy from a
+    /// caller that could hand over a different field.
+    pub fn source_fields(&self) -> Result<Vec<ParameterFieldStudyArtifact>, RetestError> {
+        decode_fields(&self.source_field_zstd)
+    }
     pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
         self.verify()?;
         let bytes = serde_json::to_vec(self).map_err(invalid)?;

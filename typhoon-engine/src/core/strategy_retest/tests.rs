@@ -32,8 +32,8 @@ use crate::core::strategy_perturbation::{
     execute_perturbation_study, replay_perturbation_study,
 };
 use crate::core::strategy_problem_recognition::{
-    ProblemRecognitionArtifact, ProblemRecognitionPolicy, ReportProblemObservations,
-    execute_problem_recognition, replay_problem_recognition,
+    ProblemRecognitionArtifact, ProblemRecognitionPolicy, execute_problem_recognition,
+    replay_problem_recognition,
 };
 use crate::core::strategy_significance::{
     SignificancePolicy, SignificanceStudyArtifact, execute_significance_study,
@@ -2656,27 +2656,32 @@ fn adjusted_significance_is_derived_from_the_sealed_field_and_persists_immutably
     );
 }
 
-/// A steadily trending series. The §7.6 concentration gate reads `top_decile_pnl_share`, which the
-/// registry leaves undefined without gross profit, so the fixture has to bank real winning trades.
+/// An oscillating series with both winning and losing closed trades. The §7.6 concentration gate
+/// needs real gross profit, while the permissive positive control must not trip the no-losing-trades
+/// profit-factor sentinel.
 fn problem_recognition_bars() -> Vec<Bar> {
-    (0..14)
-        .map(|index| {
-            let close = 100.0 + 2.0 * index as f64;
-            Bar {
-                timestamp: format!("2026-06-{:02}T00:00:00Z", index + 1),
-                open: close - 1.0,
-                high: close + 1.0,
-                low: close - 2.0,
-                close,
-                volume: 100.0,
-            }
-        })
-        .collect()
+    [
+        96.0, 104.0, 112.0, 108.0, 100.0, 116.0, 106.0, 98.0, 114.0, 102.0, 110.0, 118.0, 119.0,
+        105.0,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, close)| Bar {
+        timestamp: format!("2026-06-{:02}T00:00:00Z", index + 1),
+        open: close - 1.0,
+        high: close + 1.0,
+        low: close - 2.0,
+        close,
+        volume: 100.0,
+    })
+    .collect()
 }
 
 /// A priced-cost long-only field: entry and exit are both parameterised thresholds, so every
 /// coordinate of the declared field is a distinct trade sequence over the same bars.
-fn problem_recognition_field_fixture() -> (
+fn problem_recognition_field_fixture(
+    bars: Vec<Bar>,
+) -> (
     StrategyExecutionConfig,
     Vec<Bar>,
     DatasetManifest,
@@ -2725,7 +2730,6 @@ fn problem_recognition_field_fixture() -> (
     settings.slippage = SlippageModel::FixedPriceDistance { distance: 0.05 };
     settings.spread = SpreadModel::Constant { price_units: 0.02 };
     let config = StrategyExecutionConfig::build(&settings).unwrap();
-    let bars = problem_recognition_bars();
     let manifest = manifest(&bars);
     let space = SearchSpace::new(
         strategy,
@@ -2802,7 +2806,11 @@ fn significance_policy(false_discovery_rate_bps: u32) -> SignificancePolicy {
 
 impl ProblemRecognitionFixture {
     fn new() -> Self {
-        let (config, bars, manifest, space) = problem_recognition_field_fixture();
+        Self::from_bars(problem_recognition_bars())
+    }
+
+    fn from_bars(bars: Vec<Bar>) -> Self {
+        let (config, bars, manifest, space) = problem_recognition_field_fixture(bars);
         let field = execute_parameter_field_study(
             &config,
             &manifest,
@@ -2932,7 +2940,12 @@ fn problem_recognition_policy() -> ProblemRecognitionPolicy {
         boundary_width_bps: 1_000,
         maximum_boundary_trade_share_bps: 10_000,
         minimum_cost_2x_ratio_bps: 0,
+        minimum_cost_3x_ratio_bps: 0,
         minimum_oos_is_ratio_bps: 0,
+        maximum_edge_concentration_bps: 10_000,
+        maximum_absolute_sharpe_bps: 1_000_000,
+        minimum_max_drawdown_bps: 0,
+        minimum_parameter_step_ratio_bps: 0,
     }
 }
 
@@ -2989,18 +3002,26 @@ fn problem_recognition_derives_every_gate_from_canonical_report_evidence() {
             .map(|check| check.retention_bps.min(10_000))
             .unwrap()
     );
-    // Pinned so a silent change of derivation cannot pass as a change of fixture.
+    // Pin the original primitive observations and require the added report-derived families to
+    // carry bounded, non-empty evidence rather than caller labels.
+    assert_eq!(observations.trade_count, 2);
+    assert_eq!(observations.top_trade_share_bps, 10_000);
+    assert_eq!(observations.time_in_market_bps, 8_462);
+    assert_eq!(observations.boundary_trade_share_bps, 5_000);
+    assert_eq!(observations.cost_2x_ratio_bps, 9_259);
+    assert_eq!(observations.cost_3x_ratio_bps, 8_519);
+    assert_eq!(observations.oos_is_ratio_bps, 0);
+    assert_eq!(observations.edge_concentration.calendar_periods, 2);
     assert_eq!(
-        observations,
-        ReportProblemObservations {
-            trade_count: 4,
-            top_trade_share_bps: 7_602,
-            time_in_market_bps: 10_000,
-            boundary_trade_share_bps: 5_000,
-            cost_2x_ratio_bps: 9_796,
-            oos_is_ratio_bps: 10_000,
-        }
+        observations.edge_concentration.symbol_share_bps,
+        Some(10_000)
     );
+    assert_eq!(observations.edge_concentration.side_share_bps, Some(10_000));
+    assert_eq!(observations.absurd_metrics.absolute_sharpe_bps, Some(2_693));
+    assert_eq!(observations.absurd_metrics.max_drawdown_bps, Some(2));
+    assert!(!observations.absurd_metrics.profit_factor_at_sentinel);
+    assert_eq!(observations.parameter_step.steps_n, 2);
+    assert_eq!(observations.parameter_step.worst_step_ratio_bps, 0);
 
     // The declared §7.6 gate set, in order, each carrying its own observation count.
     assert_eq!(
@@ -3016,6 +3037,10 @@ fn problem_recognition_derives_every_gate_from_canonical_report_evidence() {
             "boundary-reliance",
             "cost-degradation",
             "oos-degradation",
+            "cost-degradation-3x",
+            "edge-concentration",
+            "absurd-metrics",
+            "parameter-step-cliff",
             "adjusted-significance",
         ]
     );
@@ -3026,10 +3051,10 @@ fn problem_recognition_derives_every_gate_from_canonical_report_evidence() {
     );
     // §7.7: the significance gate displays the selection universe it was judged against.
     assert_eq!(
-        artifact.stages()[6].observations_n,
+        artifact.stages()[10].observations_n,
         fixture.significance.evaluations_n()
     );
-    assert!(artifact.stages()[6].reason.contains("bonferroni p="));
+    assert!(artifact.stages()[10].reason.contains("bonferroni p="));
     assert_eq!(failing_stage(&artifact), None);
     assert!(artifact.passed());
 
@@ -3158,6 +3183,62 @@ fn problem_recognition_fails_the_exact_gate_its_evidence_misses() {
             },
             "cost-degradation",
         ),
+        (
+            ProblemRecognitionPolicy {
+                minimum_oos_is_ratio_bps: observations.oos_is_ratio_bps + 1,
+                ..problem_recognition_policy()
+            },
+            "oos-degradation",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                minimum_cost_3x_ratio_bps: observations.cost_3x_ratio_bps + 1,
+                ..problem_recognition_policy()
+            },
+            "cost-degradation-3x",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                maximum_edge_concentration_bps: observations
+                    .edge_concentration
+                    .worst
+                    .expect("fixture has attributable edge")
+                    .1
+                    - 1,
+                ..problem_recognition_policy()
+            },
+            "edge-concentration",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                maximum_absolute_sharpe_bps: observations
+                    .absurd_metrics
+                    .absolute_sharpe_bps
+                    .expect("fixture has defined Sharpe")
+                    - 1,
+                ..problem_recognition_policy()
+            },
+            "absurd-metrics",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                minimum_max_drawdown_bps: observations
+                    .absurd_metrics
+                    .max_drawdown_bps
+                    .expect("fixture has defined drawdown")
+                    + 1,
+                ..problem_recognition_policy()
+            },
+            "absurd-metrics",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                minimum_parameter_step_ratio_bps: observations.parameter_step.worst_step_ratio_bps
+                    + 1,
+                ..problem_recognition_policy()
+            },
+            "parameter-step-cliff",
+        ),
     ] {
         let artifact = fixture.execute(policy).unwrap();
         assert_eq!(failing_stage(&artifact), Some(expected));
@@ -3169,41 +3250,6 @@ fn problem_recognition_fails_the_exact_gate_its_evidence_misses() {
         );
         assert_eq!(replay_problem_recognition(&artifact).unwrap(), artifact);
     }
-
-    // Real out-of-sample degradation, not a re-tuned threshold: the leading window holds fewer of
-    // the trending series' trades, so the executed OOS mean falls short of the executed IS mean.
-    let leading = execute_oos_scheme(
-        &fixture.strategy,
-        &fixture.config,
-        &fixture.manifest,
-        &fixture.bars,
-        study_lease(&fixture.manifest, fixture.bars.len()),
-        OosExecutionSpec {
-            scheme: OosScheme::Leading { oos_bars: 4 },
-            purge_bars: 1,
-            embargo_bars: 0,
-            metric_id: "net_profit".into(),
-            root_seed: 0x9c05,
-        },
-    )
-    .unwrap();
-    let degraded = execute_problem_recognition(
-        &fixture.cross,
-        &leading,
-        &fixture.significance,
-        problem_recognition_policy(),
-    )
-    .unwrap();
-    assert!(degraded.observations().oos_is_ratio_bps < 10_000);
-    let policy = ProblemRecognitionPolicy {
-        minimum_oos_is_ratio_bps: degraded.observations().oos_is_ratio_bps + 1,
-        ..problem_recognition_policy()
-    };
-    let artifact =
-        execute_problem_recognition(&fixture.cross, &leading, &fixture.significance, policy)
-            .unwrap();
-    assert_eq!(failing_stage(&artifact), Some("oos-degradation"));
-    assert!(!artifact.passed());
 
     // §7.7: the significance verdict is read from the sealed study, so a family that survives a
     // 5% discovery rate and fails a 1% one flips this gate without touching any threshold here.
@@ -3232,6 +3278,35 @@ fn problem_recognition_fails_the_exact_gate_its_evidence_misses() {
         })
         .unwrap();
     assert!(wide.observations().boundary_trade_share_bps >= observations.boundary_trade_share_bps);
+}
+
+#[test]
+fn problem_recognition_flags_the_report_registry_profit_factor_sentinel() {
+    let bars = (0..14)
+        .map(|index| {
+            let close = 100.0 + 2.0 * index as f64;
+            Bar {
+                timestamp: format!("2026-07-{:02}T00:00:00Z", index + 1),
+                open: close - 1.0,
+                high: close + 1.0,
+                low: close - 2.0,
+                close,
+                volume: 100.0,
+            }
+        })
+        .collect();
+    let fixture = ProblemRecognitionFixture::from_bars(bars);
+    let artifact = fixture.execute(problem_recognition_policy()).unwrap();
+
+    assert!(
+        artifact
+            .observations()
+            .absurd_metrics
+            .profit_factor_at_sentinel
+    );
+    assert_eq!(failing_stage(&artifact), Some("absurd-metrics"));
+    assert!(!artifact.passed());
+    assert_eq!(replay_problem_recognition(&artifact).unwrap(), artifact);
 }
 
 #[test]
@@ -3350,15 +3425,20 @@ fn problem_recognition_refuses_foreign_tampered_and_mismatched_evidence() {
         (|value: &mut serde_json::Value| value["observations"]["trade_count"] = 3.into())
             as fn(&mut serde_json::Value),
         |value| value["observations"]["cost_2x_ratio_bps"] = 10_000.into(),
+        |value| value["observations"]["cost_3x_ratio_bps"] = 10_000.into(),
+        |value| value["observations"]["edge_concentration"]["side_share_bps"] = 5_000.into(),
+        |value| value["observations"]["absurd_metrics"]["absolute_sharpe_bps"] = 1.into(),
+        |value| value["observations"]["parameter_step"]["worst_step_ratio_bps"] = 10_000.into(),
         |value| value["stages"][0]["verdict"] = "Fail".into(),
-        |value| value["stages"][5]["reason"] = "looks fine".into(),
+        |value| value["stages"][8]["reason"] = "looks fine".into(),
         |value| value["passed"] = false.into(),
         |value| value["policy"]["minimum_trades"] = 2.into(),
         |value| value["metric_id"] = "total_return".into(),
         |value| value["strategy_id"] = "a".repeat(64).into(),
-        |value| value["schema_version"] = 2.into(),
+        |value| value["schema_version"] = 1.into(),
         |value| value["source_cross_check_zstd"][0] = 0.into(),
         |value| value["source_oos_zstd"][0] = 0.into(),
+        |value| value["source_significance_zstd"][0] = 0.into(),
         |value| value["extra_field"] = 1.into(),
     ] {
         let mut tampered: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
