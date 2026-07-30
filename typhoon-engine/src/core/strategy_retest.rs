@@ -24,6 +24,7 @@ use crate::core::strategy_optimization::{
 };
 use crate::core::strategy_parameter_field::ParameterFieldStudyArtifact;
 use crate::core::strategy_perturbation::PerturbationStudyArtifact;
+use crate::core::strategy_problem_recognition::ProblemRecognitionArtifact;
 use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
 use crate::core::strategy_significance::SignificanceStudyArtifact;
@@ -802,6 +803,15 @@ impl ExecutedOosScheme {
     }
     pub fn source_dataset_id(&self) -> &str {
         &self.source_dataset_id
+    }
+    pub fn metric_id(&self) -> &str {
+        &self.metric_id
+    }
+    pub fn config_id(&self) -> &str {
+        &self.config_id
+    }
+    pub fn source_range(&self) -> Range<usize> {
+        self.source_range.clone()
     }
     pub fn membership(&self) -> &[ExactBarMember] {
         &self.membership
@@ -2116,6 +2126,7 @@ pub enum StudyArtifactKind {
     ParameterField,
     CrossCheck,
     Significance,
+    ProblemRecognition,
 }
 impl StudyArtifactKind {
     fn key(self) -> i64 {
@@ -2130,6 +2141,7 @@ impl StudyArtifactKind {
             Self::ParameterField => 7,
             Self::CrossCheck => 8,
             Self::Significance => 9,
+            Self::ProblemRecognition => 10,
         }
     }
     fn decode(value: i64) -> Result<Self, RetestError> {
@@ -2144,6 +2156,7 @@ impl StudyArtifactKind {
             7 => Ok(Self::ParameterField),
             8 => Ok(Self::CrossCheck),
             9 => Ok(Self::Significance),
+            10 => Ok(Self::ProblemRecognition),
             _ => Err(RetestError::Invalid("unknown study artifact kind".into())),
         }
     }
@@ -2161,6 +2174,7 @@ pub enum StudyArtifact {
     ParameterField(ParameterFieldStudyArtifact),
     CrossCheck(CrossCheckStudyArtifact),
     Significance(SignificanceStudyArtifact),
+    ProblemRecognition(ProblemRecognitionArtifact),
 }
 impl StudyArtifact {
     fn decode(kind: StudyArtifactKind, bytes: &[u8]) -> Result<Self, RetestError> {
@@ -2193,6 +2207,9 @@ impl StudyArtifact {
             StudyArtifactKind::Significance => {
                 Self::Significance(SignificanceStudyArtifact::from_json_slice(bytes)?)
             }
+            StudyArtifactKind::ProblemRecognition => {
+                Self::ProblemRecognition(ProblemRecognitionArtifact::from_json_slice(bytes)?)
+            }
         })
     }
     fn artifact_id(&self) -> &str {
@@ -2207,6 +2224,7 @@ impl StudyArtifact {
             Self::ParameterField(value) => value.artifact_id(),
             Self::CrossCheck(value) => value.artifact_id(),
             Self::Significance(value) => value.artifact_id(),
+            Self::ProblemRecognition(value) => value.artifact_id(),
         }
     }
     fn source_dataset_id(&self) -> &str {
@@ -2221,6 +2239,7 @@ impl StudyArtifact {
             Self::ParameterField(value) => value.source_dataset_id(),
             Self::CrossCheck(value) => value.source_dataset_id(),
             Self::Significance(value) => value.source_dataset_id(),
+            Self::ProblemRecognition(value) => value.source_dataset_id(),
         }
     }
 }
@@ -2524,6 +2543,19 @@ impl RetestEvidenceStore {
     ) -> Result<(), RetestError> {
         self.persist_study(
             StudyArtifactKind::Significance,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_problem_recognition(
+        &self,
+        artifact: &ProblemRecognitionArtifact,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::ProblemRecognition,
             artifact.artifact_id(),
             artifact.source_dataset_id(),
             artifact.to_json_vec()?,

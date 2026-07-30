@@ -170,6 +170,9 @@ impl CrossCheckStudyArtifact {
     pub fn metric_id(&self) -> &str {
         &self.spec.metric_id
     }
+    pub fn direction(&self) -> ObjectiveDirection {
+        self.spec.direction
+    }
     pub fn evaluations_n(&self) -> usize {
         self.spec.evaluations_n
     }
@@ -187,6 +190,10 @@ impl CrossCheckStudyArtifact {
     }
     pub fn verdict_reason(&self) -> &str {
         &self.verdict_reason
+    }
+    pub fn baseline_report(&self) -> Result<StrategyReportArtifact, RetestError> {
+        self.verify()?;
+        StrategyReportArtifact::from_json_slice(&self.baseline.report_json).map_err(invalid)
     }
     pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
         self.verify()?;
@@ -736,7 +743,9 @@ fn verify_observation(
     }
 }
 
-fn retention_bps(
+/// Direction-aware performance retained relative to a reference value, in basis points. Shared
+/// with the §7.6 degradation gates so one documented formula covers every retention comparison.
+pub(crate) fn retention_bps(
     baseline: f64,
     value: f64,
     direction: ObjectiveDirection,

@@ -1,6 +1,10 @@
 use super::*;
 use crate::broker::alpaca::Bar;
 use crate::core::strategy_builder::GeneralStrategyBuilder;
+use crate::core::strategy_cross_check::{
+    COST_MULTIPLIER_2X_BPS, CrossCheckDatasetCase, CrossCheckKind, CrossCheckStudyArtifact,
+    CrossCheckStudySpec, execute_cross_check_study,
+};
 use crate::core::strategy_dataset::{
     AdjustmentPolicy, CalendarPolicy, DatasetManifest, DatasetManifestInput, DatasetProvenance,
     DatasetQaPolicy,
@@ -9,7 +13,7 @@ use crate::core::strategy_ir::{
     CompareOp, Condition, ExecutionSettings, Operand, ParamRange, ParamValue, SlippageModel,
     SpreadModel, StrategyExecutionConfig, StrategyParameter,
 };
-use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
+use crate::core::strategy_metrics::{METRICS_SCHEMA_VERSION, MetricValue};
 use crate::core::strategy_optimization::{
     HoldoutQuarantine, MAX_CALENDAR_WINDOW_SECONDS, MAX_MONTE_CARLO_TRIALS, ObjectiveDirection,
     ObservationRole, OosScheme, ParameterDomain, Percentile, RobustnessPipeline,
@@ -26,6 +30,10 @@ use crate::core::strategy_perturbation::{
     MAX_PERTURBATION_START_OFFSET, MAX_PERTURBATION_TRIALS_PER_FAMILY, PerturbationDetail,
     PerturbationFamily, PerturbationStudyArtifact, PerturbationStudySpec,
     execute_perturbation_study, replay_perturbation_study,
+};
+use crate::core::strategy_problem_recognition::{
+    ProblemRecognitionArtifact, ProblemRecognitionPolicy, ReportProblemObservations,
+    execute_problem_recognition, replay_problem_recognition,
 };
 use crate::core::strategy_significance::{
     SignificancePolicy, SignificanceStudyArtifact, execute_significance_study,
@@ -2582,7 +2590,10 @@ fn adjusted_significance_is_derived_from_the_sealed_field_and_persists_immutably
     assert_eq!(significance.evaluations_n(), 9);
     assert_eq!(significance.candidates().len(), 1);
     let candidate = &significance.candidates()[0];
-    assert_eq!(candidate.candidate_id(), field.profile().selected_candidate_id());
+    assert_eq!(
+        candidate.candidate_id(),
+        field.profile().selected_candidate_id()
+    );
     assert_eq!(candidate.field_artifact_id(), field.artifact_id());
     assert_eq!(candidate.observations_n(), 9);
     assert_eq!(candidate.favourable_observations(), 9);
@@ -2592,8 +2603,14 @@ fn adjusted_significance_is_derived_from_the_sealed_field_and_persists_immutably
     assert_eq!(candidate.false_discovery_rate_q(), candidate.raw_p());
     assert!(candidate.significant());
     let bytes = significance.to_json_vec().unwrap();
-    assert_eq!(significance, SignificanceStudyArtifact::from_json_slice(&bytes).unwrap());
-    assert_eq!(significance, SignificanceStudyArtifact::resealed_from_json(&bytes).unwrap());
+    assert_eq!(
+        significance,
+        SignificanceStudyArtifact::from_json_slice(&bytes).unwrap()
+    );
+    assert_eq!(
+        significance,
+        SignificanceStudyArtifact::resealed_from_json(&bytes).unwrap()
+    );
 
     let store = RetestEvidenceStore::open_in_memory().unwrap();
     store.persist_significance_study(&significance, 8).unwrap();
@@ -2627,12 +2644,739 @@ fn adjusted_significance_is_derived_from_the_sealed_field_and_persists_immutably
     assert!(SignificanceStudyArtifact::resealed_from_json(&source_tamper).is_err());
 
     assert!(execute_significance_study(&[], policy).is_err());
-    assert!(execute_significance_study(
-        std::slice::from_ref(&field),
-        SignificancePolicy {
-            minimum_observations: 10,
-            ..policy
-        }
+    assert!(
+        execute_significance_study(
+            std::slice::from_ref(&field),
+            SignificancePolicy {
+                minimum_observations: 10,
+                ..policy
+            }
+        )
+        .is_err()
+    );
+}
+
+/// A steadily trending series. The §7.6 concentration gate reads `top_decile_pnl_share`, which the
+/// registry leaves undefined without gross profit, so the fixture has to bank real winning trades.
+fn problem_recognition_bars() -> Vec<Bar> {
+    (0..14)
+        .map(|index| {
+            let close = 100.0 + 2.0 * index as f64;
+            Bar {
+                timestamp: format!("2026-06-{:02}T00:00:00Z", index + 1),
+                open: close - 1.0,
+                high: close + 1.0,
+                low: close - 2.0,
+                close,
+                volume: 100.0,
+            }
+        })
+        .collect()
+}
+
+/// A priced-cost long-only field: entry and exit are both parameterised thresholds, so every
+/// coordinate of the declared field is a distinct trade sequence over the same bars.
+fn problem_recognition_field_fixture() -> (
+    StrategyExecutionConfig,
+    Vec<Bar>,
+    DatasetManifest,
+    SearchSpace,
+) {
+    let mut definition = GeneralStrategyBuilder::new("problem-recognition", "test")
+        .definition()
+        .clone();
+    definition.parameters = vec![
+        StrategyParameter {
+            id: "entry_level".into(),
+            value: ParamValue::Float(99.0),
+            range: Some(ParamRange::Float {
+                min: 95.0,
+                max: 125.0,
+            }),
+        },
+        StrategyParameter {
+            id: "exit_level".into(),
+            value: ParamValue::Float(104.0),
+            range: Some(ParamRange::Float {
+                min: 95.0,
+                max: 125.0,
+            }),
+        },
+    ];
+    definition.long.enabled = true;
+    definition.long.entry = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Parameter("entry_level".into()),
+    };
+    definition.long.exit = Condition::Compare {
+        left: Operand::Price {
+            field: crate::core::strategy_ir::PriceField::Close,
+            bars_ago: 0,
+        },
+        op: CompareOp::Greater,
+        right: Operand::Parameter("exit_level".into()),
+    };
+    let strategy = crate::core::strategy_ir::StrategyIr::build(&definition).unwrap();
+    let mut settings = ExecutionSettings::conservative_defaults();
+    settings.slippage = SlippageModel::FixedPriceDistance { distance: 0.05 };
+    settings.spread = SpreadModel::Constant { price_units: 0.02 };
+    let config = StrategyExecutionConfig::build(&settings).unwrap();
+    let bars = problem_recognition_bars();
+    let manifest = manifest(&bars);
+    let space = SearchSpace::new(
+        strategy,
+        vec![
+            ParameterDomain::new(
+                "entry_level",
+                vec![99.0, 103.0, 107.0]
+                    .into_iter()
+                    .map(ParamValue::Float)
+                    .collect(),
+            )
+            .unwrap(),
+            ParameterDomain::new(
+                "exit_level",
+                vec![104.0, 110.0, 116.0]
+                    .into_iter()
+                    .map(ParamValue::Float)
+                    .collect(),
+            )
+            .unwrap(),
+        ],
     )
-    .is_err());
+    .unwrap();
+    (config, bars, manifest, space)
+}
+
+/// A cross-check dataset variant of the shared fixture bars: same content, distinct identity.
+fn cross_check_manifest(
+    bars: &[Bar],
+    symbol: &str,
+    timeframe: &str,
+    source: &str,
+) -> DatasetManifest {
+    DatasetManifest::build(
+        &DatasetManifestInput {
+            symbol: symbol.into(),
+            timeframe: timeframe.into(),
+            provenance: DatasetProvenance {
+                source: source.into(),
+                venue: "test".into(),
+                pipeline: format!("strategy-retest-test-{source}/v1"),
+            },
+            adjustment: AdjustmentPolicy::Raw,
+            calendar: CalendarPolicy::Continuous24x7,
+            qa_policy: DatasetQaPolicy::default(),
+        },
+        bars,
+    )
+    .unwrap()
+}
+
+/// The exact immutable evidence a problem-recognition verdict may read: one sealed cross-check
+/// study, the executed OOS scheme for the same candidate, and the adjusted-significance study of
+/// the parameter field the candidate was selected from.
+struct ProblemRecognitionFixture {
+    config: StrategyExecutionConfig,
+    bars: Vec<Bar>,
+    manifest: DatasetManifest,
+    space: SearchSpace,
+    strategy: crate::core::strategy_ir::StrategyIr,
+    field: ParameterFieldStudyArtifact,
+    cross: CrossCheckStudyArtifact,
+    oos: ExecutedOosScheme,
+    significance: SignificanceStudyArtifact,
+}
+
+fn significance_policy(false_discovery_rate_bps: u32) -> SignificancePolicy {
+    SignificancePolicy {
+        null_value: -1_000_000.0,
+        false_discovery_rate_bps,
+        minimum_observations: 9,
+    }
+}
+
+impl ProblemRecognitionFixture {
+    fn new() -> Self {
+        let (config, bars, manifest, space) = problem_recognition_field_fixture();
+        let field = execute_parameter_field_study(
+            &config,
+            &manifest,
+            &bars,
+            study_lease(&manifest, bars.len()),
+            &space,
+            parameter_field_spec(),
+        )
+        .unwrap();
+        let significance =
+            execute_significance_study(std::slice::from_ref(&field), significance_policy(500))
+                .unwrap();
+        // The candidate the field actually selected — its strategy, not a caller's label.
+        let strategy = generate_candidates(&space, SearchMethod::Grid, space.combinations())
+            .unwrap()
+            .candidates
+            .into_iter()
+            .find(|candidate| candidate.candidate_id == field.profile().selected_candidate_id())
+            .expect("the selected candidate is a coordinate of the declared field")
+            .strategy;
+        let cross = Self::cross_check(&strategy, &config, &manifest, &bars);
+        let oos = Self::oos(&strategy, &config, &manifest, &bars, "net_profit");
+        Self {
+            config,
+            bars,
+            manifest,
+            space,
+            strategy,
+            field,
+            cross,
+            oos,
+            significance,
+        }
+    }
+
+    fn cross_check(
+        strategy: &crate::core::strategy_ir::StrategyIr,
+        config: &StrategyExecutionConfig,
+        manifest: &DatasetManifest,
+        bars: &[Bar],
+    ) -> CrossCheckStudyArtifact {
+        let other_symbol = cross_check_manifest(bars, "ETH/USD", "1Day", "fixture");
+        let adjacent_timeframe = cross_check_manifest(bars, "BTC/USD", "4Hour", "fixture");
+        let alternative_source = cross_check_manifest(bars, "BTC/USD", "1Day", "alternate");
+        execute_cross_check_study(
+            strategy,
+            config,
+            manifest,
+            bars,
+            study_lease(manifest, bars.len()),
+            vec![
+                CrossCheckDatasetCase {
+                    kind: CrossCheckKind::OtherSymbol,
+                    label: "eth-usd".into(),
+                    config,
+                    dataset: &other_symbol,
+                    bars,
+                    lease: study_lease(&other_symbol, bars.len()),
+                },
+                CrossCheckDatasetCase {
+                    kind: CrossCheckKind::AdjacentTimeframe,
+                    label: "btc-4h".into(),
+                    config,
+                    dataset: &adjacent_timeframe,
+                    bars,
+                    lease: study_lease(&adjacent_timeframe, bars.len()),
+                },
+                CrossCheckDatasetCase {
+                    kind: CrossCheckKind::AlternativeSource,
+                    label: "btc-alternate".into(),
+                    config,
+                    dataset: &alternative_source,
+                    bars,
+                    lease: study_lease(&alternative_source, bars.len()),
+                },
+            ],
+            CrossCheckStudySpec {
+                metric_id: "net_profit".into(),
+                direction: ObjectiveDirection::Maximize,
+                minimum_retention_bps: 5_000,
+                evaluations_n: 9,
+                root_seed: 0x9c05,
+            },
+        )
+        .unwrap()
+    }
+
+    fn oos(
+        strategy: &crate::core::strategy_ir::StrategyIr,
+        config: &StrategyExecutionConfig,
+        manifest: &DatasetManifest,
+        bars: &[Bar],
+        metric_id: &str,
+    ) -> ExecutedOosScheme {
+        execute_oos_scheme(
+            strategy,
+            config,
+            manifest,
+            bars,
+            study_lease(manifest, bars.len()),
+            OosExecutionSpec {
+                scheme: OosScheme::Trailing { oos_bars: 4 },
+                purge_bars: 1,
+                embargo_bars: 0,
+                metric_id: metric_id.into(),
+                root_seed: 0x9c05,
+            },
+        )
+        .unwrap()
+    }
+
+    fn execute(
+        &self,
+        policy: ProblemRecognitionPolicy,
+    ) -> Result<ProblemRecognitionArtifact, RetestError> {
+        execute_problem_recognition(&self.cross, &self.oos, &self.significance, policy)
+    }
+}
+
+/// Permissive thresholds: every gate is satisfied, so the verdict tests the derivation and not a
+/// threshold. The failing-gate tests below tighten exactly one bound at a time.
+fn problem_recognition_policy() -> ProblemRecognitionPolicy {
+    ProblemRecognitionPolicy {
+        minimum_trades: 1,
+        maximum_top_trade_share_bps: 10_000,
+        maximum_time_in_market_bps: 10_000,
+        boundary_width_bps: 1_000,
+        maximum_boundary_trade_share_bps: 10_000,
+        minimum_cost_2x_ratio_bps: 0,
+        minimum_oos_is_ratio_bps: 0,
+    }
+}
+
+fn defined_metric(report: &StrategyReportArtifact, id: &str) -> f64 {
+    match report.analysis().metric(id) {
+        Some(MetricValue::Defined { value }) => *value,
+        other => panic!("problem-recognition fixture needs a defined {id}: {other:?}"),
+    }
+}
+
+fn failing_stage(artifact: &ProblemRecognitionArtifact) -> Option<&str> {
+    artifact
+        .stages()
+        .iter()
+        .find(|stage| stage.verdict == StageVerdict::Fail)
+        .map(|stage| stage.stage.as_str())
+}
+
+#[test]
+fn problem_recognition_derives_every_gate_from_canonical_report_evidence() {
+    let fixture = ProblemRecognitionFixture::new();
+    let artifact = fixture.execute(problem_recognition_policy()).unwrap();
+    artifact.verify().unwrap();
+
+    // Identity is bound to the evidence, not to the caller's request.
+    assert_eq!(artifact.artifact_id().len(), 64);
+    assert_eq!(artifact.source_dataset_id(), fixture.manifest.dataset_id);
+    assert_eq!(artifact.strategy_id(), fixture.strategy.strategy_id());
+    assert_eq!(artifact.metric_id(), "net_profit");
+    assert_eq!(artifact.policy(), problem_recognition_policy());
+
+    // Every observation is the canonical report/study value, never a caller's number.
+    let report = fixture.cross.baseline_report().unwrap();
+    let observations = artifact.observations();
+    assert_eq!(observations.trade_count, report.analysis().trades.len());
+    assert_eq!(
+        observations.top_trade_share_bps,
+        (defined_metric(&report, "top_decile_pnl_share") * 10_000.0).round() as u32
+    );
+    assert_eq!(
+        observations.time_in_market_bps,
+        (defined_metric(&report, "time_in_market") * 10_000.0).round() as u32
+    );
+    assert_eq!(
+        observations.cost_2x_ratio_bps,
+        fixture
+            .cross
+            .checks()
+            .iter()
+            .find(|check| check.kind
+                == CrossCheckKind::CostSensitivity {
+                    multiplier_bps: COST_MULTIPLIER_2X_BPS
+                })
+            .map(|check| check.retention_bps.min(10_000))
+            .unwrap()
+    );
+    // Pinned so a silent change of derivation cannot pass as a change of fixture.
+    assert_eq!(
+        observations,
+        ReportProblemObservations {
+            trade_count: 4,
+            top_trade_share_bps: 7_602,
+            time_in_market_bps: 10_000,
+            boundary_trade_share_bps: 5_000,
+            cost_2x_ratio_bps: 9_796,
+            oos_is_ratio_bps: 10_000,
+        }
+    );
+
+    // The declared §7.6 gate set, in order, each carrying its own observation count.
+    assert_eq!(
+        artifact
+            .stages()
+            .iter()
+            .map(|stage| stage.stage.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "minimum-trades",
+            "trade-concentration",
+            "time-in-market",
+            "boundary-reliance",
+            "cost-degradation",
+            "oos-degradation",
+            "adjusted-significance",
+        ]
+    );
+    assert!(
+        artifact.stages()[..6]
+            .iter()
+            .all(|stage| stage.observations_n == observations.trade_count)
+    );
+    // §7.7: the significance gate displays the selection universe it was judged against.
+    assert_eq!(
+        artifact.stages()[6].observations_n,
+        fixture.significance.evaluations_n()
+    );
+    assert!(artifact.stages()[6].reason.contains("bonferroni p="));
+    assert_eq!(failing_stage(&artifact), None);
+    assert!(artifact.passed());
+
+    // Deterministic: the same sealed evidence always yields the same verdict artifact.
+    assert_eq!(
+        artifact,
+        fixture.execute(problem_recognition_policy()).unwrap()
+    );
+
+    // Round trip, plus the positive control the tamper tests below need: untouched evidence
+    // survives a recomputed identity, so those failures are the invariant and not the decode.
+    let bytes = artifact.to_json_vec().unwrap();
+    assert!(bytes.len() <= MAX_ARTIFACT_BYTES);
+    assert_eq!(
+        artifact,
+        ProblemRecognitionArtifact::from_json_slice(&bytes).unwrap()
+    );
+    assert_eq!(
+        artifact,
+        ProblemRecognitionArtifact::resealed_from_json(&bytes).unwrap()
+    );
+
+    // The embedded evidence is exactly the sealed studies that were judged, and replaying from
+    // those embedded bytes alone reproduces the verdict.
+    assert_eq!(artifact.source_cross_check().unwrap(), fixture.cross);
+    assert_eq!(artifact.source_oos().unwrap(), fixture.oos);
+    assert_eq!(
+        artifact.source_significance().unwrap(),
+        fixture.significance
+    );
+    assert_eq!(replay_problem_recognition(&artifact).unwrap(), artifact);
+
+    // The sources themselves are untouched by having been judged.
+    fixture.cross.verify().unwrap();
+    fixture.oos.verify().unwrap();
+    fixture.significance.verify().unwrap();
+}
+
+#[test]
+fn problem_recognition_persists_immutably_with_indexed_lookup() {
+    let fixture = ProblemRecognitionFixture::new();
+    let artifact = fixture.execute(problem_recognition_policy()).unwrap();
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    store.persist_problem_recognition(&artifact, 12).unwrap();
+    assert!(matches!(
+        store.persist_problem_recognition(&artifact, 13),
+        Err(RetestError::DuplicateLineage)
+    ));
+    let query = StudyArtifactQuery {
+        source_dataset_id: fixture.manifest.dataset_id.clone(),
+        kind: Some(StudyArtifactKind::ProblemRecognition),
+        after_sequence: None,
+        limit: 4,
+    };
+    let page = store.query_studies(&query).unwrap();
+    assert_eq!(page.records.len(), 1);
+    assert!(!page.has_more);
+    assert_eq!(page.records[0].created_sequence, 12);
+    let StudyArtifact::ProblemRecognition(stored) = &page.records[0].artifact else {
+        panic!("stored kind is not problem recognition");
+    };
+    assert_eq!(stored, &artifact);
+    // A reloaded verdict still replays from its own embedded evidence.
+    assert_eq!(replay_problem_recognition(stored).unwrap(), artifact);
+    assert!(
+        store
+            .explain_study_query(&query)
+            .unwrap()
+            .iter()
+            .any(|plan| plan.contains("idx_study_dataset_kind_sequence"))
+    );
+    // The kind is its own indexed lane: a sibling kind does not answer this query.
+    assert!(
+        store
+            .query_studies(&StudyArtifactQuery {
+                kind: Some(StudyArtifactKind::CrossCheck),
+                ..query
+            })
+            .unwrap()
+            .records
+            .is_empty()
+    );
+}
+
+#[test]
+fn problem_recognition_fails_the_exact_gate_its_evidence_misses() {
+    let fixture = ProblemRecognitionFixture::new();
+    let observations = fixture
+        .execute(problem_recognition_policy())
+        .unwrap()
+        .observations();
+    // Each policy tightens exactly one bound past what the sealed evidence actually shows.
+    for (policy, expected) in [
+        (
+            ProblemRecognitionPolicy {
+                minimum_trades: observations.trade_count + 1,
+                ..problem_recognition_policy()
+            },
+            "minimum-trades",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                maximum_top_trade_share_bps: observations.top_trade_share_bps - 1,
+                ..problem_recognition_policy()
+            },
+            "trade-concentration",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                maximum_time_in_market_bps: observations.time_in_market_bps - 1,
+                ..problem_recognition_policy()
+            },
+            "time-in-market",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                maximum_boundary_trade_share_bps: observations.boundary_trade_share_bps - 1,
+                ..problem_recognition_policy()
+            },
+            "boundary-reliance",
+        ),
+        (
+            ProblemRecognitionPolicy {
+                minimum_cost_2x_ratio_bps: observations.cost_2x_ratio_bps + 1,
+                ..problem_recognition_policy()
+            },
+            "cost-degradation",
+        ),
+    ] {
+        let artifact = fixture.execute(policy).unwrap();
+        assert_eq!(failing_stage(&artifact), Some(expected));
+        assert!(!artifact.passed());
+        // A failing verdict is evidence too: it seals, reloads and replays like any other.
+        assert_eq!(
+            artifact,
+            ProblemRecognitionArtifact::from_json_slice(&artifact.to_json_vec().unwrap()).unwrap()
+        );
+        assert_eq!(replay_problem_recognition(&artifact).unwrap(), artifact);
+    }
+
+    // Real out-of-sample degradation, not a re-tuned threshold: the leading window holds fewer of
+    // the trending series' trades, so the executed OOS mean falls short of the executed IS mean.
+    let leading = execute_oos_scheme(
+        &fixture.strategy,
+        &fixture.config,
+        &fixture.manifest,
+        &fixture.bars,
+        study_lease(&fixture.manifest, fixture.bars.len()),
+        OosExecutionSpec {
+            scheme: OosScheme::Leading { oos_bars: 4 },
+            purge_bars: 1,
+            embargo_bars: 0,
+            metric_id: "net_profit".into(),
+            root_seed: 0x9c05,
+        },
+    )
+    .unwrap();
+    let degraded = execute_problem_recognition(
+        &fixture.cross,
+        &leading,
+        &fixture.significance,
+        problem_recognition_policy(),
+    )
+    .unwrap();
+    assert!(degraded.observations().oos_is_ratio_bps < 10_000);
+    let policy = ProblemRecognitionPolicy {
+        minimum_oos_is_ratio_bps: degraded.observations().oos_is_ratio_bps + 1,
+        ..problem_recognition_policy()
+    };
+    let artifact =
+        execute_problem_recognition(&fixture.cross, &leading, &fixture.significance, policy)
+            .unwrap();
+    assert_eq!(failing_stage(&artifact), Some("oos-degradation"));
+    assert!(!artifact.passed());
+
+    // §7.7: the significance verdict is read from the sealed study, so a family that survives a
+    // 5% discovery rate and fails a 1% one flips this gate without touching any threshold here.
+    let strict = execute_significance_study(
+        std::slice::from_ref(&fixture.field),
+        significance_policy(100),
+    )
+    .unwrap();
+    assert!(!strict.candidates()[0].significant());
+    let artifact = execute_problem_recognition(
+        &fixture.cross,
+        &fixture.oos,
+        &strict,
+        problem_recognition_policy(),
+    )
+    .unwrap();
+    assert_eq!(failing_stage(&artifact), Some("adjusted-significance"));
+    assert!(!artifact.passed());
+
+    // The edge-band width is a derivation input, not a verdict: widening it can only ever find
+    // more boundary trades in the same sealed trade list.
+    let wide = fixture
+        .execute(ProblemRecognitionPolicy {
+            boundary_width_bps: 5_000,
+            ..problem_recognition_policy()
+        })
+        .unwrap();
+    assert!(wide.observations().boundary_trade_share_bps >= observations.boundary_trade_share_bps);
+}
+
+#[test]
+fn problem_recognition_refuses_foreign_tampered_and_mismatched_evidence() {
+    let fixture = ProblemRecognitionFixture::new();
+    let policy = problem_recognition_policy();
+    let recognize = |oos: &ExecutedOosScheme| {
+        execute_problem_recognition(&fixture.cross, oos, &fixture.significance, policy)
+    };
+
+    // A different candidate of the same field, executed on the same bars.
+    let foreign_candidate = generate_candidates(
+        &fixture.space,
+        SearchMethod::Grid,
+        fixture.space.combinations(),
+    )
+    .unwrap()
+    .candidates
+    .into_iter()
+    .find(|candidate| candidate.candidate_id != fixture.strategy.strategy_id())
+    .expect("the declared field has more than one coordinate")
+    .strategy;
+    assert!(
+        recognize(&ProblemRecognitionFixture::oos(
+            &foreign_candidate,
+            &fixture.config,
+            &fixture.manifest,
+            &fixture.bars,
+            "net_profit",
+        ))
+        .is_err()
+    );
+
+    // A different dataset, a different objective metric, and a different execution config all
+    // make the degradation ratio incomparable with the cross-check baseline.
+    let foreign_dataset = cross_check_manifest(&fixture.bars, "ETH/USD", "1Day", "fixture");
+    assert!(
+        recognize(&ProblemRecognitionFixture::oos(
+            &fixture.strategy,
+            &fixture.config,
+            &foreign_dataset,
+            &fixture.bars,
+            "net_profit",
+        ))
+        .is_err()
+    );
+    assert!(
+        recognize(&ProblemRecognitionFixture::oos(
+            &fixture.strategy,
+            &fixture.config,
+            &fixture.manifest,
+            &fixture.bars,
+            "total_return",
+        ))
+        .is_err()
+    );
+    let zero_cost =
+        StrategyExecutionConfig::build(&ExecutionSettings::conservative_defaults()).unwrap();
+    assert_ne!(zero_cost.config_id(), fixture.config.config_id());
+    assert!(
+        recognize(&ProblemRecognitionFixture::oos(
+            &fixture.strategy,
+            &zero_cost,
+            &fixture.manifest,
+            &fixture.bars,
+            "net_profit",
+        ))
+        .is_err()
+    );
+
+    // A cross-check whose candidate the significance family never judged.
+    let foreign_cross = ProblemRecognitionFixture::cross_check(
+        &foreign_candidate,
+        &fixture.config,
+        &fixture.manifest,
+        &fixture.bars,
+    );
+    assert!(
+        execute_problem_recognition(&foreign_cross, &fixture.oos, &fixture.significance, policy,)
+            .is_err()
+    );
+
+    // Policies that cannot produce a bounded gate at all.
+    for broken in [
+        ProblemRecognitionPolicy {
+            minimum_trades: 0,
+            ..policy
+        },
+        ProblemRecognitionPolicy {
+            boundary_width_bps: 0,
+            ..policy
+        },
+        ProblemRecognitionPolicy {
+            boundary_width_bps: 5_001,
+            ..policy
+        },
+        ProblemRecognitionPolicy {
+            maximum_time_in_market_bps: 10_001,
+            ..policy
+        },
+    ] {
+        assert!(fixture.execute(broken).is_err());
+    }
+
+    // Tampering: every mutation must fail both the sealed identity and, more importantly, the
+    // re-derivation that a recomputed identity cannot rescue.
+    let artifact = fixture.execute(policy).unwrap();
+    let bytes = artifact.to_json_vec().unwrap();
+    let strict = execute_significance_study(
+        std::slice::from_ref(&fixture.field),
+        significance_policy(100),
+    )
+    .unwrap();
+    let swapped = zstd::bulk::compress(&strict.to_json_vec().unwrap(), 3).unwrap();
+    for mutate in [
+        (|value: &mut serde_json::Value| value["observations"]["trade_count"] = 3.into())
+            as fn(&mut serde_json::Value),
+        |value| value["observations"]["cost_2x_ratio_bps"] = 10_000.into(),
+        |value| value["stages"][0]["verdict"] = "Fail".into(),
+        |value| value["stages"][5]["reason"] = "looks fine".into(),
+        |value| value["passed"] = false.into(),
+        |value| value["policy"]["minimum_trades"] = 2.into(),
+        |value| value["metric_id"] = "total_return".into(),
+        |value| value["strategy_id"] = "a".repeat(64).into(),
+        |value| value["schema_version"] = 2.into(),
+        |value| value["source_cross_check_zstd"][0] = 0.into(),
+        |value| value["source_oos_zstd"][0] = 0.into(),
+        |value| value["extra_field"] = 1.into(),
+    ] {
+        let mut tampered: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        mutate(&mut tampered);
+        let tampered = serde_json::to_vec(&tampered).unwrap();
+        assert!(ProblemRecognitionArtifact::from_json_slice(&tampered).is_err());
+        assert!(ProblemRecognitionArtifact::resealed_from_json(&tampered).is_err());
+    }
+
+    // Swapping in a different but internally valid study still contradicts the sealed verdict.
+    let mut mismatched: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    mismatched["source_significance_zstd"] = serde_json::to_value(&swapped).unwrap();
+    let mismatched = serde_json::to_vec(&mismatched).unwrap();
+    assert!(ProblemRecognitionArtifact::from_json_slice(&mismatched).is_err());
+    assert!(ProblemRecognitionArtifact::resealed_from_json(&mismatched).is_err());
+
+    // Bounded before decode.
+    assert!(
+        ProblemRecognitionArtifact::from_json_slice(&vec![b' '; MAX_ARTIFACT_BYTES + 1]).is_err()
+    );
 }

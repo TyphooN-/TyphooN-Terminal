@@ -40,6 +40,7 @@ pub mod strategy_metrics;
 pub mod strategy_optimization;
 pub mod strategy_parameter_field;
 pub mod strategy_perturbation;
+pub mod strategy_problem_recognition;
 pub mod strategy_protective;
 pub mod strategy_reference_data;
 pub mod strategy_reference_data_worker;

@@ -15,7 +15,10 @@ path = "src/lib.rs"
 serde = { workspace = true }
 # Raw WS payloads and byte-stable cache round-trips require these engine-only
 # features; other workspace crates keep serde_json's plain std surface.
-serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
+# float_roundtrip is load-bearing for sealed artifacts: the default parser is only
+# accurate to 1 ULP, so a derived f64 could decode back a different bit pattern and
+# fail its own re-derivation on load.
+serde_json = { workspace = true, features = ["preserve_order", "raw_value", "float_roundtrip"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "net", "io-util"] }
 # cookies is load-bearing: the Yahoo crumb/consent flow needs a cookie jar.
 reqwest = { workspace = true, features = ["json", "query", "cookies", "rustls"] }
