@@ -302,6 +302,133 @@ fn the_lineage_row_owns_only_display_strings_not_a_decoded_source_or_its_sealed_
     assert!(owned < 512, "lineage row owns {owned} bytes");
 }
 
+// ── Executed OOS partitions ────────────────────────────────────────
+
+fn partition(role: SampleRole, start: usize, end: usize, score: f64) -> ExecutedPartition {
+    ExecutedPartition {
+        role,
+        range: start..end,
+        dataset_id: dataset_id(),
+        run_id: std::iter::repeat_n('1', 64).collect(),
+        report_id: std::iter::repeat_n('2', 64).collect(),
+        score,
+    }
+}
+
+#[test]
+fn a_partition_row_carries_its_sealed_role_half_open_range_score_and_identities() {
+    let sealed = [partition(SampleRole::OutOfSample, 1_000, 1_750, -12.5)];
+
+    let (rows, omitted) = project_partitions(&sealed);
+
+    assert_eq!(omitted, 0);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].role, "out-of-sample");
+    // Half-open exactly as sealed: end is exclusive, so the span is end - start.
+    assert_eq!(rows[0].start, 1_000);
+    assert_eq!(rows[0].end, 1_750);
+    assert_eq!(rows[0].bars, 750);
+    assert_eq!(rows[0].score, "-12.500000");
+    // Immutable run/report identities are carried whole; the panel shortens at render.
+    assert_eq!(
+        rows[0].run_id,
+        std::iter::repeat_n('1', 64).collect::<String>()
+    );
+    assert_eq!(
+        rows[0].report_id,
+        std::iter::repeat_n('2', 64).collect::<String>()
+    );
+}
+
+#[test]
+fn every_sealed_role_gets_its_own_label_and_a_non_finite_score_is_undefined() {
+    let sealed = [
+        partition(SampleRole::InSample, 0, 10, 1.0),
+        partition(SampleRole::OutOfSample, 10, 20, 2.0),
+        partition(SampleRole::Purged, 20, 22, f64::NAN),
+        partition(SampleRole::Embargoed, 22, 25, f64::INFINITY),
+    ];
+
+    let (rows, _) = project_partitions(&sealed);
+
+    let labels: Vec<_> = rows.iter().map(|row| row.role).collect();
+    assert_eq!(
+        labels,
+        ["in-sample", "out-of-sample", "purged", "embargoed"]
+    );
+    // A score the engine sealed as non-finite is stated as undefined, never printed as NaN/inf.
+    assert_eq!(rows[2].score, "undefined");
+    assert_eq!(rows[3].score, "undefined");
+}
+
+#[test]
+fn partitions_are_projected_in_sealed_order_and_deterministically() {
+    let sealed = [
+        partition(SampleRole::InSample, 0, 100, 3.0),
+        partition(SampleRole::Purged, 100, 105, 0.0),
+        partition(SampleRole::OutOfSample, 105, 200, 1.5),
+    ];
+
+    let (first, _) = project_partitions(&sealed);
+    let (second, _) = project_partitions(&sealed);
+
+    assert_eq!(first, second);
+    // Sealed order is preserved rather than sorted by role, range or score.
+    let starts: Vec<_> = first.iter().map(|row| row.start).collect();
+    assert_eq!(starts, [0, 100, 105]);
+    assert_eq!(first[1].role, "purged");
+}
+
+#[test]
+fn a_partition_list_above_the_native_cap_is_bounded_and_counts_what_it_hid() {
+    let sealed: Vec<_> = (0..MAX_OOS_PARTITION_ROWS + 5)
+        .map(|index| {
+            partition(
+                SampleRole::InSample,
+                index * 10,
+                index * 10 + 10,
+                index as f64,
+            )
+        })
+        .collect();
+
+    let (rows, omitted) = project_partitions(&sealed);
+
+    assert_eq!(rows.len(), MAX_OOS_PARTITION_ROWS);
+    assert_eq!(omitted, 5);
+    // The kept rows are the first sealed ones, not an arbitrary sample.
+    assert_eq!(rows[0].start, 0);
+    assert_eq!(
+        rows[MAX_OOS_PARTITION_ROWS - 1].start,
+        (MAX_OOS_PARTITION_ROWS - 1) * 10
+    );
+}
+
+#[test]
+fn a_partition_row_owns_only_display_values_not_the_decoded_scheme_or_its_sealed_bytes() {
+    // `&'static str` + 3 `usize` + 3 `String`. Carrying an ExecutedPartition, an
+    // ExecutedOosScheme, a bar slice or the zstd bytes it was inflated from would change this.
+    let expected = size_of::<&'static str>() + size_of::<usize>() * 3 + size_of::<String>() * 3;
+    assert_eq!(size_of::<ProblemPartitionRow>(), expected);
+
+    let (rows, _) =
+        project_partitions(&[partition(SampleRole::OutOfSample, 0, usize::MAX, f64::MIN)]);
+    let owned = rows[0].score.len() + rows[0].run_id.len() + rows[0].report_id.len();
+    assert!(owned < 512, "partition row owns {owned} bytes");
+}
+
+#[test]
+fn an_oos_source_that_did_not_decode_contributes_no_partition_rows() {
+    // The Err arm of project_sources pairs the unreadable lineage row with an empty partition
+    // list, so a failed decode can never leave stale or invented partitions behind.
+    let row = unreadable_source_row(OOS_STUDY, "sealed OOS bytes are unreadable");
+    let (rows, omitted) = project_partitions(&[]);
+
+    assert!(row.error.is_some());
+    assert!(rows.is_empty());
+    assert_eq!(omitted, 0);
+}
+
 // ── Off-thread request identity ────────────────────────────────────
 
 #[test]

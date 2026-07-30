@@ -15,12 +15,13 @@ use std::io::Read;
 use std::path::Path;
 
 use typhoon_engine::core::strategy_optimization::{
-    MAX_ARTIFACT_BYTES, StageEvidence, StageVerdict,
+    MAX_ARTIFACT_BYTES, SampleRole, StageEvidence, StageVerdict,
 };
 use typhoon_engine::core::strategy_problem_recognition::{
     CalendarGranularity, ConcentrationFamily, ProblemRecognitionArtifact, ProblemRecognitionPolicy,
     ReportProblemObservations,
 };
+use typhoon_engine::core::strategy_retest::ExecutedPartition;
 
 use super::*;
 
@@ -31,6 +32,9 @@ pub(crate) const MAX_PROBLEM_STAGE_ROWS: usize = 32;
 /// Display bound for one sealed reason string. The artifact as a whole is capped at
 /// `MAX_ARTIFACT_BYTES`, which still leaves room for a reason longer than a panel row.
 pub(crate) const MAX_REASON_CHARS: usize = 240;
+/// Display bound for executed OOS partitions. The engine's own ceiling on study windows is not
+/// public, so this is a native cap; anything beyond it is counted and shown, never dropped quietly.
+pub(crate) const MAX_OOS_PARTITION_ROWS: usize = 32;
 
 /// One sealed gate outcome, carried through unchanged.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +72,22 @@ pub(crate) struct ProblemSourceRow {
     pub(crate) error: Option<String>,
 }
 
+/// One executed partition of the sealed OOS scheme, in the order the scheme sealed it. Ranges are
+/// half-open exactly as the engine sealed them; the bars themselves are never carried.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProblemPartitionRow {
+    pub(crate) role: &'static str,
+    /// Inclusive start of the sealed half-open range.
+    pub(crate) start: usize,
+    /// Exclusive end of the sealed half-open range.
+    pub(crate) end: usize,
+    pub(crate) bars: usize,
+    /// The sealed score, or `undefined` when the engine sealed a non-finite one.
+    pub(crate) score: String,
+    pub(crate) run_id: String,
+    pub(crate) report_id: String,
+}
+
 /// Everything the panel is allowed to draw, prepared once on the worker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProblemRecognitionView {
@@ -82,12 +102,20 @@ pub(crate) struct ProblemRecognitionView {
     pub(crate) observations: Vec<ProblemObservationRow>,
     /// Exactly one row per sealed source study, in the order the engine derives from them.
     pub(crate) sources: Vec<ProblemSourceRow>,
+    /// Executed partitions of the sealed OOS scheme; empty when that source did not decode.
+    pub(crate) partitions: Vec<ProblemPartitionRow>,
+    pub(crate) omitted_partitions: usize,
 }
 
 impl ProblemRecognitionView {
     /// Project an artifact that `from_json_slice`/`verify` has already replayed.
     pub(crate) fn from_verified(artifact: &ProblemRecognitionArtifact) -> Self {
         let (stages, omitted_stages) = project_stages(artifact.stages());
+        let ProjectedSources {
+            rows: sources,
+            partitions,
+            omitted_partitions,
+        } = project_sources(artifact);
         Self {
             artifact_id: artifact.artifact_id().to_string(),
             strategy_id: artifact.strategy_id().to_string(),
@@ -97,7 +125,9 @@ impl ProblemRecognitionView {
             stages,
             omitted_stages,
             observations: project_observations(&artifact.observations(), &artifact.policy()),
-            sources: project_sources(artifact),
+            sources,
+            partitions,
+            omitted_partitions,
         }
     }
 
@@ -181,21 +211,23 @@ fn project_stages(stages: &[StageEvidence]) -> (Vec<ProblemStageRow>, usize) {
 /// identities and counts out, then dropped — nothing decoded and no compressed byte reaches the
 /// view. `verify` already proved all three decode, so the `Err` arms are fail-closed defence, not
 /// an expected path.
-fn project_sources(artifact: &ProblemRecognitionArtifact) -> Vec<ProblemSourceRow> {
-    vec![
-        match artifact.source_cross_check() {
-            Ok(cross) => cross_check_row(
-                cross.artifact_id(),
-                cross.strategy_id(),
-                cross.source_dataset_id(),
-                cross.metric_id(),
-                cross.evaluations_n(),
-                cross.checks().len(),
-            ),
-            Err(error) => unreadable_source_row(CROSS_CHECK_STUDY, &error.to_string()),
-        },
-        match artifact.source_oos() {
-            Ok(oos) => oos_row(
+fn project_sources(artifact: &ProblemRecognitionArtifact) -> ProjectedSources {
+    let cross = match artifact.source_cross_check() {
+        Ok(cross) => cross_check_row(
+            cross.artifact_id(),
+            cross.strategy_id(),
+            cross.source_dataset_id(),
+            cross.metric_id(),
+            cross.evaluations_n(),
+            cross.checks().len(),
+        ),
+        Err(error) => unreadable_source_row(CROSS_CHECK_STUDY, &error.to_string()),
+    };
+    // The OOS scheme is inflated once and yields both its lineage row and its partition rows
+    // before this binding is dropped; nothing downstream decodes it a second time.
+    let (oos, partitions, omitted_partitions) = match artifact.source_oos() {
+        Ok(oos) => {
+            let row = oos_row(
                 oos.artifact_id(),
                 oos.candidate_id(),
                 oos.source_dataset_id(),
@@ -203,20 +235,75 @@ fn project_sources(artifact: &ProblemRecognitionArtifact) -> Vec<ProblemSourceRo
                 oos.config_id(),
                 oos.source_range().len(),
                 oos.executed_partitions().len(),
-            ),
-            Err(error) => unreadable_source_row(OOS_STUDY, &error.to_string()),
-        },
-        match artifact.source_significance() {
-            Ok(significance) => significance_row(
-                significance.artifact_id(),
-                significance.source_dataset_id(),
-                significance.metric_id(),
-                significance.evaluations_n(),
-                significance.candidates().len(),
-            ),
-            Err(error) => unreadable_source_row(SIGNIFICANCE_STUDY, &error.to_string()),
-        },
-    ]
+            );
+            let (partitions, omitted) = project_partitions(oos.executed_partitions());
+            (row, partitions, omitted)
+        }
+        Err(error) => (
+            unreadable_source_row(OOS_STUDY, &error.to_string()),
+            Vec::new(),
+            0,
+        ),
+    };
+    let significance = match artifact.source_significance() {
+        Ok(significance) => significance_row(
+            significance.artifact_id(),
+            significance.source_dataset_id(),
+            significance.metric_id(),
+            significance.evaluations_n(),
+            significance.candidates().len(),
+        ),
+        Err(error) => unreadable_source_row(SIGNIFICANCE_STUDY, &error.to_string()),
+    };
+    ProjectedSources {
+        rows: vec![cross, oos, significance],
+        partitions,
+        omitted_partitions,
+    }
+}
+
+/// What one pass over the sealed sources yields, so no study is decoded twice.
+struct ProjectedSources {
+    rows: Vec<ProblemSourceRow>,
+    partitions: Vec<ProblemPartitionRow>,
+    omitted_partitions: usize,
+}
+
+/// Project the executed partitions in sealed order, bounded by the native display cap.
+fn project_partitions(partitions: &[ExecutedPartition]) -> (Vec<ProblemPartitionRow>, usize) {
+    let omitted = partitions.len().saturating_sub(MAX_OOS_PARTITION_ROWS);
+    let rows = partitions
+        .iter()
+        .take(MAX_OOS_PARTITION_ROWS)
+        .map(|partition| ProblemPartitionRow {
+            role: role_label(partition.role),
+            start: partition.range.start,
+            end: partition.range.end,
+            bars: partition.range.len(),
+            score: format_score(partition.score),
+            run_id: partition.run_id.clone(),
+            report_id: partition.report_id.clone(),
+        })
+        .collect();
+    (rows, omitted)
+}
+
+fn role_label(role: SampleRole) -> &'static str {
+    match role {
+        SampleRole::InSample => "in-sample",
+        SampleRole::OutOfSample => "out-of-sample",
+        SampleRole::Purged => "purged",
+        SampleRole::Embargoed => "embargoed",
+    }
+}
+
+/// A non-finite sealed score is reported as undefined rather than printed as `NaN`/`inf`.
+fn format_score(score: f64) -> String {
+    if score.is_finite() {
+        format!("{score:.6}")
+    } else {
+        "undefined".to_string()
+    }
 }
 
 const CROSS_CHECK_STUDY: &str = "Cross-check (§7.5)";
@@ -598,6 +685,49 @@ pub(crate) fn render_problem_recognition(ui: &mut egui::Ui, view: &ProblemRecogn
                     ui.end_row();
                 }
             });
+        if !view.partitions.is_empty() {
+            ui.collapsing("Executed OOS partitions", |ui| {
+                if view.omitted_partitions > 0 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} further sealed partitions are not shown (display cap {MAX_OOS_PARTITION_ROWS})",
+                            view.omitted_partitions
+                        ))
+                        .color(egui::Color32::from_rgb(255, 200, 50))
+                        .small(),
+                    );
+                }
+                egui::Grid::new("problem_recognition_partitions")
+                    .striped(true)
+                    .num_columns(5)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Role").strong());
+                        ui.label(egui::RichText::new("Bars [start, end)").strong());
+                        ui.label(egui::RichText::new("Score").strong());
+                        ui.label(egui::RichText::new("Run").strong());
+                        ui.label(egui::RichText::new("Report").strong());
+                        ui.end_row();
+                        for partition in &view.partitions {
+                            ui.label(partition.role);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "[{}, {}) · {}",
+                                    partition.start, partition.end, partition.bars
+                                ))
+                                .small(),
+                            );
+                            ui.label(egui::RichText::new(&partition.score).monospace());
+                            ui.label(
+                                egui::RichText::new(short_id(&partition.run_id)).monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(short_id(&partition.report_id)).monospace(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+        }
     });
     ui.add_space(4.0);
     ui.collapsing("Sealed observations and the bounds they faced", |ui| {
