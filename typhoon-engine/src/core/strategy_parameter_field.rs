@@ -335,6 +335,9 @@ impl ParameterFieldStudyArtifact {
     pub fn metric_id(&self) -> &str {
         &self.spec.metric_id
     }
+    pub fn direction(&self) -> ObjectiveDirection {
+        self.spec.direction
+    }
     pub fn root_seed(&self) -> u64 {
         self.spec.root_seed
     }

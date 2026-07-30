@@ -47,6 +47,7 @@ pub mod strategy_repaint;
 pub mod strategy_report;
 pub mod strategy_retest;
 pub mod strategy_run;
+pub mod strategy_significance;
 pub mod strategy_simulator;
 pub mod symbol_search;
 pub mod var;

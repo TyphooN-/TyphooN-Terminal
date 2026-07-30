@@ -26,6 +26,7 @@ use crate::core::strategy_parameter_field::ParameterFieldStudyArtifact;
 use crate::core::strategy_perturbation::PerturbationStudyArtifact;
 use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
+use crate::core::strategy_significance::SignificanceStudyArtifact;
 use crate::core::strategy_simulator::run_verified_simulation;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -2114,6 +2115,7 @@ pub enum StudyArtifactKind {
     Perturbation,
     ParameterField,
     CrossCheck,
+    Significance,
 }
 impl StudyArtifactKind {
     fn key(self) -> i64 {
@@ -2127,6 +2129,7 @@ impl StudyArtifactKind {
             Self::Perturbation => 6,
             Self::ParameterField => 7,
             Self::CrossCheck => 8,
+            Self::Significance => 9,
         }
     }
     fn decode(value: i64) -> Result<Self, RetestError> {
@@ -2140,6 +2143,7 @@ impl StudyArtifactKind {
             6 => Ok(Self::Perturbation),
             7 => Ok(Self::ParameterField),
             8 => Ok(Self::CrossCheck),
+            9 => Ok(Self::Significance),
             _ => Err(RetestError::Invalid("unknown study artifact kind".into())),
         }
     }
@@ -2156,6 +2160,7 @@ pub enum StudyArtifact {
     Perturbation(PerturbationStudyArtifact),
     ParameterField(ParameterFieldStudyArtifact),
     CrossCheck(CrossCheckStudyArtifact),
+    Significance(SignificanceStudyArtifact),
 }
 impl StudyArtifact {
     fn decode(kind: StudyArtifactKind, bytes: &[u8]) -> Result<Self, RetestError> {
@@ -2185,6 +2190,9 @@ impl StudyArtifact {
             StudyArtifactKind::CrossCheck => {
                 Self::CrossCheck(CrossCheckStudyArtifact::from_json_slice(bytes)?)
             }
+            StudyArtifactKind::Significance => {
+                Self::Significance(SignificanceStudyArtifact::from_json_slice(bytes)?)
+            }
         })
     }
     fn artifact_id(&self) -> &str {
@@ -2198,6 +2206,7 @@ impl StudyArtifact {
             Self::Perturbation(value) => value.artifact_id(),
             Self::ParameterField(value) => value.artifact_id(),
             Self::CrossCheck(value) => value.artifact_id(),
+            Self::Significance(value) => value.artifact_id(),
         }
     }
     fn source_dataset_id(&self) -> &str {
@@ -2211,6 +2220,7 @@ impl StudyArtifact {
             Self::Perturbation(value) => value.source_dataset_id(),
             Self::ParameterField(value) => value.source_dataset_id(),
             Self::CrossCheck(value) => value.source_dataset_id(),
+            Self::Significance(value) => value.source_dataset_id(),
         }
     }
 }
@@ -2501,6 +2511,19 @@ impl RetestEvidenceStore {
     ) -> Result<(), RetestError> {
         self.persist_study(
             StudyArtifactKind::CrossCheck,
+            artifact.artifact_id(),
+            artifact.source_dataset_id(),
+            artifact.to_json_vec()?,
+            created_sequence,
+        )
+    }
+    pub fn persist_significance_study(
+        &self,
+        artifact: &SignificanceStudyArtifact,
+        created_sequence: i64,
+    ) -> Result<(), RetestError> {
+        self.persist_study(
+            StudyArtifactKind::Significance,
             artifact.artifact_id(),
             artifact.source_dataset_id(),
             artifact.to_json_vec()?,

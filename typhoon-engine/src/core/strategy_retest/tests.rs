@@ -27,6 +27,9 @@ use crate::core::strategy_perturbation::{
     PerturbationFamily, PerturbationStudyArtifact, PerturbationStudySpec,
     execute_perturbation_study, replay_perturbation_study,
 };
+use crate::core::strategy_significance::{
+    SignificancePolicy, SignificanceStudyArtifact, execute_significance_study,
+};
 
 fn bars() -> Vec<Bar> {
     (0..8)
@@ -2552,4 +2555,84 @@ fn parameter_field_study_fails_closed_on_bounds_leases_undefined_and_tampering()
         )
         .is_err()
     );
+}
+
+#[test]
+fn adjusted_significance_is_derived_from_the_sealed_field_and_persists_immutably() {
+    let (config, bars, manifest, space) = parameter_field_fixture();
+    let field = execute_parameter_field_study(
+        &config,
+        &manifest,
+        &bars,
+        study_lease(&manifest, bars.len()),
+        &space,
+        parameter_field_spec(),
+    )
+    .unwrap();
+    let policy = SignificancePolicy {
+        null_value: -1_000_000.0,
+        false_discovery_rate_bps: 500,
+        minimum_observations: 9,
+    };
+    let significance = execute_significance_study(std::slice::from_ref(&field), policy).unwrap();
+    significance.verify().unwrap();
+    assert_eq!(significance.source_dataset_id(), manifest.dataset_id);
+    assert_eq!(significance.metric_id(), "net_profit");
+    assert_eq!(significance.direction(), ObjectiveDirection::Maximize);
+    assert_eq!(significance.evaluations_n(), 9);
+    assert_eq!(significance.candidates().len(), 1);
+    let candidate = &significance.candidates()[0];
+    assert_eq!(candidate.candidate_id(), field.profile().selected_candidate_id());
+    assert_eq!(candidate.field_artifact_id(), field.artifact_id());
+    assert_eq!(candidate.observations_n(), 9);
+    assert_eq!(candidate.favourable_observations(), 9);
+    assert_eq!(candidate.headline_field_estimate(), field.spp().estimate());
+    assert!((candidate.raw_p() - 1.0 / 512.0).abs() < 1e-12);
+    assert!((candidate.bonferroni_p() - 9.0 / 512.0).abs() < 1e-12);
+    assert_eq!(candidate.false_discovery_rate_q(), candidate.raw_p());
+    assert!(candidate.significant());
+    let bytes = significance.to_json_vec().unwrap();
+    assert_eq!(significance, SignificanceStudyArtifact::from_json_slice(&bytes).unwrap());
+    assert_eq!(significance, SignificanceStudyArtifact::resealed_from_json(&bytes).unwrap());
+
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    store.persist_significance_study(&significance, 8).unwrap();
+    assert!(matches!(
+        store.persist_significance_study(&significance, 9),
+        Err(RetestError::DuplicateLineage)
+    ));
+    let page = store
+        .query_studies(&StudyArtifactQuery {
+            source_dataset_id: manifest.dataset_id.clone(),
+            kind: Some(StudyArtifactKind::Significance),
+            after_sequence: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert!(matches!(
+        &page.records[0].artifact,
+        StudyArtifact::Significance(value) if value == &significance
+    ));
+
+    let mut derived_tamper: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    derived_tamper["candidates"][0]["false_discovery_rate_q"] = serde_json::json!(0.9);
+    let derived_tamper = serde_json::to_vec(&derived_tamper).unwrap();
+    assert!(SignificanceStudyArtifact::from_json_slice(&derived_tamper).is_err());
+    assert!(SignificanceStudyArtifact::resealed_from_json(&derived_tamper).is_err());
+
+    let mut source_tamper: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    source_tamper["source_field_zstd"][0][0] = serde_json::json!(b'!');
+    let source_tamper = serde_json::to_vec(&source_tamper).unwrap();
+    assert!(SignificanceStudyArtifact::from_json_slice(&source_tamper).is_err());
+    assert!(SignificanceStudyArtifact::resealed_from_json(&source_tamper).is_err());
+
+    assert!(execute_significance_study(&[], policy).is_err());
+    assert!(execute_significance_study(
+        std::slice::from_ref(&field),
+        SignificancePolicy {
+            minimum_observations: 10,
+            ..policy
+        }
+    )
+    .is_err());
 }
