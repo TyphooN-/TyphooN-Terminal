@@ -1170,6 +1170,7 @@ impl SearchDataLease {
 /// consuming the quarantine, so no API can return to search after the holdout is burned.
 #[derive(Debug)]
 pub struct BurnedHoldout {
+    search_dataset_id: String,
     dataset_id: String,
     range: Range<usize>,
     reason: String,
@@ -1180,6 +1181,9 @@ impl BurnedHoldout {
     }
     pub fn reason(&self) -> &str {
         &self.reason
+    }
+    pub fn search_dataset_id(&self) -> &str {
+        &self.search_dataset_id
     }
     pub fn dataset_id(&self) -> &str {
         &self.dataset_id
@@ -1252,6 +1256,7 @@ impl HoldoutQuarantine {
             return Err(OptimizationError::InvalidObservation);
         }
         Ok(BurnedHoldout {
+            search_dataset_id: self.search_dataset_id,
             dataset_id: self.final_holdout_dataset_id,
             range: self.total - self.holdout..self.total,
             reason,

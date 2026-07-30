@@ -13,7 +13,7 @@ use crate::core::strategy_dataset::DatasetManifest;
 use crate::core::strategy_ir::{
     DatasetBinding, RunBinding, StrategyExecutionConfig, StrategyIr, StrategyRunManifest,
 };
-use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
+use crate::core::strategy_metrics::{METRICS_SCHEMA_VERSION, MetricValue};
 use crate::core::strategy_optimization::{
     BurnedHoldout, CalendarFoldPlan, CalendarWalkForwardConfig, CalendarWindowBounds, FoldPlan,
     MAX_ARTIFACT_BYTES, MAX_MONTE_CARLO_TRIALS, MAX_SEARCH_COMBINATIONS, MAX_TRIAL_BUDGET,
@@ -29,7 +29,7 @@ use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
 use crate::core::strategy_significance::SignificanceStudyArtifact;
 use crate::core::strategy_simulator::run_verified_simulation;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -51,6 +51,7 @@ pub enum RetestError {
     Optimization(OptimizationError),
     Sqlite(String),
     DuplicateLineage,
+    HoldoutAlreadyConsumed,
     Immutable,
 }
 impl std::fmt::Display for RetestError {
@@ -196,6 +197,210 @@ impl CompletedRetest {
     }
 }
 
+const FINAL_HOLDOUT_REQUEST_DOMAIN: &[u8] = b"typhoon.strategy_retest.final_holdout.v1";
+const MAX_HOLDOUT_REASON_BYTES: usize = 512;
+
+/// The sole capability that carries final-holdout bars into execution. It cannot be constructed
+/// from a search/robustness lease: callers must consume [`HoldoutQuarantine`](crate::core::strategy_optimization::HoldoutQuarantine)
+/// into the non-clone [`BurnedHoldout`] token first.
+#[derive(Debug)]
+pub struct FinalHoldoutExecutionRequest {
+    request_id: String,
+    strategy: StrategyIr,
+    config: StrategyExecutionConfig,
+    search_manifest: DatasetManifest,
+    holdout_manifest: DatasetManifest,
+    holdout_bars: Vec<Bar>,
+    range: Range<usize>,
+    reason: String,
+    metric_id: String,
+    seed: u64,
+    evaluations_n: usize,
+}
+impl FinalHoldoutExecutionRequest {
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal(
+        strategy: &StrategyIr,
+        config: &StrategyExecutionConfig,
+        parent_manifest: &DatasetManifest,
+        parent_bars: &[Bar],
+        burned: BurnedHoldout,
+        metric_id: impl Into<String>,
+        seed: u64,
+        evaluations_n: usize,
+    ) -> Result<Self, RetestError> {
+        parent_manifest.verify(parent_bars).map_err(invalid)?;
+        let range = burned.range();
+        if range.start == 0 || range.end != parent_bars.len() || range.start >= range.end {
+            return Err(RetestError::Invalid(
+                "burn capability does not name a terminal parent partition".into(),
+            ));
+        }
+        let manifest_input = parent_manifest.to_input();
+        let search_manifest = DatasetManifest::build(&manifest_input, &parent_bars[..range.start])
+            .map_err(invalid)?;
+        let holdout_bars = parent_bars[range.clone()].to_vec();
+        let holdout_manifest =
+            DatasetManifest::build(&manifest_input, &holdout_bars).map_err(invalid)?;
+        let mut request = Self {
+            request_id: String::new(),
+            strategy: strategy.clone(),
+            config: config.clone(),
+            search_manifest,
+            holdout_manifest,
+            holdout_bars,
+            range,
+            reason: burned.reason().to_string(),
+            metric_id: metric_id.into(),
+            seed,
+            evaluations_n,
+        };
+        if burned.search_dataset_id() != request.search_manifest.dataset_id
+            || burned.dataset_id() != request.holdout_manifest.dataset_id
+        {
+            return Err(RetestError::Invalid(
+                "burn capability names foreign dataset content".into(),
+            ));
+        }
+        request.validate()?;
+        request.request_id = request.compute_id();
+        Ok(request)
+    }
+    pub fn request_id(&self) -> &str {
+        &self.request_id
+    }
+    pub fn search_dataset_id(&self) -> &str {
+        &self.search_manifest.dataset_id
+    }
+    pub fn holdout_dataset_id(&self) -> &str {
+        &self.holdout_manifest.dataset_id
+    }
+    fn validate(&self) -> Result<(), RetestError> {
+        self.strategy.verify().map_err(invalid)?;
+        self.config.verify().map_err(invalid)?;
+        self.search_manifest.verify_seal().map_err(invalid)?;
+        self.holdout_manifest
+            .verify(&self.holdout_bars)
+            .map_err(invalid)?;
+        let search_count = usize::try_from(self.search_manifest.bar_count)
+            .map_err(|_| RetestError::Invalid("search dataset is too large".into()))?;
+        if self.search_manifest.dataset_id == self.holdout_manifest.dataset_id
+            || self.range.start != search_count
+            || self.range.end != search_count.saturating_add(self.holdout_bars.len())
+            || self.range.len() != self.holdout_bars.len()
+            || self.reason.trim().is_empty()
+            || self.reason.len() > MAX_HOLDOUT_REASON_BYTES
+            || self.metric_id.trim().is_empty()
+            || self.evaluations_n == 0
+            || self.evaluations_n > MAX_TRIAL_BUDGET
+        {
+            return Err(RetestError::Invalid(
+                "invalid final-holdout execution binding".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn verify(&self) -> Result<(), RetestError> {
+        self.validate()?;
+        if self.request_id != self.compute_id() {
+            return Err(RetestError::Invalid(
+                "final-holdout request identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn compute_id(&self) -> String {
+        final_holdout_request_id(
+            self.strategy.strategy_id(),
+            self.config.config_id(),
+            &self.search_manifest.dataset_id,
+            &self.search_manifest.manifest_id,
+            &self.holdout_manifest.dataset_id,
+            &self.holdout_manifest.manifest_id,
+            &self.reason,
+            &self.metric_id,
+            METRICS_SCHEMA_VERSION,
+            &self.range,
+            self.seed,
+            self.evaluations_n,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn final_holdout_request_id(
+    strategy_id: &str,
+    config_id: &str,
+    search_dataset_id: &str,
+    search_manifest_id: &str,
+    holdout_dataset_id: &str,
+    holdout_manifest_id: &str,
+    reason: &str,
+    metric_id: &str,
+    metrics_version: &str,
+    range: &Range<usize>,
+    seed: u64,
+    evaluations_n: usize,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(FINAL_HOLDOUT_REQUEST_DOMAIN);
+    for value in [
+        strategy_id,
+        config_id,
+        search_dataset_id,
+        search_manifest_id,
+        holdout_dataset_id,
+        holdout_manifest_id,
+        reason,
+        metric_id,
+        metrics_version,
+    ] {
+        frame(&mut hasher, value.as_bytes());
+    }
+    hasher.update((range.start as u64).to_be_bytes());
+    hasher.update((range.end as u64).to_be_bytes());
+    hasher.update(seed.to_be_bytes());
+    hasher.update((evaluations_n as u64).to_be_bytes());
+    hex(hasher.finalize())
+}
+
+#[derive(Debug)]
+pub struct CompletedFinalHoldout {
+    request_id: String,
+    strategy_id: String,
+    config_id: String,
+    report: StrategyReportArtifact,
+    metric_id: String,
+    metric_value: f64,
+    evaluations_n: usize,
+}
+impl CompletedFinalHoldout {
+    pub fn request_id(&self) -> &str {
+        &self.request_id
+    }
+    pub fn run_id(&self) -> &str {
+        self.report.run_id()
+    }
+    pub fn strategy_id(&self) -> &str {
+        &self.strategy_id
+    }
+    pub fn config_id(&self) -> &str {
+        &self.config_id
+    }
+    pub fn report(&self) -> &StrategyReportArtifact {
+        &self.report
+    }
+    pub fn metric_id(&self) -> &str {
+        &self.metric_id
+    }
+    pub fn metric_value(&self) -> f64 {
+        self.metric_value
+    }
+    pub fn evaluations_n(&self) -> usize {
+        self.evaluations_n
+    }
+}
+
 pub fn execute_retest(
     request: RetestExecutionRequest,
     pipeline: &RobustnessPipeline,
@@ -274,6 +479,48 @@ pub(crate) fn execute_bound_observation(
         .metric(&request.metric_id)
         .ok_or_else(|| RetestError::Invalid("report metric is undefined".into()))?;
     Ok((report, observation, metric_value))
+}
+
+fn execute_verified_report(
+    strategy: &StrategyIr,
+    config: &StrategyExecutionConfig,
+    dataset: &DatasetManifest,
+    bars: &[Bar],
+    seed: u64,
+) -> Result<StrategyReportArtifact, RetestError> {
+    dataset.verify(bars).map_err(invalid)?;
+    let manifest = StrategyRunManifest::build(&RunBinding {
+        datasets: vec![DatasetBinding {
+            input_id: "primary".into(),
+            dataset_id: dataset.dataset_id.clone(),
+        }],
+        sub_bar_datasets: vec![],
+        strategy_id: strategy.strategy_id().to_string(),
+        config_id: config.config_id().to_string(),
+        seed,
+        engine_version: RETEST_ENGINE_VERSION.into(),
+        metrics_version: METRICS_SCHEMA_VERSION.into(),
+        intervention_log_id: None,
+        repaint_qa: vec![],
+    })
+    .map_err(invalid)?;
+    let inputs = [RunDatasetInput {
+        input_id: "primary",
+        manifest: dataset,
+        bars,
+    }];
+    let verified = assemble_verified_run(strategy, config, &manifest, &inputs).map_err(invalid)?;
+    let simulation = run_verified_simulation(&verified).map_err(invalid)?;
+    let report = StrategyReportArtifact::build_for_verified_run(
+        &verified,
+        &simulation,
+        config.settings().initial_capital,
+    )
+    .map_err(invalid)?;
+    report
+        .verify_against(&manifest, &simulation)
+        .map_err(invalid)?;
+    Ok(report)
 }
 
 pub const TRADE_MONTE_CARLO_SCHEMA_VERSION: u32 = 1;
@@ -2296,6 +2543,46 @@ pub struct HoldoutConsumptionRecord {
     pub consumed_sequence: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalHoldoutOutcome {
+    Reserved,
+    Succeeded,
+    Failed,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinalHoldoutRecord {
+    pub request_id: String,
+    pub search_dataset_id: String,
+    pub search_manifest_id: String,
+    pub holdout_dataset_id: String,
+    pub holdout_manifest_id: String,
+    pub strategy_id: String,
+    pub config_id: String,
+    pub range: Range<usize>,
+    pub seed: u64,
+    pub reason: String,
+    pub metric_id: String,
+    pub metrics_version: String,
+    pub evaluations_n: usize,
+    pub reserved_sequence: i64,
+    pub outcome: FinalHoldoutOutcome,
+    pub run_id: Option<String>,
+    pub report_id: Option<String>,
+    pub metric_value: Option<f64>,
+    pub failure: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalHoldoutQuery {
+    pub search_dataset_id: String,
+    pub after_sequence: Option<i64>,
+    pub limit: usize,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinalHoldoutPage {
+    pub records: Vec<FinalHoldoutRecord>,
+    pub has_more: bool,
+}
+
 /// Blocking store. GUI/native callers must own it on a bounded background worker, as with the M3
 /// databank store; no method here is a render-thread API.
 pub struct RetestEvidenceStore {
@@ -2312,6 +2599,7 @@ impl RetestEvidenceStore {
         connection.execute_batch(
             "PRAGMA foreign_keys=ON;
              PRAGMA journal_mode=WAL;
+             PRAGMA busy_timeout=5000;
              CREATE TABLE IF NOT EXISTS retest_evidence(
                run_id TEXT PRIMARY KEY,
                request_id TEXT NOT NULL UNIQUE,
@@ -2353,6 +2641,49 @@ impl RetestEvidenceStore {
              ) WITHOUT ROWID;
              CREATE INDEX IF NOT EXISTS idx_holdout_sequence
                ON holdout_consumption(dataset_id, consumed_sequence);
+             CREATE TABLE IF NOT EXISTS final_holdout_execution(
+               request_id TEXT PRIMARY KEY,
+               search_dataset_id TEXT NOT NULL UNIQUE,
+               search_manifest_id TEXT NOT NULL,
+               holdout_dataset_id TEXT NOT NULL UNIQUE,
+               holdout_manifest_id TEXT NOT NULL,
+               strategy_id TEXT NOT NULL,
+               config_id TEXT NOT NULL,
+               range_start INTEGER NOT NULL,
+               range_end INTEGER NOT NULL,
+               seed INTEGER NOT NULL,
+               reason TEXT NOT NULL,
+               metric_id TEXT NOT NULL,
+               metrics_version TEXT NOT NULL,
+               evaluations_n INTEGER NOT NULL,
+               reserved_sequence INTEGER NOT NULL,
+               outcome TEXT NOT NULL CHECK(outcome IN ('reserved','succeeded','failed')),
+               run_id TEXT,
+               report_id TEXT,
+               metric_value REAL,
+               report_json BLOB,
+               failure TEXT,
+               CHECK((outcome='reserved' AND run_id IS NULL AND report_id IS NULL AND metric_value IS NULL AND report_json IS NULL AND failure IS NULL)
+                  OR (outcome='succeeded' AND run_id IS NOT NULL AND report_id IS NOT NULL AND metric_value IS NOT NULL AND report_json IS NOT NULL AND failure IS NULL)
+                  OR (outcome='failed' AND run_id IS NULL AND report_id IS NULL AND metric_value IS NULL AND report_json IS NULL AND length(failure)>0))
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS idx_final_holdout_search_sequence
+               ON final_holdout_execution(search_dataset_id, reserved_sequence, request_id);
+             CREATE TRIGGER IF NOT EXISTS immutable_final_holdout_identity
+               BEFORE UPDATE ON final_holdout_execution
+               WHEN OLD.outcome <> 'reserved'
+                 OR NEW.request_id <> OLD.request_id
+                 OR NEW.search_dataset_id <> OLD.search_dataset_id
+                 OR NEW.search_manifest_id <> OLD.search_manifest_id
+                 OR NEW.holdout_dataset_id <> OLD.holdout_dataset_id
+                 OR NEW.holdout_manifest_id <> OLD.holdout_manifest_id
+                 OR NEW.strategy_id <> OLD.strategy_id OR NEW.config_id <> OLD.config_id
+                 OR NEW.range_start <> OLD.range_start OR NEW.range_end <> OLD.range_end
+                 OR NEW.seed <> OLD.seed OR NEW.reason <> OLD.reason
+                 OR NEW.metric_id <> OLD.metric_id OR NEW.metrics_version <> OLD.metrics_version
+                 OR NEW.evaluations_n <> OLD.evaluations_n OR NEW.reserved_sequence <> OLD.reserved_sequence
+               BEGIN SELECT RAISE(ABORT, 'final holdout evidence is immutable'); END;
+             CREATE TRIGGER IF NOT EXISTS immutable_final_holdout_delete BEFORE DELETE ON final_holdout_execution BEGIN SELECT RAISE(ABORT, 'final holdout evidence is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_retest_update BEFORE UPDATE ON retest_evidence BEGIN SELECT RAISE(ABORT, 'retest evidence is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_retest_delete BEFORE DELETE ON retest_evidence BEGIN SELECT RAISE(ABORT, 'retest evidence is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_study_update BEFORE UPDATE ON study_artifact BEGIN SELECT RAISE(ABORT, 'study artifact is immutable'); END;
@@ -2364,6 +2695,224 @@ impl RetestEvidenceStore {
             connection: RefCell::new(connection),
         })
     }
+    pub fn execute_final_holdout(
+        &self,
+        request: FinalHoldoutExecutionRequest,
+        reserved_sequence: i64,
+    ) -> Result<CompletedFinalHoldout, RetestError> {
+        request.verify()?;
+        {
+            let mut connection = self.connection.borrow_mut();
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let result = transaction.execute(
+                "INSERT INTO final_holdout_execution(request_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'reserved')",
+                params![
+                    request.request_id,
+                    request.search_manifest.dataset_id,
+                    request.search_manifest.manifest_id,
+                    request.holdout_manifest.dataset_id,
+                    request.holdout_manifest.manifest_id,
+                    request.strategy.strategy_id(),
+                    request.config.config_id(),
+                    to_i64(request.range.start)?,
+                    to_i64(request.range.end)?,
+                    u64_to_sqlite(request.seed),
+                    request.reason,
+                    request.metric_id,
+                    METRICS_SCHEMA_VERSION,
+                    to_i64(request.evaluations_n)?,
+                    reserved_sequence,
+                ],
+            );
+            if let Err(error) = result {
+                if error.to_string().contains("UNIQUE constraint failed") {
+                    return Err(RetestError::HoldoutAlreadyConsumed);
+                }
+                return Err(error.into());
+            }
+            transaction.commit()?;
+        }
+
+        let execution = (|| {
+            let report = execute_verified_report(
+                &request.strategy,
+                &request.config,
+                &request.holdout_manifest,
+                &request.holdout_bars,
+                request.seed,
+            )?;
+            let metric_value = match report
+                .analysis()
+                .metric(&request.metric_id)
+                .ok_or_else(|| RetestError::Invalid("final-holdout metric is undefined".into()))?
+            {
+                MetricValue::Defined { value } if value.is_finite() => *value,
+                _ => {
+                    return Err(RetestError::Invalid(
+                        "final-holdout metric is not finite numeric evidence".into(),
+                    ));
+                }
+            };
+            let report_json = report.to_json_vec().map_err(invalid)?;
+            Ok((report, metric_value, report_json))
+        })();
+        match execution {
+            Ok((report, metric_value, report_json)) => {
+                self.connection.borrow().execute(
+                    "UPDATE final_holdout_execution SET outcome='succeeded',run_id=?2,report_id=?3,metric_value=?4,report_json=?5 WHERE request_id=?1 AND outcome='reserved'",
+                    params![request.request_id, report.run_id(), report.report_id(), metric_value, report_json],
+                )?;
+                Ok(CompletedFinalHoldout {
+                    request_id: request.request_id,
+                    strategy_id: request.strategy.strategy_id().to_string(),
+                    config_id: request.config.config_id().to_string(),
+                    report,
+                    metric_id: request.metric_id,
+                    metric_value,
+                    evaluations_n: request.evaluations_n,
+                })
+            }
+            Err(error) => {
+                let failure = error.to_string();
+                self.connection.borrow().execute(
+                    "UPDATE final_holdout_execution SET outcome='failed',failure=?2 WHERE request_id=?1 AND outcome='reserved'",
+                    params![request.request_id, failure],
+                )?;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn query_final_holdouts(
+        &self,
+        query: &FinalHoldoutQuery,
+    ) -> Result<FinalHoldoutPage, RetestError> {
+        validate_page_query(&query.search_dataset_id, query.limit)?;
+        let after = query.after_sequence.unwrap_or(i64::MIN);
+        let fetch = to_i64(query.limit.saturating_add(1))?;
+        let connection = self.connection.borrow();
+        let mut statement = connection.prepare(
+            "SELECT request_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome,run_id,report_id,metric_value,failure,report_json
+             FROM final_holdout_execution
+             INDEXED BY idx_final_holdout_search_sequence
+             WHERE search_dataset_id=?1 AND reserved_sequence>?2
+             ORDER BY reserved_sequence,request_id LIMIT ?3",
+        )?;
+        let mapped =
+            statement.query_map(params![query.search_dataset_id, after, fetch], |row| {
+                let outcome: String = row.get(15)?;
+                let report_json: Option<Vec<u8>> = row.get(20)?;
+                Ok((
+                    FinalHoldoutRecord {
+                        request_id: row.get(0)?,
+                        search_dataset_id: row.get(1)?,
+                        search_manifest_id: row.get(2)?,
+                        holdout_dataset_id: row.get(3)?,
+                        holdout_manifest_id: row.get(4)?,
+                        strategy_id: row.get(5)?,
+                        config_id: row.get(6)?,
+                        range: usize::try_from(row.get::<_, i64>(7)?).unwrap_or(usize::MAX)
+                            ..usize::try_from(row.get::<_, i64>(8)?).unwrap_or(usize::MAX),
+                        seed: sqlite_to_u64(row.get::<_, i64>(9)?),
+                        reason: row.get(10)?,
+                        metric_id: row.get(11)?,
+                        metrics_version: row.get(12)?,
+                        evaluations_n: usize::try_from(row.get::<_, i64>(13)?)
+                            .unwrap_or(usize::MAX),
+                        reserved_sequence: row.get(14)?,
+                        outcome: match outcome.as_str() {
+                            "reserved" => FinalHoldoutOutcome::Reserved,
+                            "succeeded" => FinalHoldoutOutcome::Succeeded,
+                            _ => FinalHoldoutOutcome::Failed,
+                        },
+                        run_id: row.get(16)?,
+                        report_id: row.get(17)?,
+                        metric_value: row.get(18)?,
+                        failure: row.get(19)?,
+                    },
+                    report_json,
+                ))
+            })?;
+        let mut records = Vec::new();
+        for mapped_row in mapped {
+            let (record, report_json) = mapped_row?;
+            validate_final_holdout_record(&record, report_json.as_deref())?;
+            records.push(record);
+        }
+        let has_more = records.len() > query.limit;
+        records.truncate(query.limit);
+        Ok(FinalHoldoutPage { records, has_more })
+    }
+
+    pub fn explain_final_holdout_query(
+        &self,
+        query: &FinalHoldoutQuery,
+    ) -> Result<Vec<String>, RetestError> {
+        validate_page_query(&query.search_dataset_id, query.limit)?;
+        let connection = self.connection.borrow();
+        let mut statement = connection.prepare(
+            "EXPLAIN QUERY PLAN SELECT request_id FROM final_holdout_execution INDEXED BY idx_final_holdout_search_sequence WHERE search_dataset_id=?1 AND reserved_sequence>?2 ORDER BY reserved_sequence,request_id LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                query.search_dataset_id,
+                query.after_sequence.unwrap_or(i64::MIN),
+                to_i64(query.limit)?
+            ],
+            |row| row.get(3),
+        )?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    #[cfg(test)]
+    fn test_only_tamper_final_holdout_report(&self, request_id: &str) -> Result<(), RetestError> {
+        self.connection
+            .borrow()
+            .execute_batch("DROP TRIGGER immutable_final_holdout_identity;")?;
+        self.connection.borrow().execute(
+            "UPDATE final_holdout_execution SET report_json=X'00' WHERE request_id=?1",
+            params![request_id],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn test_only_tamper_final_holdout_identity(&self, request_id: &str) -> Result<(), RetestError> {
+        self.connection
+            .borrow()
+            .execute_batch("DROP TRIGGER immutable_final_holdout_identity;")?;
+        self.connection.borrow().execute(
+            "UPDATE final_holdout_execution SET reason=reason||'x' WHERE request_id=?1",
+            params![request_id],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn test_only_reserve_final_holdout(
+        &self,
+        request: &FinalHoldoutExecutionRequest,
+        reserved_sequence: i64,
+    ) -> Result<(), RetestError> {
+        request.verify()?;
+        self.connection.borrow().execute(
+            "INSERT INTO final_holdout_execution(request_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'reserved')",
+            params![request.request_id,request.search_manifest.dataset_id,request.search_manifest.manifest_id,request.holdout_manifest.dataset_id,request.holdout_manifest.manifest_id,request.strategy.strategy_id(),request.config.config_id(),to_i64(request.range.start)?,to_i64(request.range.end)?,u64_to_sqlite(request.seed),request.reason,request.metric_id,METRICS_SCHEMA_VERSION,to_i64(request.evaluations_n)?,reserved_sequence],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn test_only_update_final_holdout(&self) -> Result<(), RetestError> {
+        self.connection
+            .borrow()
+            .execute("UPDATE final_holdout_execution SET reason=reason||'x'", [])?;
+        Ok(())
+    }
+
     pub fn persist(
         &self,
         completed: &CompletedRetest,
@@ -3065,6 +3614,111 @@ fn decode_verdict(value: i64) -> rusqlite::Result<StageVerdict> {
         0 => Ok(StageVerdict::Fail),
         _ => Err(rusqlite::Error::IntegralValueOutOfRange(4, value)),
     }
+}
+fn validate_page_query(id: &str, limit: usize) -> Result<(), RetestError> {
+    if !is_id(id) || limit == 0 || limit > MAX_RETEST_QUERY_LIMIT {
+        return Err(RetestError::Invalid("invalid final-holdout query".into()));
+    }
+    Ok(())
+}
+fn validate_final_holdout_record(
+    record: &FinalHoldoutRecord,
+    report_json: Option<&[u8]>,
+) -> Result<(), RetestError> {
+    if !is_id(&record.request_id)
+        || !is_id(&record.search_dataset_id)
+        || !is_id(&record.search_manifest_id)
+        || !is_id(&record.holdout_dataset_id)
+        || !is_id(&record.holdout_manifest_id)
+        || !is_id(&record.strategy_id)
+        || !is_id(&record.config_id)
+        || record.metrics_version != METRICS_SCHEMA_VERSION
+        || record.range.start >= record.range.end
+        || record.evaluations_n == 0
+        || record.request_id
+            != final_holdout_request_id(
+                &record.strategy_id,
+                &record.config_id,
+                &record.search_dataset_id,
+                &record.search_manifest_id,
+                &record.holdout_dataset_id,
+                &record.holdout_manifest_id,
+                &record.reason,
+                &record.metric_id,
+                &record.metrics_version,
+                &record.range,
+                record.seed,
+                record.evaluations_n,
+            )
+    {
+        return Err(RetestError::Invalid(
+            "invalid persisted final-holdout identity".into(),
+        ));
+    }
+    match record.outcome {
+        FinalHoldoutOutcome::Reserved => {
+            if record.run_id.is_some()
+                || record.report_id.is_some()
+                || record.metric_value.is_some()
+                || record.failure.is_some()
+                || report_json.is_some()
+            {
+                return Err(RetestError::Invalid(
+                    "invalid reserved holdout evidence".into(),
+                ));
+            }
+        }
+        FinalHoldoutOutcome::Failed => {
+            if record.failure.as_deref().is_none_or(str::is_empty)
+                || report_json.is_some()
+                || record.run_id.is_some()
+                || record.report_id.is_some()
+            {
+                return Err(RetestError::Invalid(
+                    "invalid failed holdout evidence".into(),
+                ));
+            }
+        }
+        FinalHoldoutOutcome::Succeeded => {
+            let bytes = report_json.ok_or_else(|| {
+                RetestError::Invalid("successful holdout report evidence is missing".into())
+            })?;
+            let report = StrategyReportArtifact::from_json_slice(bytes).map_err(invalid)?;
+            if record.run_id.as_deref() != Some(report.run_id())
+                || record.report_id.as_deref() != Some(report.report_id())
+                || report.run_manifest().is_none_or(|manifest| {
+                    manifest.binding().strategy_id != record.strategy_id
+                        || manifest.binding().config_id != record.config_id
+                        || manifest.binding().seed != record.seed
+                        || manifest
+                            .binding()
+                            .datasets
+                            .first()
+                            .is_none_or(|dataset| dataset.dataset_id != record.holdout_dataset_id)
+                })
+            {
+                return Err(RetestError::Invalid(
+                    "persisted final-holdout report identity mismatch".into(),
+                ));
+            }
+            let metric = match report.analysis().metric(&record.metric_id) {
+                Some(MetricValue::Defined { value }) if value.is_finite() => Some(*value),
+                _ => None,
+            };
+            if metric != record.metric_value {
+                return Err(RetestError::Invalid(
+                    "persisted final-holdout metric mismatch".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+fn u64_to_sqlite(value: u64) -> i64 {
+    value as i64
+}
+fn sqlite_to_u64(value: i64) -> u64 {
+    value as u64
 }
 fn to_i64(value: usize) -> Result<i64, RetestError> {
     i64::try_from(value).map_err(|_| RetestError::Invalid("integer exceeds SQLite range".into()))

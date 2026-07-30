@@ -408,6 +408,323 @@ fn holdout_consumption_is_one_way_immutable_and_index_queryable() {
     assert!(store.test_only_update_holdout(&"f".repeat(64)).is_err());
 }
 
+fn final_holdout_fixture(metric_id: &str) -> FinalHoldoutExecutionRequest {
+    let (strategy, config, search_bars, _) = fixture();
+    let holdout_bars = vec![
+        Bar {
+            timestamp: "2026-01-09T00:00:00Z".into(),
+            open: 108.0,
+            high: 110.0,
+            low: 107.0,
+            close: 109.0,
+            volume: 100.0,
+        },
+        Bar {
+            timestamp: "2026-01-10T00:00:00Z".into(),
+            open: 109.0,
+            high: 111.0,
+            low: 108.0,
+            close: 110.0,
+            volume: 100.0,
+        },
+    ];
+    let search_len = search_bars.len();
+    let holdout_len = holdout_bars.len();
+    let mut parent_bars = search_bars;
+    parent_bars.extend(holdout_bars);
+    let parent_manifest = manifest(&parent_bars);
+    let search_manifest =
+        DatasetManifest::build(&parent_manifest.to_input(), &parent_bars[..8]).unwrap();
+    let holdout_manifest =
+        DatasetManifest::build(&parent_manifest.to_input(), &parent_bars[8..]).unwrap();
+    let quarantine = HoldoutQuarantine::new(
+        &search_manifest.dataset_id,
+        &holdout_manifest.dataset_id,
+        search_len + holdout_len,
+        holdout_len,
+    )
+    .unwrap();
+    FinalHoldoutExecutionRequest::seal(
+        &strategy,
+        &config,
+        &parent_manifest,
+        &parent_bars,
+        quarantine.burn("promotion decision").unwrap(),
+        metric_id,
+        41,
+        17,
+    )
+    .unwrap()
+}
+
+#[test]
+fn final_holdout_executes_exact_bars_and_persists_all_identity_evidence() {
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    let request = final_holdout_fixture("net_profit");
+    let search_dataset_id = request.search_dataset_id().to_string();
+    let holdout_dataset_id = request.holdout_dataset_id().to_string();
+    let completed = store.execute_final_holdout(request, 10).unwrap();
+
+    completed.report().verify().unwrap();
+    assert_eq!(completed.request_id().len(), 64);
+    assert_eq!(completed.report().run_id(), completed.run_id());
+    assert_eq!(completed.evaluations_n(), 17);
+    assert_eq!(completed.metric_id(), "net_profit");
+    assert!(completed.metric_value().is_finite());
+    let page = store
+        .query_final_holdouts(&FinalHoldoutQuery {
+            search_dataset_id,
+            after_sequence: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(page.records.len(), 1);
+    assert!(!page.has_more);
+    let record = &page.records[0];
+    assert_eq!(record.holdout_dataset_id, holdout_dataset_id);
+    assert_eq!(record.range, 8..10);
+    assert_eq!(record.reason, "promotion decision");
+    assert_eq!(record.strategy_id, completed.strategy_id());
+    assert_eq!(record.config_id, completed.config_id());
+    assert_eq!(record.seed, 41);
+    assert_eq!(record.evaluations_n, 17);
+    assert_eq!(record.run_id.as_deref(), Some(completed.run_id()));
+    assert_eq!(
+        record.report_id.as_deref(),
+        Some(completed.report().report_id())
+    );
+    assert_eq!(record.outcome, FinalHoldoutOutcome::Succeeded);
+    assert!(record.failure.is_none());
+
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    let mut maximum_seed = final_holdout_fixture("net_profit");
+    maximum_seed.seed = u64::MAX;
+    maximum_seed.request_id = maximum_seed.compute_id();
+    let search_dataset_id = maximum_seed.search_dataset_id().to_string();
+    store.execute_final_holdout(maximum_seed, 11).unwrap();
+    let page = store
+        .query_final_holdouts(&FinalHoldoutQuery {
+            search_dataset_id,
+            after_sequence: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(page.records[0].seed, u64::MAX);
+}
+
+#[test]
+fn final_holdout_rejects_wrong_range_content_foreign_inputs_and_tampering() {
+    let mut request = final_holdout_fixture("net_profit");
+    request.range.end += 1;
+    assert!(
+        RetestEvidenceStore::open_in_memory()
+            .unwrap()
+            .execute_final_holdout(request, 1)
+            .is_err()
+    );
+
+    let mut request = final_holdout_fixture("net_profit");
+    request.holdout_bars[0].close += 1.0;
+    assert!(
+        RetestEvidenceStore::open_in_memory()
+            .unwrap()
+            .execute_final_holdout(request, 1)
+            .is_err()
+    );
+
+    let mut request = final_holdout_fixture("net_profit");
+    request.strategy = trading_fixture().0;
+    assert!(
+        RetestEvidenceStore::open_in_memory()
+            .unwrap()
+            .execute_final_holdout(request, 1)
+            .is_err()
+    );
+
+    let mut request = final_holdout_fixture("net_profit");
+    let mut settings = request.config.to_input();
+    settings.warmup_bars = 1;
+    request.config = StrategyExecutionConfig::build(&settings).unwrap();
+    assert!(
+        RetestEvidenceStore::open_in_memory()
+            .unwrap()
+            .execute_final_holdout(request, 1)
+            .is_err()
+    );
+
+    let mut request = final_holdout_fixture("net_profit");
+    let mut foreign_search_bars = bars();
+    foreign_search_bars[0].close += 0.5;
+    request.search_manifest = manifest(&foreign_search_bars);
+    assert!(
+        RetestEvidenceStore::open_in_memory()
+            .unwrap()
+            .execute_final_holdout(request, 1)
+            .is_err()
+    );
+
+    let mut request = final_holdout_fixture("net_profit");
+    request.request_id.replace_range(0..1, "0");
+    assert!(
+        RetestEvidenceStore::open_in_memory()
+            .unwrap()
+            .execute_final_holdout(request, 1)
+            .is_err()
+    );
+}
+
+#[test]
+fn duplicate_concurrent_final_holdout_attempts_cannot_both_execute() {
+    let path = std::env::temp_dir().join(format!(
+        "typhoon-final-holdout-race-{}-{}.sqlite",
+        std::process::id(),
+        final_holdout_fixture("net_profit").request_id()
+    ));
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let mut handles = Vec::new();
+    for sequence in [1, 2] {
+        let path = path.clone();
+        let barrier = barrier.clone();
+        handles.push(std::thread::spawn(move || {
+            let store = RetestEvidenceStore::open(&path).unwrap();
+            let request = final_holdout_fixture("net_profit");
+            barrier.wait();
+            store.execute_final_holdout(request, sequence)
+        }));
+    }
+    let outcomes = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+    assert_eq!(
+        outcomes.iter().filter(|outcome| outcome.is_err()).count(),
+        1
+    );
+    let store = RetestEvidenceStore::open(&path).unwrap();
+    let query = FinalHoldoutQuery {
+        search_dataset_id: final_holdout_fixture("net_profit")
+            .search_dataset_id()
+            .to_string(),
+        after_sequence: None,
+        limit: 2,
+    };
+    assert_eq!(store.query_final_holdouts(&query).unwrap().records.len(), 1);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn failed_or_crashed_final_holdout_attempt_remains_burned_across_restart() {
+    let path = std::env::temp_dir().join(format!(
+        "typhoon-final-holdout-restart-{}-{}.sqlite",
+        std::process::id(),
+        final_holdout_fixture("net_profit").request_id()
+    ));
+    {
+        let store = RetestEvidenceStore::open(&path).unwrap();
+        store
+            .test_only_reserve_final_holdout(&final_holdout_fixture("net_profit"), 1)
+            .unwrap();
+    }
+    let store = RetestEvidenceStore::open(&path).unwrap();
+    assert!(
+        store
+            .execute_final_holdout(final_holdout_fixture("net_profit"), 2)
+            .is_err()
+    );
+
+    let failed_path = std::env::temp_dir().join(format!(
+        "typhoon-final-holdout-failed-{}-{}.sqlite",
+        std::process::id(),
+        final_holdout_fixture("profit_factor").request_id()
+    ));
+    let failed_store = RetestEvidenceStore::open(&failed_path).unwrap();
+    assert!(
+        failed_store
+            .execute_final_holdout(final_holdout_fixture("profit_factor"), 3)
+            .is_err()
+    );
+    let query = FinalHoldoutQuery {
+        search_dataset_id: final_holdout_fixture("profit_factor")
+            .search_dataset_id()
+            .to_string(),
+        after_sequence: None,
+        limit: 1,
+    };
+    let failed = failed_store.query_final_holdouts(&query).unwrap();
+    assert_eq!(failed.records[0].outcome, FinalHoldoutOutcome::Failed);
+    assert!(
+        failed.records[0]
+            .failure
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(
+        failed_store
+            .execute_final_holdout(final_holdout_fixture("profit_factor"), 4)
+            .is_err()
+    );
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(failed_path);
+}
+
+#[test]
+fn final_holdout_query_is_bounded_deterministic_immutable_and_indexed() {
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    let request = final_holdout_fixture("net_profit");
+    let search_dataset_id = request.search_dataset_id().to_string();
+    store.execute_final_holdout(request, 5).unwrap();
+    let query = FinalHoldoutQuery {
+        search_dataset_id,
+        after_sequence: None,
+        limit: 1,
+    };
+    assert!(
+        store
+            .explain_final_holdout_query(&query)
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("idx_final_holdout_search_sequence"))
+    );
+    assert!(store.test_only_update_final_holdout().is_err());
+    let request_id = store.query_final_holdouts(&query).unwrap().records[0]
+        .request_id
+        .clone();
+    store
+        .test_only_tamper_final_holdout_report(&request_id)
+        .unwrap();
+    assert!(store.query_final_holdouts(&query).is_err());
+    assert!(
+        store
+            .query_final_holdouts(&FinalHoldoutQuery {
+                limit: MAX_RETEST_QUERY_LIMIT + 1,
+                ..query
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn final_holdout_persisted_identity_is_content_addressed_after_storage_tamper() {
+    let store = RetestEvidenceStore::open_in_memory().unwrap();
+    let request = final_holdout_fixture("net_profit");
+    let search_dataset_id = request.search_dataset_id().to_string();
+    let request_id = request.request_id().to_string();
+    store.execute_final_holdout(request, 5).unwrap();
+    store
+        .test_only_tamper_final_holdout_identity(&request_id)
+        .unwrap();
+    assert!(
+        store
+            .query_final_holdouts(&FinalHoldoutQuery {
+                search_dataset_id,
+                after_sequence: None,
+                limit: 1,
+            })
+            .is_err()
+    );
+}
+
 #[test]
 fn request_identity_changes_with_content_range_role_metric_and_run_inputs() {
     let (strategy, config, bars, manifest) = fixture();
