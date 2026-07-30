@@ -53,6 +53,21 @@ pub(crate) struct ProblemObservationRow {
     pub(crate) bound: String,
 }
 
+/// Provenance for one of the three sealed studies the verdict was derived from. Composed on the
+/// worker into display-ready strings: the decoded study itself, and the compressed bytes it came
+/// from, are dropped before the view crosses into UI state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProblemSourceRow {
+    pub(crate) study: &'static str,
+    pub(crate) artifact_id: String,
+    /// The identities this study binds — candidate/strategy, dataset, metric, config.
+    pub(crate) binds: String,
+    /// The evaluation scope it covers, which is what bounds what this verdict can speak for.
+    pub(crate) scope: String,
+    /// Set only if the sealed bytes failed to decode here; the other fields are then empty.
+    pub(crate) error: Option<String>,
+}
+
 /// Everything the panel is allowed to draw, prepared once on the worker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProblemRecognitionView {
@@ -65,6 +80,8 @@ pub(crate) struct ProblemRecognitionView {
     pub(crate) stages: Vec<ProblemStageRow>,
     pub(crate) omitted_stages: usize,
     pub(crate) observations: Vec<ProblemObservationRow>,
+    /// Exactly one row per sealed source study, in the order the engine derives from them.
+    pub(crate) sources: Vec<ProblemSourceRow>,
 }
 
 impl ProblemRecognitionView {
@@ -80,6 +97,7 @@ impl ProblemRecognitionView {
             stages,
             omitted_stages,
             observations: project_observations(&artifact.observations(), &artifact.policy()),
+            sources: project_sources(artifact),
         }
     }
 
@@ -153,6 +171,140 @@ fn project_stages(stages: &[StageEvidence]) -> (Vec<ProblemStageRow>, usize) {
         })
         .collect();
     (rows, omitted)
+}
+
+/// Decode the three sealed source studies and reduce each to one provenance row.
+///
+/// This is the second decompression pass, and it stays here on the worker for the same reason the
+/// first one does: `source_cross_check`/`source_oos`/`source_significance` each zstd-inflate an
+/// embedded study before returning it. Each decoded study is borrowed only long enough to copy the
+/// identities and counts out, then dropped — nothing decoded and no compressed byte reaches the
+/// view. `verify` already proved all three decode, so the `Err` arms are fail-closed defence, not
+/// an expected path.
+fn project_sources(artifact: &ProblemRecognitionArtifact) -> Vec<ProblemSourceRow> {
+    vec![
+        match artifact.source_cross_check() {
+            Ok(cross) => cross_check_row(
+                cross.artifact_id(),
+                cross.strategy_id(),
+                cross.source_dataset_id(),
+                cross.metric_id(),
+                cross.evaluations_n(),
+                cross.checks().len(),
+            ),
+            Err(error) => unreadable_source_row(CROSS_CHECK_STUDY, &error.to_string()),
+        },
+        match artifact.source_oos() {
+            Ok(oos) => oos_row(
+                oos.artifact_id(),
+                oos.candidate_id(),
+                oos.source_dataset_id(),
+                oos.metric_id(),
+                oos.config_id(),
+                oos.source_range().len(),
+                oos.executed_partitions().len(),
+            ),
+            Err(error) => unreadable_source_row(OOS_STUDY, &error.to_string()),
+        },
+        match artifact.source_significance() {
+            Ok(significance) => significance_row(
+                significance.artifact_id(),
+                significance.source_dataset_id(),
+                significance.metric_id(),
+                significance.evaluations_n(),
+                significance.candidates().len(),
+            ),
+            Err(error) => unreadable_source_row(SIGNIFICANCE_STUDY, &error.to_string()),
+        },
+    ]
+}
+
+const CROSS_CHECK_STUDY: &str = "Cross-check (§7.5)";
+const OOS_STUDY: &str = "Executed OOS (§7.1)";
+const SIGNIFICANCE_STUDY: &str = "Adjusted significance (§7.7)";
+
+fn cross_check_row(
+    artifact_id: &str,
+    strategy_id: &str,
+    dataset_id: &str,
+    metric_id: &str,
+    evaluations_n: usize,
+    checks: usize,
+) -> ProblemSourceRow {
+    source_row(
+        CROSS_CHECK_STUDY,
+        artifact_id,
+        format!(
+            "strategy {} · dataset {} · metric {metric_id}",
+            short_id(strategy_id),
+            short_id(dataset_id)
+        ),
+        format!("{evaluations_n} evaluations · {checks} sealed checks"),
+    )
+}
+
+fn oos_row(
+    artifact_id: &str,
+    candidate_id: &str,
+    dataset_id: &str,
+    metric_id: &str,
+    config_id: &str,
+    bars: usize,
+    partitions: usize,
+) -> ProblemSourceRow {
+    source_row(
+        OOS_STUDY,
+        artifact_id,
+        format!(
+            "candidate {} · dataset {} · config {} · metric {metric_id}",
+            short_id(candidate_id),
+            short_id(dataset_id),
+            short_id(config_id)
+        ),
+        format!("{bars} bars · {partitions} executed partitions"),
+    )
+}
+
+fn significance_row(
+    artifact_id: &str,
+    dataset_id: &str,
+    metric_id: &str,
+    evaluations_n: usize,
+    candidates: usize,
+) -> ProblemSourceRow {
+    source_row(
+        SIGNIFICANCE_STUDY,
+        artifact_id,
+        format!("dataset {} · metric {metric_id}", short_id(dataset_id)),
+        format!("{evaluations_n} evaluations · {candidates} candidates"),
+    )
+}
+
+fn source_row(
+    study: &'static str,
+    artifact_id: &str,
+    binds: String,
+    scope: String,
+) -> ProblemSourceRow {
+    ProblemSourceRow {
+        study,
+        artifact_id: artifact_id.to_string(),
+        binds,
+        scope,
+        error: None,
+    }
+}
+
+fn unreadable_source_row(study: &'static str, error: &str) -> ProblemSourceRow {
+    // Reuses the sealed-reason display bound so one long engine error cannot unbound a row.
+    let (error, _) = clamp_reason(error);
+    ProblemSourceRow {
+        study,
+        artifact_id: String::new(),
+        binds: String::new(),
+        scope: String::new(),
+        error: Some(error),
+    }
 }
 
 fn clamp_reason(reason: &str) -> (String, bool) {
@@ -413,6 +565,40 @@ pub(crate) fn render_problem_recognition(ui: &mut egui::Ui, view: &ProblemRecogn
                 ui.end_row();
             }
         });
+    ui.add_space(4.0);
+    ui.collapsing("Sealed evidence this verdict was derived from", |ui| {
+        ui.small(
+            "Identities and evaluation scope only, decoded on the worker. The verdict can speak for no more than these studies cover.",
+        );
+        egui::Grid::new("problem_recognition_sources")
+            .striped(true)
+            .num_columns(4)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Study").strong());
+                ui.label(egui::RichText::new("Artifact").strong());
+                ui.label(egui::RichText::new("Binds").strong());
+                ui.label(egui::RichText::new("Scope").strong());
+                ui.end_row();
+                for source in &view.sources {
+                    ui.label(source.study);
+                    match source.error.as_deref() {
+                        Some(error) => {
+                            ui.label(egui::RichText::new("unreadable").color(DOWN));
+                            ui.label(egui::RichText::new(error).color(DOWN).small());
+                            ui.label("");
+                        }
+                        None => {
+                            ui.label(
+                                egui::RichText::new(short_id(&source.artifact_id)).monospace(),
+                            );
+                            ui.label(egui::RichText::new(&source.binds).small());
+                            ui.label(egui::RichText::new(&source.scope).small());
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+    });
     ui.add_space(4.0);
     ui.collapsing("Sealed observations and the bounds they faced", |ui| {
         egui::Grid::new("problem_recognition_observations")

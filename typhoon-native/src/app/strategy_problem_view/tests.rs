@@ -197,6 +197,111 @@ fn registry_values_the_engine_left_undefined_are_shown_as_undefined_not_zero() {
     assert_eq!(bound(&rows, "|Sharpe ratio|"), "max 500.00% (50000 bps)");
 }
 
+// ── Sealed source lineage ──────────────────────────────────────────
+
+fn cross_id() -> String {
+    std::iter::repeat_n('a', 64).collect()
+}
+
+fn dataset_id() -> String {
+    std::iter::repeat_n('b', 64).collect()
+}
+
+#[test]
+fn each_lineage_row_carries_its_exact_sealed_identities_and_evaluation_scope() {
+    let cross = cross_check_row(
+        &cross_id(),
+        &std::iter::repeat_n('c', 64).collect::<String>(),
+        &dataset_id(),
+        "net_profit",
+        4_096,
+        3,
+    );
+    assert_eq!(cross.study, CROSS_CHECK_STUDY);
+    // The full sealed identity is carried, not a shortened one — the panel shortens at render.
+    assert_eq!(cross.artifact_id, cross_id());
+    assert_eq!(
+        cross.binds,
+        "strategy cccccccc · dataset bbbbbbbb · metric net_profit"
+    );
+    assert_eq!(cross.scope, "4096 evaluations · 3 sealed checks");
+    assert!(cross.error.is_none());
+
+    let oos = oos_row(
+        &cross_id(),
+        &std::iter::repeat_n('d', 64).collect::<String>(),
+        &dataset_id(),
+        "net_profit",
+        &std::iter::repeat_n('e', 64).collect::<String>(),
+        2_500,
+        4,
+    );
+    assert_eq!(
+        oos.binds,
+        "candidate dddddddd · dataset bbbbbbbb · config eeeeeeee · metric net_profit"
+    );
+    assert_eq!(oos.scope, "2500 bars · 4 executed partitions");
+
+    let significance = significance_row(&cross_id(), &dataset_id(), "sharpe_ratio", 4_096, 128);
+    assert_eq!(significance.study, SIGNIFICANCE_STUDY);
+    assert_eq!(significance.binds, "dataset bbbbbbbb · metric sharpe_ratio");
+    // Evaluation N is what bounds what the verdict can speak for, so it is stated verbatim.
+    assert_eq!(significance.scope, "4096 evaluations · 128 candidates");
+}
+
+#[test]
+fn the_lineage_projection_is_deterministic_for_the_same_sealed_inputs() {
+    let first = significance_row(&cross_id(), &dataset_id(), "net_profit", 12, 7);
+    let second = significance_row(&cross_id(), &dataset_id(), "net_profit", 12, 7);
+
+    assert_eq!(first, second);
+    // A different sealed input must not collapse onto the same row.
+    assert_ne!(
+        first,
+        significance_row(&cross_id(), &dataset_id(), "net_profit", 13, 7)
+    );
+}
+
+#[test]
+fn an_undecodable_source_reports_the_refusal_under_the_existing_reason_bound() {
+    let long: String = std::iter::repeat_n('z', MAX_REASON_CHARS + 60).collect();
+
+    let row = unreadable_source_row(OOS_STUDY, &long);
+
+    assert_eq!(row.study, OOS_STUDY);
+    assert_eq!(
+        row.error.as_deref().expect("refusal").chars().count(),
+        MAX_REASON_CHARS
+    );
+    // An unreadable source claims no identity and no scope rather than showing a blank-looking one.
+    assert!(row.artifact_id.is_empty());
+    assert!(row.binds.is_empty());
+    assert!(row.scope.is_empty());
+}
+
+#[test]
+fn the_lineage_row_owns_only_display_strings_not_a_decoded_source_or_its_sealed_bytes() {
+    // The row is `&'static str` + 3 `String` + `Option<String>`. Smuggling a decoded
+    // CrossCheckStudyArtifact / ExecutedOosScheme / SignificanceStudyArtifact, or the zstd bytes
+    // they were inflated from, into the view would change this size and fail here.
+    let expected =
+        size_of::<&'static str>() + size_of::<String>() * 3 + size_of::<Option<String>>();
+    assert_eq!(size_of::<ProblemSourceRow>(), expected);
+
+    // And what it does own stays small: identities are fixed-width digests and the composed
+    // strings are bounded by them plus counts.
+    let row = cross_check_row(
+        &cross_id(),
+        &dataset_id(),
+        &dataset_id(),
+        "net_profit",
+        usize::MAX,
+        usize::MAX,
+    );
+    let owned = row.artifact_id.len() + row.binds.len() + row.scope.len();
+    assert!(owned < 512, "lineage row owns {owned} bytes");
+}
+
 // ── Off-thread request identity ────────────────────────────────────
 
 #[test]
