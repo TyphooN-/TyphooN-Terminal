@@ -113,6 +113,7 @@ mod ssr_scan;
 mod state;
 mod storage;
 mod strategy_intervention_run;
+mod strategy_problem_view;
 mod strategy_report_view;
 mod strategy_research;
 mod strategy_sub_bar_run;
@@ -475,6 +476,10 @@ impl TyphooNApp {
             strategy_comparison_status: String::new(),
             strategy_comparison_load_state: strategy_report_view::ComparisonLoadState::default(),
             strategy_comparison_rx: None,
+            strategy_problem_view: None,
+            strategy_problem_status: String::new(),
+            strategy_problem_load_state: strategy_problem_view::ProblemLoadState::default(),
+            strategy_problem_rx: None,
             sub_bar_run_ui: strategy_sub_bar_run::SubBarRunUiState::default(),
             sub_bar_run_state: strategy_sub_bar_run::SubBarRunState::default(),
             strategy_run_worker: strategy_sub_bar_run::StrategyRunWorker::spawn_at(

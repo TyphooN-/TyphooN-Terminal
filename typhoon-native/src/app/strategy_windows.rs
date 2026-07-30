@@ -351,6 +351,58 @@ impl TyphooNApp {
         });
     }
 
+    fn drain_strategy_problem_recognition(&mut self) {
+        let received = self
+            .strategy_problem_rx
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        let Some((request, result)) = received else {
+            return;
+        };
+        self.strategy_problem_rx = None;
+        if !self.strategy_problem_load_state.accept(request) {
+            self.strategy_problem_status =
+                "Error: stale problem-recognition load ignored after the request was superseded"
+                    .into();
+            return;
+        }
+        match result {
+            Ok(view) => {
+                self.strategy_problem_status = format!(
+                    "Verified §7.6 verdict for strategy {}: {} of {} gates failed",
+                    view.strategy_id.get(..8).unwrap_or(&view.strategy_id),
+                    view.failed_stage_count(),
+                    view.stages.len() + view.omitted_stages
+                );
+                self.strategy_problem_view = Some(view);
+            }
+            Err(error) => self.strategy_problem_status = format!("Error: {error}"),
+        }
+    }
+
+    fn start_strategy_problem_load(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Select one sealed problem-recognition artifact")
+            .add_filter("JSON artifact", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        let request = self.strategy_problem_load_state.begin_request();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.strategy_problem_rx = Some(receiver);
+        self.strategy_problem_status =
+            "Reading, decompressing sealed evidence and replaying gates on worker…".into();
+        let repaint = ctx.clone();
+        std::thread::spawn(move || {
+            // Bounded read, verifying decode and projection all happen here; the render thread
+            // only ever indexes the prepared view (ADR-135 §12.2).
+            let result = strategy_problem_view::load_problem_recognition(&path);
+            let _ = sender.send((request, result));
+            repaint.request_repaint();
+        });
+    }
+
     fn drain_sub_bar_runs(&mut self) {
         let events = self
             .strategy_run_worker
@@ -643,6 +695,7 @@ impl TyphooNApp {
     pub(super) fn render_backtest_window(&mut self, ctx: &egui::Context) {
         self.drain_strategy_result_load();
         self.drain_strategy_comparison();
+        self.drain_strategy_problem_recognition();
         self.drain_strategy_workflow();
         self.drain_sub_bar_runs();
         self.drain_intervention_runs();
@@ -1123,6 +1176,56 @@ impl TyphooNApp {
                         self.strategy_comparison_selected_run,
                     );
                 }
+                ui.add_space(5.0);
+                ui.collapsing("Problem recognition (ADR-135 §7.6 red flags)", |ui| {
+                    ui.small("Read-only view of a sealed problem-recognition artifact. Reading, zstd-decompressing its sealed cross-check/OOS/significance evidence and replaying every gate happen on a worker; nothing is derived or judged here.");
+                    let problem_loading = self.strategy_problem_load_state.is_busy();
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !problem_loading,
+                                egui::Button::new("Load sealed §7.6 verdict…"),
+                            )
+                            .on_hover_text(
+                                "Select one sealed ProblemRecognition artifact JSON; it is verified by full replay before anything is shown",
+                            )
+                            .clicked()
+                        {
+                            self.start_strategy_problem_load(ctx);
+                        }
+                        if ui
+                            .add_enabled(problem_loading, egui::Button::new("Cancel"))
+                            .clicked()
+                        {
+                            self.strategy_problem_load_state.cancel();
+                            self.strategy_problem_rx = None;
+                            self.strategy_problem_status =
+                                "Problem-recognition load cancelled; late completion is stale"
+                                    .into();
+                        }
+                        if problem_loading {
+                            ui.spinner();
+                        }
+                    });
+                    if !self.strategy_problem_status.is_empty() {
+                        let color = if self.strategy_problem_status.starts_with("Error:") {
+                            DOWN
+                        } else if problem_loading {
+                            egui::Color32::from_rgb(255, 200, 50)
+                        } else {
+                            UP
+                        };
+                        ui.label(
+                            egui::RichText::new(&self.strategy_problem_status)
+                                .color(color)
+                                .small(),
+                        );
+                    }
+                    if let Some(view) = self.strategy_problem_view.as_ref() {
+                        ui.separator();
+                        strategy_problem_view::render_problem_recognition(ui, view);
+                    }
+                });
             });
         self.show_backtest = show_backtest;
         if let Some(view) = comparison_install {

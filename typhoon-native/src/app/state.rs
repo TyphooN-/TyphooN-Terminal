@@ -732,6 +732,17 @@ pub struct TyphooNApp {
             >,
         >,
     >,
+    /// Sealed §7.6 problem-recognition verdict, decoded and verified off the render thread.
+    pub(crate) strategy_problem_view:
+        Option<crate::app::strategy_problem_view::ProblemRecognitionView>,
+    pub(crate) strategy_problem_status: String,
+    pub(crate) strategy_problem_load_state: crate::app::strategy_problem_view::ProblemLoadState,
+    pub(crate) strategy_problem_rx: Option<
+        std::sync::mpsc::Receiver<(
+            u64,
+            Result<crate::app::strategy_problem_view::ProblemRecognitionView, String>,
+        )>,
+    >,
     pub(crate) sub_bar_run_ui: crate::app::strategy_sub_bar_run::SubBarRunUiState,
     pub(crate) sub_bar_run_state: crate::app::strategy_sub_bar_run::SubBarRunState,
     pub(crate) strategy_run_worker: Option<crate::app::strategy_sub_bar_run::StrategyRunWorker>,
