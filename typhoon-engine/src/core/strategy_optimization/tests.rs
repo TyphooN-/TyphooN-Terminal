@@ -1,10 +1,59 @@
 use super::*;
+use crate::broker::alpaca::Bar;
+use crate::core::strategy_dataset::{
+    AdjustmentPolicy, CalendarPolicy, DatasetManifestInput, DatasetProvenance, DatasetQaPolicy,
+};
 use crate::core::strategy_ir::{
     DatasetBinding, ParamRange, ParamValue, RunBinding, StrategyIr, StrategyParameter,
     StrategyRunManifest,
 };
 use crate::core::strategy_metrics::METRICS_SCHEMA_VERSION;
 use crate::core::strategy_report::StrategyReportArtifact;
+
+fn split_bars(count: usize) -> Vec<Bar> {
+    (0..count)
+        .map(|index| {
+            let open = 100.0 + index as f64;
+            Bar {
+                timestamp: format!("2026-01-01T{:02}:00:00Z", index % 24),
+                open,
+                high: open + 2.0,
+                low: open - 1.0,
+                close: open + 1.0,
+                volume: 100.0,
+            }
+        })
+        .collect()
+}
+
+fn split_input() -> DatasetManifestInput {
+    DatasetManifestInput {
+        symbol: "BTC/USD".into(),
+        timeframe: "1Hour".into(),
+        provenance: DatasetProvenance {
+            source: "fixture".into(),
+            venue: "test".into(),
+            pipeline: "strategy-optimization-test/v1".into(),
+        },
+        adjustment: AdjustmentPolicy::Raw,
+        calendar: CalendarPolicy::Continuous24x7,
+        qa_policy: DatasetQaPolicy::default(),
+    }
+}
+
+/// The trusted shape: one parent dataset cut into two content-addressed partitions. Only a
+/// quarantine carrying this artifact can ever be burned.
+fn sealed_split(total: usize, holdout: usize) -> HoldoutSplitArtifact {
+    let bars = split_bars(total);
+    let parent = DatasetManifest::build(&split_input(), &bars).unwrap();
+    HoldoutSplitArtifact::seal(&parent, &bars, total - holdout)
+        .unwrap()
+        .0
+}
+
+fn sealed_quarantine(total: usize, holdout: usize) -> HoldoutQuarantine {
+    HoldoutQuarantine::sealed(sealed_split(total, holdout)).unwrap()
+}
 
 fn base_strategy() -> StrategyIr {
     let builder = crate::core::strategy_builder::GeneralStrategyBuilder::new("optimizer", "test");
@@ -379,9 +428,91 @@ fn search_api_refuses_holdout_and_holdout_is_one_way_burned() {
         quarantine.range_for(StageAccess::Search, DataRegion::FinalHoldout),
         Err(OptimizationError::HoldoutForbidden)
     ));
+    // A quarantine minted from bare ids leases search data but proves no partition, so it can
+    // never be burned into final-holdout access.
+    assert!(quarantine.split().is_none());
+    assert!(matches!(
+        quarantine.burn("final-review"),
+        Err(OptimizationError::HoldoutForbidden)
+    ));
+
+    let quarantine = sealed_quarantine(100, 20);
+    assert_eq!(quarantine.search_range().unwrap(), 0..80);
+    let split = quarantine.split().expect("trusted split").clone();
     let burned = quarantine.burn("final-review").unwrap();
     assert_eq!(burned.range(), 80..100);
     assert_eq!(burned.reason(), "final-review");
+    assert_eq!(burned.split(), &split);
+    assert_eq!(burned.search_dataset_id(), split.search_dataset_id());
+    assert_eq!(burned.dataset_id(), split.holdout_dataset_id());
+}
+
+#[test]
+fn a_split_artifact_binds_one_parent_and_every_partition_identity() {
+    let split = sealed_split(24, 4);
+    split.verify().unwrap();
+    assert_eq!(split.split_id().len(), 64);
+    assert_eq!(split.range(), 20..24);
+    assert_eq!(split.parent_bar_count(), 24);
+    assert_eq!(split.symbol(), "BTC/USD");
+    assert_eq!(split.timeframe(), "1Hour");
+    assert_ne!(split.search_dataset_id(), split.holdout_dataset_id());
+    assert_ne!(split.parent_dataset_id(), split.search_dataset_id());
+    assert_ne!(split.parent_dataset_id(), split.holdout_dataset_id());
+
+    // Boundary identity is part of the split: re-cutting the same parent one bar earlier is a
+    // different artifact even though every other field is unchanged.
+    let moved = sealed_split(24, 5);
+    assert_ne!(moved.split_id(), split.split_id());
+    assert_eq!(moved.parent_dataset_id(), split.parent_dataset_id());
+    assert_ne!(
+        moved.holdout_first_timestamp(),
+        split.holdout_first_timestamp()
+    );
+    assert_eq!(
+        moved.holdout_last_timestamp(),
+        split.holdout_last_timestamp()
+    );
+
+    // Partitions are derived from the parent bars, never supplied, so a manifest that does not
+    // describe those bars cannot seal a split at all.
+    let bars = split_bars(24);
+    let input = split_input();
+    let mut foreign = split_bars(24);
+    foreign[23].close += 1.0;
+    let parent = DatasetManifest::build(&input, &bars).unwrap();
+    assert!(matches!(
+        HoldoutSplitArtifact::seal(&parent, &foreign, 20),
+        Err(OptimizationError::InvalidFold { .. })
+    ));
+    let mut other_symbol = input.clone();
+    other_symbol.symbol = "ETH/USD".into();
+    assert!(matches!(
+        HoldoutSplitArtifact::seal(
+            &DatasetManifest::build(&other_symbol, &bars).unwrap(),
+            &bars,
+            20
+        )
+        .unwrap()
+        .0
+        .symbol(),
+        "ETH/USD"
+    ));
+
+    // A boundary that does not partition the parent is refused.
+    for boundary in [0, 24, 25] {
+        assert!(matches!(
+            HoldoutSplitArtifact::seal(&parent, &bars, boundary),
+            Err(OptimizationError::InvalidFold { .. })
+        ));
+    }
+
+    // A re-addressed copy is self-consistent, which is exactly why the trusted store re-seals
+    // from the parent bars rather than trusting `verify` alone.
+    let forged = split.test_only_forged(&"c".repeat(64));
+    forged.verify().unwrap();
+    assert_ne!(forged.split_id(), split.split_id());
+    assert_eq!(forged.holdout_dataset_id(), "c".repeat(64));
 }
 
 #[test]
@@ -783,7 +914,7 @@ fn problem_recognition_and_degradation_reject_explicit_failure_paths() {
 
 #[test]
 fn final_holdout_is_linear_and_synthetic_curve_fit_gate_is_literal() {
-    let quarantine = HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), 24, 4).unwrap();
+    let quarantine = sealed_quarantine(24, 4);
     let search = quarantine.lease(StageAccess::Search).unwrap();
     let robustness = quarantine.lease(StageAccess::Robustness).unwrap();
     assert_eq!(search.range(), 0..20);
@@ -988,9 +1119,9 @@ fn exact_synthetic_report_pipeline_rejects_curve_fit_and_preserves_planted_edge(
 
 #[test]
 fn search_and_robustness_cannot_name_or_obtain_the_final_holdout_partition() {
-    let search_id = "a".repeat(64);
-    let holdout_id = "f".repeat(64);
-    let quarantine = HoldoutQuarantine::new(search_id.clone(), holdout_id.clone(), 50, 10).unwrap();
+    let quarantine = sealed_quarantine(50, 10);
+    let search_id = quarantine.split().unwrap().search_dataset_id().to_string();
+    let holdout_id = quarantine.split().unwrap().holdout_dataset_id().to_string();
     for stage in [StageAccess::Search, StageAccess::Robustness] {
         let lease = quarantine.lease(stage).unwrap();
         assert_eq!(lease.dataset_id(), search_id);

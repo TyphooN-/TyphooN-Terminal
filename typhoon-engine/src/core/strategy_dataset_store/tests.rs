@@ -1018,3 +1018,135 @@ fn storing_more_bars_than_the_cap_is_refused() {
         Err(DatasetStoreError::TooManyBars { .. })
     ));
 }
+
+// ── Final-holdout split (ADR-135 §7.8) ─────────────────────────────
+
+#[test]
+fn a_final_holdout_split_hands_out_only_the_search_partition() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = store_at(temp.path());
+    let bars = clean_bars(20);
+    let stored = store
+        .build_and_put(&input("BTC/USD"), &bars)
+        .expect("dataset stores");
+
+    let split = store
+        .split_final_holdout(&stored.manifest.dataset_id, 5)
+        .expect("split");
+    let artifact = split.artifact();
+    artifact.verify().expect("split verifies");
+
+    assert_eq!(artifact.parent_dataset_id(), stored.manifest.dataset_id);
+    assert_eq!(artifact.parent_manifest_id(), stored.manifest.manifest_id);
+    assert_eq!(artifact.parent_bar_count(), 20);
+    assert_eq!(artifact.range(), 15..20);
+    assert_eq!(artifact.symbol(), "BTC/USD");
+    assert_eq!(artifact.timeframe(), "1Day");
+    assert_eq!(artifact.holdout_first_timestamp(), bars[15].timestamp);
+    assert_eq!(artifact.holdout_last_timestamp(), bars[19].timestamp);
+
+    // The caller receives the search partition, byte for byte, and nothing else.
+    assert_bit_identical(&bars[..15], split.search_bars());
+    assert_eq!(
+        split.search_manifest().dataset_id,
+        artifact.search_dataset_id()
+    );
+    assert_eq!(
+        split.search_manifest().manifest_id,
+        artifact.search_manifest_id()
+    );
+
+    // Only the store can turn the split back into holdout bars.
+    let (holdout_manifest, holdout_bars) = store
+        .materialize_final_holdout(artifact)
+        .expect("holdout materializes");
+    assert_bit_identical(&bars[15..], &holdout_bars);
+    assert_eq!(holdout_manifest.dataset_id, artifact.holdout_dataset_id());
+    assert_eq!(holdout_manifest.manifest_id, artifact.holdout_manifest_id());
+
+    // Re-splitting the same stored parent is deterministic.
+    let again = store
+        .split_final_holdout(&stored.manifest.dataset_id, 5)
+        .expect("split");
+    assert_eq!(again.artifact().split_id(), artifact.split_id());
+
+    // A different cut is a different split.
+    let moved = store
+        .split_final_holdout(&stored.manifest.dataset_id, 4)
+        .expect("split");
+    assert_ne!(moved.artifact().split_id(), artifact.split_id());
+}
+
+#[test]
+fn a_relative_store_root_is_retained_as_an_absolute_authority_anchor() {
+    let current = std::env::current_dir().expect("current directory");
+    let temporary = tempfile::Builder::new()
+        .prefix("relative-dataset-store-")
+        .tempdir_in(&current)
+        .expect("temporary directory under current directory");
+    let relative = temporary
+        .path()
+        .strip_prefix(&current)
+        .expect("temporary path is beneath current directory");
+
+    let store = FileDatasetStore::open(relative).expect("relative dataset store");
+
+    assert!(store.root().is_absolute());
+    assert_eq!(store.root(), temporary.path());
+}
+
+#[test]
+fn splitting_and_materializing_fail_closed_on_forged_foreign_and_impossible_partitions() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = store_at(temp.path());
+    let bars = clean_bars(12);
+    let stored = store
+        .build_and_put(&input("BTC/USD"), &bars)
+        .expect("dataset stores");
+    let split = store
+        .split_final_holdout(&stored.manifest.dataset_id, 3)
+        .expect("split");
+
+    // A holdout that is not a proper suffix of the parent is not a partition.
+    for holdout in [0, 12, 13] {
+        assert!(
+            store
+                .split_final_holdout(&stored.manifest.dataset_id, holdout)
+                .is_err()
+        );
+    }
+    assert!(matches!(
+        store.split_final_holdout(&"c".repeat(64), 3),
+        Err(DatasetStoreError::NotFound { .. })
+    ));
+    assert!(matches!(
+        store.split_final_holdout("not-a-dataset-id", 3),
+        Err(DatasetStoreError::InvalidDatasetId { .. })
+    ));
+
+    // A re-addressed artifact content-addresses itself, so `verify` alone would accept it. The
+    // store re-seals from the stored parent instead, and refuses.
+    let forged = split.artifact().test_only_forged(&"c".repeat(64));
+    forged.verify().expect("a forged split is self-consistent");
+    assert!(store.materialize_final_holdout(&forged).is_err());
+
+    // A split minted from another store's dataset names a parent this store does not hold.
+    let other = tempfile::tempdir().expect("tempdir");
+    let other_store = store_at(other.path());
+    let other_bars = clean_bars(11);
+    let other_stored = other_store
+        .build_and_put(&input("ETH/USD"), &other_bars)
+        .expect("dataset stores");
+    let foreign = other_store
+        .split_final_holdout(&other_stored.manifest.dataset_id, 3)
+        .expect("split");
+    assert!(matches!(
+        store.materialize_final_holdout(foreign.artifact()),
+        Err(DatasetStoreError::NotFound { .. })
+    ));
+    // And the store that does hold it still materializes exactly its own holdout.
+    let (_, foreign_bars) = other_store
+        .materialize_final_holdout(foreign.artifact())
+        .expect("holdout materializes");
+    assert_bit_identical(&other_bars[8..], &foreign_bars);
+}

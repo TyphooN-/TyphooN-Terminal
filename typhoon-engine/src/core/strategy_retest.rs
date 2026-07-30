@@ -5,22 +5,40 @@
 //! executes the canonical simulator, seals and re-verifies the report, and only then projects one
 //! typed metric into robustness. Persisted evidence is append-only and queried through bounded,
 //! indexed windows.
+//!
+//! ## Final-holdout trust boundary (§7.8)
+//!
+//! The trusted party is the [`FileDatasetStore`] that owns the parent bars. It is the only minter
+//! of the [`HoldoutSplitArtifact`] both partitions bind to, it hands search and robustness callers
+//! the search partition alone, and it is the only thing that can turn a burn back into holdout
+//! bars. [`FinalHoldoutAuthority`] is anchored to that store's root, so the refusal invariant
+//! cannot be sidestepped by opening a different evidence database; the evaluation count is derived
+//! from the immutable evidence already persisted against the search partition instead of being
+//! asserted by the caller; and every state transition is conditional, single-row and read back
+//! inside its own transaction before success is reported.
+//!
+//! What this does *not* claim: a holder of the dataset store can always read its own bytes, and
+//! duplicating the store root duplicates its ledger. Both are out-of-band acts on local artifacts,
+//! the same threat boundary the store itself draws — not API-reachable evasions.
 
 use crate::broker::alpaca::Bar;
 use crate::core::strategy_bayesian::BayesianStudyArtifact;
 use crate::core::strategy_cross_check::CrossCheckStudyArtifact;
 use crate::core::strategy_dataset::DatasetManifest;
+use crate::core::strategy_dataset_store::{
+    DatasetStoreError, DescriptorPinnedSqlitePath, FileDatasetStore, FinalHoldoutSplit,
+};
 use crate::core::strategy_ir::{
     DatasetBinding, RunBinding, StrategyExecutionConfig, StrategyIr, StrategyRunManifest,
 };
 use crate::core::strategy_metrics::{METRICS_SCHEMA_VERSION, MetricValue};
 use crate::core::strategy_optimization::{
     BurnedHoldout, CalendarFoldPlan, CalendarWalkForwardConfig, CalendarWindowBounds, FoldPlan,
-    MAX_ARTIFACT_BYTES, MAX_MONTE_CARLO_TRIALS, MAX_SEARCH_COMBINATIONS, MAX_TRIAL_BUDGET,
-    ObjectiveDirection, ObjectiveSpec, ObservationRole, OosPlan, OosScheme, OptimizationError,
-    ReportObservation, RetestRequest, RetestResult, RobustnessArtifact, RobustnessPipeline,
-    SampleRole, SearchBatch, SearchDataLease, SplitMix64, StageAccess, StageVerdict,
-    WalkForwardConfig, max_drawdown, percentile_index, select_best,
+    HoldoutSplitArtifact, MAX_ARTIFACT_BYTES, MAX_MONTE_CARLO_TRIALS, MAX_SEARCH_COMBINATIONS,
+    MAX_TRIAL_BUDGET, ObjectiveDirection, ObjectiveSpec, ObservationRole, OosPlan, OosScheme,
+    OptimizationError, ReportObservation, RetestRequest, RetestResult, RobustnessArtifact,
+    RobustnessPipeline, SampleRole, SearchBatch, SearchDataLease, SplitMix64, StageAccess,
+    StageVerdict, WalkForwardConfig, max_drawdown, percentile_index, select_best,
 };
 use crate::core::strategy_parameter_field::ParameterFieldStudyArtifact;
 use crate::core::strategy_perturbation::PerturbationStudyArtifact;
@@ -29,13 +47,13 @@ use crate::core::strategy_report::StrategyReportArtifact;
 use crate::core::strategy_run::{RunDatasetInput, assemble_verified_run};
 use crate::core::strategy_significance::SignificanceStudyArtifact;
 use crate::core::strategy_simulator::run_verified_simulation;
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 
@@ -50,9 +68,20 @@ pub enum RetestError {
     Invalid(String),
     Optimization(OptimizationError),
     Sqlite(String),
+    /// The trusted dataset store refused to hand over the partition this request names.
+    Dataset(String),
     DuplicateLineage,
     HoldoutAlreadyConsumed,
+    /// A conditional state transition matched no row: another connection moved the reservation
+    /// first. The burn stands; this attempt reports no result.
+    HoldoutStateRace,
+    /// No immutable persisted search evidence binds this candidate to the search partition, so
+    /// there is no authority for an evaluation count.
+    NoSearchEvidence,
     Immutable,
+    IncompatibleSchema {
+        found: String,
+    },
 }
 impl std::fmt::Display for RetestError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,6 +97,11 @@ impl From<rusqlite::Error> for RetestError {
 impl From<OptimizationError> for RetestError {
     fn from(error: OptimizationError) -> Self {
         Self::Optimization(error)
+    }
+}
+impl From<DatasetStoreError> for RetestError {
+    fn from(error: DatasetStoreError) -> Self {
+        Self::Dataset(error.to_string())
     }
 }
 
@@ -200,17 +234,241 @@ impl CompletedRetest {
 const FINAL_HOLDOUT_REQUEST_DOMAIN: &[u8] = b"typhoon.strategy_retest.final_holdout.v1";
 const MAX_HOLDOUT_REASON_BYTES: usize = 512;
 
-/// The sole capability that carries final-holdout bars into execution. It cannot be constructed
-/// from a search/robustness lease: callers must consume [`HoldoutQuarantine`](crate::core::strategy_optimization::HoldoutQuarantine)
-/// into the non-clone [`BurnedHoldout`] token first.
+/// What a caller asks the final-holdout authority to do. It carries no bars and no manifests: the
+/// only dataset authority is the [`BurnedHoldout`], whose trusted
+/// [`HoldoutSplitArtifact`] the store minted.
+#[derive(Debug)]
+pub struct FinalHoldoutPlan {
+    pub strategy: StrategyIr,
+    pub config: StrategyExecutionConfig,
+    pub burned: BurnedHoldout,
+    pub search_session: SearchSessionArtifact,
+    pub seed: u64,
+}
+
+const SEARCH_SESSION_SCHEMA_VERSION: u32 = 1;
+const SEARCH_SESSION_DOMAIN: &[u8] = b"typhoon.strategy_retest.search_session.v1";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchSessionEvaluation {
+    ordinal: usize,
+    strategy_id: String,
+    request_id: String,
+    run_id: String,
+    report_id: String,
+    seed: u64,
+    metric_value: f64,
+}
+
+/// Complete immutable evidence for one generated search. The only production constructor executes
+/// every member of a privately minted [`SearchBatch`] before sealing this artifact, so a caller
+/// cannot persist the selected row alone and relabel it as N=1 after seeing a larger search.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchSessionArtifact {
+    schema_version: u32,
+    artifact_id: String,
+    search_lineage_id: String,
+    search_plan_id: String,
+    split_id: String,
+    search_dataset_id: String,
+    search_manifest_id: String,
+    config_id: String,
+    metric_id: String,
+    metrics_version: String,
+    direction: ObjectiveDirection,
+    root_seed: u64,
+    selected_strategy_id: String,
+    evaluations: Vec<SearchSessionEvaluation>,
+}
+
+impl SearchSessionArtifact {
+    pub fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+    pub fn evaluations_n(&self) -> usize {
+        self.evaluations.len()
+    }
+    pub fn selected_strategy_id(&self) -> &str {
+        &self.selected_strategy_id
+    }
+    fn verify(&self) -> Result<(), RetestError> {
+        if self.schema_version != SEARCH_SESSION_SCHEMA_VERSION
+            || !is_id(&self.artifact_id)
+            || !is_id(&self.search_lineage_id)
+            || !is_id(&self.search_plan_id)
+            || !is_id(&self.split_id)
+            || !is_id(&self.search_dataset_id)
+            || !is_id(&self.search_manifest_id)
+            || !is_id(&self.config_id)
+            || !is_id(&self.selected_strategy_id)
+            || self.metric_id.trim().is_empty()
+            || self.metrics_version != METRICS_SCHEMA_VERSION
+            || self.evaluations.is_empty()
+            || self.evaluations.len() > MAX_TRIAL_BUDGET
+        {
+            return Err(RetestError::Invalid(
+                "invalid search-session artifact".into(),
+            ));
+        }
+        let mut requests = BTreeSet::new();
+        let mut runs = BTreeSet::new();
+        for (ordinal, evaluation) in self.evaluations.iter().enumerate() {
+            if evaluation.ordinal != ordinal
+                || !is_id(&evaluation.strategy_id)
+                || !is_id(&evaluation.request_id)
+                || !is_id(&evaluation.run_id)
+                || !is_id(&evaluation.report_id)
+                || !evaluation.metric_value.is_finite()
+                || !requests.insert(&evaluation.request_id)
+                || !runs.insert(&evaluation.run_id)
+            {
+                return Err(RetestError::Invalid(
+                    "invalid search-session evaluation set".into(),
+                ));
+            }
+        }
+        if !self
+            .evaluations
+            .iter()
+            .any(|evaluation| evaluation.strategy_id == self.selected_strategy_id)
+            || self.compute_id()? != self.artifact_id
+        {
+            return Err(RetestError::Invalid(
+                "search-session selection or identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn compute_id(&self) -> Result<String, RetestError> {
+        study_identity(
+            SEARCH_SESSION_DOMAIN,
+            &(
+                self.schema_version,
+                &self.search_lineage_id,
+                &self.search_plan_id,
+                &self.split_id,
+                &self.search_dataset_id,
+                &self.search_manifest_id,
+                &self.config_id,
+                &self.metric_id,
+                &self.metrics_version,
+                self.direction,
+                self.root_seed,
+                &self.selected_strategy_id,
+                &self.evaluations,
+            ),
+        )
+    }
+}
+
+/// Execute every member of one privately minted search plan and seal the complete terminal set.
+/// The split exposes only search bars; final-holdout bytes remain behind the store authority.
+pub fn execute_search_session(
+    batch: SearchBatch,
+    config: &StrategyExecutionConfig,
+    split: &FinalHoldoutSplit,
+    pipeline: &RobustnessPipeline,
+    metric_id: &str,
+    direction: ObjectiveDirection,
+    root_seed: u64,
+) -> Result<SearchSessionArtifact, RetestError> {
+    batch.verify_plan()?;
+    config.verify().map_err(invalid)?;
+    split.artifact().verify()?;
+    if metric_id.trim().is_empty() {
+        return Err(RetestError::Invalid(
+            "search-session metric is empty".into(),
+        ));
+    }
+    let evaluations_n = batch.candidates.len();
+    let search_plan_id = batch.plan_id().to_string();
+    let search_lineage_id = study_identity(
+        b"typhoon.strategy_retest.search_lineage.v1",
+        &(
+            split.artifact().split_id(),
+            split.search_manifest().manifest_id.as_str(),
+            search_plan_id.as_str(),
+            config.config_id(),
+            metric_id,
+            METRICS_SCHEMA_VERSION,
+            direction,
+            root_seed,
+        ),
+    )?;
+    let mut rng = SplitMix64(root_seed);
+    let mut evaluations = Vec::with_capacity(evaluations_n);
+    for (ordinal, candidate) in batch.candidates.into_iter().enumerate() {
+        let seed = rng.next();
+        let request = RetestExecutionRequest::seal(
+            &candidate.strategy,
+            config,
+            split.search_manifest(),
+            split.search_bars(),
+            split.quarantine().lease(StageAccess::Search)?,
+            ObservationRole::SearchEvaluation,
+            metric_id,
+            seed,
+        )?;
+        let completed = execute_retest(request, pipeline, evaluations_n)?;
+        evaluations.push(SearchSessionEvaluation {
+            ordinal,
+            strategy_id: candidate.candidate_id,
+            request_id: completed.request_id,
+            run_id: completed.report.run_id().to_string(),
+            report_id: completed.report.report_id().to_string(),
+            seed,
+            metric_value: completed.metric_value,
+        });
+    }
+    let selected_strategy_id = evaluations
+        .iter()
+        .reduce(|best, item| {
+            let ordering = item.metric_value.total_cmp(&best.metric_value);
+            let better = match direction {
+                ObjectiveDirection::Maximize => ordering.is_gt(),
+                ObjectiveDirection::Minimize => ordering.is_lt(),
+            };
+            if better { item } else { best }
+        })
+        .ok_or(RetestError::NoSearchEvidence)?
+        .strategy_id
+        .clone();
+    let mut artifact = SearchSessionArtifact {
+        schema_version: SEARCH_SESSION_SCHEMA_VERSION,
+        artifact_id: String::new(),
+        search_lineage_id,
+        search_plan_id,
+        split_id: split.artifact().split_id().to_string(),
+        search_dataset_id: split.artifact().search_dataset_id().to_string(),
+        search_manifest_id: split.artifact().search_manifest_id().to_string(),
+        config_id: config.config_id().to_string(),
+        metric_id: metric_id.to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
+        direction,
+        root_seed,
+        selected_strategy_id,
+        evaluations,
+    };
+    artifact.artifact_id = artifact.compute_id()?;
+    artifact.verify()?;
+    Ok(artifact)
+}
+
+/// The sole request that reaches final-holdout execution.
+///
+/// It is sealed by the authority, never by a caller: the dataset identity comes from the trusted
+/// split artifact and `evaluations_n` is derived from immutable persisted search evidence inside
+/// the reserving transaction. Holdout bars are not a field here — they are materialized from the
+/// dataset store after the burn is committed and are never handed back out.
 #[derive(Debug)]
 pub struct FinalHoldoutExecutionRequest {
     request_id: String,
     strategy: StrategyIr,
     config: StrategyExecutionConfig,
-    search_manifest: DatasetManifest,
-    holdout_manifest: DatasetManifest,
-    holdout_bars: Vec<Bar>,
+    search_session_id: String,
+    split: HoldoutSplitArtifact,
     range: Range<usize>,
     reason: String,
     metric_id: String,
@@ -218,50 +476,36 @@ pub struct FinalHoldoutExecutionRequest {
     evaluations_n: usize,
 }
 impl FinalHoldoutExecutionRequest {
-    #[allow(clippy::too_many_arguments)]
-    pub fn seal(
+    pub(crate) fn seal(
         strategy: &StrategyIr,
         config: &StrategyExecutionConfig,
-        parent_manifest: &DatasetManifest,
-        parent_bars: &[Bar],
-        burned: BurnedHoldout,
-        metric_id: impl Into<String>,
+        burned: &BurnedHoldout,
+        search_session: &SearchSessionArtifact,
         seed: u64,
-        evaluations_n: usize,
     ) -> Result<Self, RetestError> {
-        parent_manifest.verify(parent_bars).map_err(invalid)?;
+        let split = burned.split().clone();
+        split.verify()?;
         let range = burned.range();
-        if range.start == 0 || range.end != parent_bars.len() || range.start >= range.end {
+        if split.range() != range
+            || burned.search_dataset_id() != split.search_dataset_id()
+            || burned.dataset_id() != split.holdout_dataset_id()
+        {
             return Err(RetestError::Invalid(
-                "burn capability does not name a terminal parent partition".into(),
+                "burn capability disagrees with its trusted split".into(),
             ));
         }
-        let manifest_input = parent_manifest.to_input();
-        let search_manifest = DatasetManifest::build(&manifest_input, &parent_bars[..range.start])
-            .map_err(invalid)?;
-        let holdout_bars = parent_bars[range.clone()].to_vec();
-        let holdout_manifest =
-            DatasetManifest::build(&manifest_input, &holdout_bars).map_err(invalid)?;
         let mut request = Self {
             request_id: String::new(),
             strategy: strategy.clone(),
             config: config.clone(),
-            search_manifest,
-            holdout_manifest,
-            holdout_bars,
+            search_session_id: search_session.artifact_id.clone(),
+            split,
             range,
             reason: burned.reason().to_string(),
-            metric_id: metric_id.into(),
+            metric_id: search_session.metric_id.clone(),
             seed,
-            evaluations_n,
+            evaluations_n: search_session.evaluations.len(),
         };
-        if burned.search_dataset_id() != request.search_manifest.dataset_id
-            || burned.dataset_id() != request.holdout_manifest.dataset_id
-        {
-            return Err(RetestError::Invalid(
-                "burn capability names foreign dataset content".into(),
-            ));
-        }
         request.validate()?;
         request.request_id = request.compute_id();
         Ok(request)
@@ -269,25 +513,27 @@ impl FinalHoldoutExecutionRequest {
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
+    pub fn split(&self) -> &HoldoutSplitArtifact {
+        &self.split
+    }
     pub fn search_dataset_id(&self) -> &str {
-        &self.search_manifest.dataset_id
+        self.split.search_dataset_id()
     }
     pub fn holdout_dataset_id(&self) -> &str {
-        &self.holdout_manifest.dataset_id
+        self.split.holdout_dataset_id()
+    }
+    pub fn evaluations_n(&self) -> usize {
+        self.evaluations_n
     }
     fn validate(&self) -> Result<(), RetestError> {
         self.strategy.verify().map_err(invalid)?;
         self.config.verify().map_err(invalid)?;
-        self.search_manifest.verify_seal().map_err(invalid)?;
-        self.holdout_manifest
-            .verify(&self.holdout_bars)
-            .map_err(invalid)?;
-        let search_count = usize::try_from(self.search_manifest.bar_count)
-            .map_err(|_| RetestError::Invalid("search dataset is too large".into()))?;
-        if self.search_manifest.dataset_id == self.holdout_manifest.dataset_id
-            || self.range.start != search_count
-            || self.range.end != search_count.saturating_add(self.holdout_bars.len())
-            || self.range.len() != self.holdout_bars.len()
+        self.split.verify()?;
+        if self.split.range() != self.range
+            || self.range.start == 0
+            || self.range.start >= self.range.end
+            || self.range.end != self.split.parent_bar_count()
+            || self.split.search_dataset_id() == self.split.holdout_dataset_id()
             || self.reason.trim().is_empty()
             || self.reason.len() > MAX_HOLDOUT_REASON_BYTES
             || self.metric_id.trim().is_empty()
@@ -313,10 +559,13 @@ impl FinalHoldoutExecutionRequest {
         final_holdout_request_id(
             self.strategy.strategy_id(),
             self.config.config_id(),
-            &self.search_manifest.dataset_id,
-            &self.search_manifest.manifest_id,
-            &self.holdout_manifest.dataset_id,
-            &self.holdout_manifest.manifest_id,
+            &self.search_session_id,
+            self.split.split_id(),
+            self.split.parent_dataset_id(),
+            self.split.search_dataset_id(),
+            self.split.search_manifest_id(),
+            self.split.holdout_dataset_id(),
+            self.split.holdout_manifest_id(),
             &self.reason,
             &self.metric_id,
             METRICS_SCHEMA_VERSION,
@@ -331,6 +580,9 @@ impl FinalHoldoutExecutionRequest {
 fn final_holdout_request_id(
     strategy_id: &str,
     config_id: &str,
+    search_session_id: &str,
+    split_id: &str,
+    parent_dataset_id: &str,
     search_dataset_id: &str,
     search_manifest_id: &str,
     holdout_dataset_id: &str,
@@ -347,6 +599,9 @@ fn final_holdout_request_id(
     for value in [
         strategy_id,
         config_id,
+        search_session_id,
+        split_id,
+        parent_dataset_id,
         search_dataset_id,
         search_manifest_id,
         holdout_dataset_id,
@@ -2552,6 +2807,10 @@ pub enum FinalHoldoutOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FinalHoldoutRecord {
     pub request_id: String,
+    pub search_session_id: String,
+    /// Identity of the trusted parent/split artifact both partitions came from.
+    pub split_id: String,
+    pub parent_dataset_id: String,
     pub search_dataset_id: String,
     pub search_manifest_id: String,
     pub holdout_dataset_id: String,
@@ -2583,23 +2842,116 @@ pub struct FinalHoldoutPage {
     pub has_more: bool,
 }
 
+/// Canonical installation-level ledger file name below the descriptor-pinned authority directory.
+pub const FINAL_HOLDOUT_LEDGER_FILE: &str = "burn-ledger.sqlite3";
+const MAX_HOLDOUT_FAILURE_BYTES: usize = 1_024;
+const MAX_FINAL_HOLDOUT_REPORT_BYTES: usize = MAX_ARTIFACT_BYTES;
+const RETEST_SCHEMA_VERSION: i64 = 2;
+const RETEST_SCHEMA_FINGERPRINT: &str = "adr135-m4-final-holdout-v2";
+
+/// The only way to execute a final holdout (ADR-135 §7.8).
+///
+/// The authority is anchored to the dataset store that owns the parent dataset: its burn ledger
+/// lives at a fixed path under that store's root, so the refusal invariant cannot be sidestepped by
+/// pointing execution at a fresh or in-memory evidence database. A second evaluation of the same
+/// holdout would require physically duplicating the dataset store itself, which is an overt
+/// out-of-band act rather than an API call.
+pub struct FinalHoldoutAuthority {
+    datasets: FileDatasetStore,
+    evidence: RetestEvidenceStore,
+    ledger_label: PathBuf,
+}
+impl FinalHoldoutAuthority {
+    /// Open (creating if needed) the authority for one dataset store.
+    pub fn open(datasets: &FileDatasetStore) -> Result<Self, RetestError> {
+        let pinned = datasets.final_holdout_sqlite_path(FINAL_HOLDOUT_LEDGER_FILE)?;
+        let ledger_label = pinned.label().to_path_buf();
+        Ok(Self {
+            datasets: datasets.clone(),
+            evidence: RetestEvidenceStore::open_descriptor_pinned(pinned)?,
+            ledger_label,
+        })
+    }
+    pub fn ledger_path(&self) -> PathBuf {
+        self.ledger_label.clone()
+    }
+    /// The evidence store search and robustness stages persist through. It is the same database
+    /// the burn ledger lives in, which is what lets `evaluations_n` be derived rather than claimed.
+    pub fn evidence(&self) -> &RetestEvidenceStore {
+        &self.evidence
+    }
+    /// Reserve, materialize, execute and durably record one final-holdout evaluation.
+    pub fn execute_final_holdout(
+        &self,
+        plan: FinalHoldoutPlan,
+        reserved_sequence: i64,
+    ) -> Result<CompletedFinalHoldout, RetestError> {
+        self.evidence
+            .execute_final_holdout(&self.datasets, plan, reserved_sequence)
+    }
+}
+
 /// Blocking store. GUI/native callers must own it on a bounded background worker, as with the M3
 /// databank store; no method here is a render-thread API.
 pub struct RetestEvidenceStore {
     connection: RefCell<Connection>,
+    _pinned: Option<DescriptorPinnedSqlitePath>,
 }
 impl RetestEvidenceStore {
     pub fn open(path: &Path) -> Result<Self, RetestError> {
-        Self::initialize(Connection::open(path)?)
+        Self::initialize(
+            Connection::open_with_flags(
+                path,
+                OpenFlags::default() | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )?,
+            None,
+        )
     }
-    pub fn open_in_memory() -> Result<Self, RetestError> {
-        Self::initialize(Connection::open_in_memory()?)
+    fn open_descriptor_pinned(path: DescriptorPinnedSqlitePath) -> Result<Self, RetestError> {
+        // `/proc/self/fd/<dirfd>` is itself a kernel magic link, so SQLite's path-wide
+        // `SQLITE_OPEN_NOFOLLOW` rejects the descriptor-pinned route. The store has already opened
+        // every directory component with `openat2(RESOLVE_NO_SYMLINKS|RESOLVE_BENEATH)` and
+        // preflighted the final component relative to that live descriptor; retaining `path` below
+        // pins that authority directory for the lifetime of the connection.
+        let connection = Connection::open_with_flags(path.path(), OpenFlags::default())?;
+        Self::initialize(connection, Some(path))
     }
-    fn initialize(connection: Connection) -> Result<Self, RetestError> {
+    /// Test-only seam. An in-memory evidence database can never be the final-holdout authority —
+    /// that is exactly the one-way-consumption bypass this constructor would otherwise offer.
+    #[cfg(test)]
+    pub(crate) fn open_in_memory() -> Result<Self, RetestError> {
+        Self::initialize(Connection::open_in_memory()?, None)
+    }
+    fn initialize(
+        connection: Connection,
+        pinned: Option<DescriptorPinnedSqlitePath>,
+    ) -> Result<Self, RetestError> {
         connection.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             PRAGMA journal_mode=WAL;
-             PRAGMA busy_timeout=5000;
+            "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;",
+        )?;
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let objects: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )?;
+        if version == 0 && objects != 0 {
+            return Err(RetestError::IncompatibleSchema {
+                found: "legacy unversioned or partially-created schema".into(),
+            });
+        }
+        if version != 0 && version != RETEST_SCHEMA_VERSION {
+            return Err(RetestError::IncompatibleSchema {
+                found: format!("user_version={version}"),
+            });
+        }
+        if version == 0 {
+            connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE schema_meta(version INTEGER PRIMARY KEY,fingerprint TEXT NOT NULL) WITHOUT ROWID;
+             INSERT INTO schema_meta(version,fingerprint) VALUES(2,'adr135-m4-final-holdout-v2');
+             CREATE TRIGGER immutable_schema_meta_update BEFORE UPDATE ON schema_meta BEGIN SELECT RAISE(ABORT,'schema metadata is immutable'); END;
+             CREATE TRIGGER immutable_schema_meta_delete BEFORE DELETE ON schema_meta BEGIN SELECT RAISE(ABORT,'schema metadata is immutable'); END;
              CREATE TABLE IF NOT EXISTS retest_evidence(
                run_id TEXT PRIMARY KEY,
                request_id TEXT NOT NULL UNIQUE,
@@ -2621,6 +2973,8 @@ impl RetestEvidenceStore {
              ) WITHOUT ROWID;
              CREATE INDEX IF NOT EXISTS idx_retest_candidate_sequence
                ON retest_evidence(candidate_id, created_sequence, run_id);
+             CREATE INDEX IF NOT EXISTS idx_retest_dataset_candidate
+               ON retest_evidence(dataset_id, candidate_id, created_sequence, run_id);
              CREATE TABLE IF NOT EXISTS study_artifact(
                artifact_id TEXT PRIMARY KEY,
                source_dataset_id TEXT NOT NULL,
@@ -2643,6 +2997,9 @@ impl RetestEvidenceStore {
                ON holdout_consumption(dataset_id, consumed_sequence);
              CREATE TABLE IF NOT EXISTS final_holdout_execution(
                request_id TEXT PRIMARY KEY,
+               search_session_id TEXT NOT NULL,
+               split_id TEXT NOT NULL DEFAULT '',
+               parent_dataset_id TEXT NOT NULL DEFAULT '',
                search_dataset_id TEXT NOT NULL UNIQUE,
                search_manifest_id TEXT NOT NULL,
                holdout_dataset_id TEXT NOT NULL UNIQUE,
@@ -2668,11 +3025,16 @@ impl RetestEvidenceStore {
                   OR (outcome='failed' AND run_id IS NULL AND report_id IS NULL AND metric_value IS NULL AND report_json IS NULL AND length(failure)>0))
              ) WITHOUT ROWID;
              CREATE INDEX IF NOT EXISTS idx_final_holdout_search_sequence
-               ON final_holdout_execution(search_dataset_id, reserved_sequence, request_id);
-             CREATE TRIGGER IF NOT EXISTS immutable_final_holdout_identity
+               ON final_holdout_execution(search_dataset_id, reserved_sequence, request_id);",
+            )?;
+            connection.execute_batch(
+            "CREATE TRIGGER immutable_final_holdout_identity
                BEFORE UPDATE ON final_holdout_execution
                WHEN OLD.outcome <> 'reserved'
                  OR NEW.request_id <> OLD.request_id
+                 OR NEW.search_session_id <> OLD.search_session_id
+                 OR NEW.split_id <> OLD.split_id
+                 OR NEW.parent_dataset_id <> OLD.parent_dataset_id
                  OR NEW.search_dataset_id <> OLD.search_dataset_id
                  OR NEW.search_manifest_id <> OLD.search_manifest_id
                  OR NEW.holdout_dataset_id <> OLD.holdout_dataset_id
@@ -2689,58 +3051,57 @@ impl RetestEvidenceStore {
              CREATE TRIGGER IF NOT EXISTS immutable_study_update BEFORE UPDATE ON study_artifact BEGIN SELECT RAISE(ABORT, 'study artifact is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_study_delete BEFORE DELETE ON study_artifact BEGIN SELECT RAISE(ABORT, 'study artifact is immutable'); END;
              CREATE TRIGGER IF NOT EXISTS immutable_holdout_update BEFORE UPDATE ON holdout_consumption BEGIN SELECT RAISE(ABORT, 'holdout audit is immutable'); END;
-             CREATE TRIGGER IF NOT EXISTS immutable_holdout_delete BEFORE DELETE ON holdout_consumption BEGIN SELECT RAISE(ABORT, 'holdout audit is immutable'); END;",
-        )?;
+             CREATE TRIGGER immutable_holdout_delete BEFORE DELETE ON holdout_consumption BEGIN SELECT RAISE(ABORT, 'holdout audit is immutable'); END;
+             PRAGMA user_version=2;
+             COMMIT;",
+            )?;
+        }
+        let schema: Option<(i64, String)> = connection
+            .query_row("SELECT version,fingerprint FROM schema_meta", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()?;
+        if schema.as_ref().map(|(v, f)| (*v, f.as_str()))
+            != Some((RETEST_SCHEMA_VERSION, RETEST_SCHEMA_FINGERPRINT))
+        {
+            return Err(RetestError::IncompatibleSchema {
+                found: "schema metadata does not match ADR-135 M4 v2".into(),
+            });
+        }
         Ok(Self {
             connection: RefCell::new(connection),
+            _pinned: pinned,
         })
     }
-    pub fn execute_final_holdout(
+    /// Reserve the burn, then execute it. Crate-internal: [`FinalHoldoutAuthority`] is the only
+    /// caller, and it is the only holder of a store opened at the canonical ledger path.
+    ///
+    /// Order matters. The burn is committed *before* a single holdout bar is read, so a crash
+    /// between reservation and execution still leaves the holdout consumed; the bars are then
+    /// materialized from the trusted store rather than from anything the caller supplied.
+    pub(crate) fn execute_final_holdout(
         &self,
-        request: FinalHoldoutExecutionRequest,
+        datasets: &FileDatasetStore,
+        plan: FinalHoldoutPlan,
         reserved_sequence: i64,
     ) -> Result<CompletedFinalHoldout, RetestError> {
-        request.verify()?;
-        {
-            let mut connection = self.connection.borrow_mut();
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let result = transaction.execute(
-                "INSERT INTO final_holdout_execution(request_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'reserved')",
-                params![
-                    request.request_id,
-                    request.search_manifest.dataset_id,
-                    request.search_manifest.manifest_id,
-                    request.holdout_manifest.dataset_id,
-                    request.holdout_manifest.manifest_id,
-                    request.strategy.strategy_id(),
-                    request.config.config_id(),
-                    to_i64(request.range.start)?,
-                    to_i64(request.range.end)?,
-                    u64_to_sqlite(request.seed),
-                    request.reason,
-                    request.metric_id,
-                    METRICS_SCHEMA_VERSION,
-                    to_i64(request.evaluations_n)?,
-                    reserved_sequence,
-                ],
-            );
-            if let Err(error) = result {
-                if error.to_string().contains("UNIQUE constraint failed") {
-                    return Err(RetestError::HoldoutAlreadyConsumed);
-                }
-                return Err(error.into());
-            }
-            transaction.commit()?;
-        }
-
+        let request = self.reserve_final_holdout(&plan, reserved_sequence)?;
         let execution = (|| {
+            let (holdout_manifest, holdout_bars) =
+                datasets.materialize_final_holdout(&request.split)?;
+            if holdout_manifest.dataset_id != request.split.holdout_dataset_id()
+                || holdout_manifest.manifest_id != request.split.holdout_manifest_id()
+                || holdout_bars.len() != request.range.len()
+            {
+                return Err(RetestError::Invalid(
+                    "materialized holdout partition does not match the sealed split".into(),
+                ));
+            }
             let report = execute_verified_report(
                 &request.strategy,
                 &request.config,
-                &request.holdout_manifest,
-                &request.holdout_bars,
+                &holdout_manifest,
+                &holdout_bars,
                 request.seed,
             )?;
             let metric_value = match report
@@ -2760,10 +3121,7 @@ impl RetestEvidenceStore {
         })();
         match execution {
             Ok((report, metric_value, report_json)) => {
-                self.connection.borrow().execute(
-                    "UPDATE final_holdout_execution SET outcome='succeeded',run_id=?2,report_id=?3,metric_value=?4,report_json=?5 WHERE request_id=?1 AND outcome='reserved'",
-                    params![request.request_id, report.run_id(), report.report_id(), metric_value, report_json],
-                )?;
+                self.complete_final_holdout(&request, &report, metric_value, &report_json)?;
                 Ok(CompletedFinalHoldout {
                     request_id: request.request_id,
                     strategy_id: request.strategy.strategy_id().to_string(),
@@ -2775,14 +3133,166 @@ impl RetestEvidenceStore {
                 })
             }
             Err(error) => {
-                let failure = error.to_string();
-                self.connection.borrow().execute(
-                    "UPDATE final_holdout_execution SET outcome='failed',failure=?2 WHERE request_id=?1 AND outcome='reserved'",
-                    params![request.request_id, failure],
-                )?;
+                let failure = bounded_failure(&error.to_string());
+                if let Err(audit) = self.fail_final_holdout(&request.request_id, &failure) {
+                    return Err(RetestError::Invalid(format!(
+                        "final-holdout failure audit did not commit ({audit}); execution failed: {failure}"
+                    )));
+                }
                 Err(error)
             }
         }
+    }
+
+    /// Derive the evaluation count and reserve the burn in one immediate transaction.
+    ///
+    /// `evaluations_n` is never accepted from a caller. It is derived here from the immutable
+    /// evidence already persisted against the search partition, inside the same transaction that
+    /// takes the burn, so no writer can add or hide evaluations in between (§7.7, §7.8).
+    fn reserve_final_holdout(
+        &self,
+        plan: &FinalHoldoutPlan,
+        reserved_sequence: i64,
+    ) -> Result<FinalHoldoutExecutionRequest, RetestError> {
+        let mut connection = self.connection.borrow_mut();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        plan.search_session.verify()?;
+        if plan.search_session.split_id != plan.burned.split().split_id()
+            || plan.search_session.search_dataset_id != plan.burned.split().search_dataset_id()
+            || plan.search_session.search_manifest_id != plan.burned.split().search_manifest_id()
+            || plan.search_session.config_id != plan.config.config_id()
+            || plan.search_session.selected_strategy_id != plan.strategy.strategy_id()
+        {
+            return Err(RetestError::NoSearchEvidence);
+        }
+        let request = FinalHoldoutExecutionRequest::seal(
+            &plan.strategy,
+            &plan.config,
+            &plan.burned,
+            &plan.search_session,
+            plan.seed,
+        )?;
+        request.verify()?;
+        let result = transaction.execute(
+            "INSERT INTO final_holdout_execution(request_id,search_session_id,split_id,parent_dataset_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,'reserved')",
+            params![
+                request.request_id,
+                request.search_session_id,
+                request.split.split_id(),
+                request.split.parent_dataset_id(),
+                request.split.search_dataset_id(),
+                request.split.search_manifest_id(),
+                request.split.holdout_dataset_id(),
+                request.split.holdout_manifest_id(),
+                request.strategy.strategy_id(),
+                request.config.config_id(),
+                to_i64(request.range.start)?,
+                to_i64(request.range.end)?,
+                u64_to_sqlite(request.seed),
+                request.reason,
+                request.metric_id,
+                METRICS_SCHEMA_VERSION,
+                to_i64(request.evaluations_n)?,
+                reserved_sequence,
+            ],
+        );
+        if let Err(error) = result {
+            if error.to_string().contains("UNIQUE constraint failed") {
+                return Err(RetestError::HoldoutAlreadyConsumed);
+            }
+            return Err(error.into());
+        }
+        transaction.commit()?;
+        Ok(request)
+    }
+
+    /// Transition the reservation to `succeeded`, then read the row back and validate it before
+    /// this call is allowed to report success.
+    fn complete_final_holdout(
+        &self,
+        request: &FinalHoldoutExecutionRequest,
+        report: &StrategyReportArtifact,
+        metric_value: f64,
+        report_json: &[u8],
+    ) -> Result<(), RetestError> {
+        let mut connection = self.connection.borrow_mut();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let affected = transaction.execute(
+            "UPDATE final_holdout_execution SET outcome='succeeded',run_id=?2,report_id=?3,metric_value=?4,report_json=?5 WHERE request_id=?1 AND outcome='reserved'",
+            params![request.request_id, report.run_id(), report.report_id(), metric_value, report_json],
+        )?;
+        if affected != 1 {
+            return Err(RetestError::HoldoutStateRace);
+        }
+        let (record, stored_json) = read_final_holdout_row(&transaction, &request.request_id)?;
+        validate_final_holdout_record(&record, stored_json.as_deref())?;
+        if record.outcome != FinalHoldoutOutcome::Succeeded
+            || !record_matches_request(&record, request)
+            || stored_json.as_deref() != Some(report_json)
+            || record.run_id.as_deref() != Some(report.run_id())
+            || record.report_id.as_deref() != Some(report.report_id())
+            || record.metric_value.map(f64::to_bits) != Some(metric_value.to_bits())
+            || record.failure.is_some()
+        {
+            return Err(RetestError::Invalid(
+                "persisted final-holdout evidence does not match the executed run".into(),
+            ));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Transition the reservation to `failed` and confirm the durable audit before returning.
+    fn fail_final_holdout(&self, request_id: &str, failure: &str) -> Result<(), RetestError> {
+        let mut connection = self.connection.borrow_mut();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let affected = transaction.execute(
+            "UPDATE final_holdout_execution SET outcome='failed',failure=?2 WHERE request_id=?1 AND outcome='reserved'",
+            params![request_id, failure],
+        )?;
+        if affected != 1 {
+            return Err(RetestError::HoldoutStateRace);
+        }
+        let (record, stored_json) = read_final_holdout_row(&transaction, request_id)?;
+        validate_final_holdout_record(&record, stored_json.as_deref())?;
+        if record.outcome != FinalHoldoutOutcome::Failed
+            || record.failure.as_deref() != Some(failure)
+        {
+            return Err(RetestError::Invalid(
+                "persisted final-holdout failure audit does not match".into(),
+            ));
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The bounded, indexed plans behind the derived evaluation count, for auditing.
+    pub fn explain_search_evaluation_derivation(
+        &self,
+        search_dataset_id: &str,
+        candidate_id: &str,
+    ) -> Result<Vec<String>, RetestError> {
+        if !is_id(search_dataset_id) || !is_id(candidate_id) {
+            return Err(RetestError::Invalid(
+                "invalid search evidence derivation key".into(),
+            ));
+        }
+        let connection = self.connection.borrow();
+        let mut plan = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {SEARCH_CANDIDATE_SQL}"))?
+            .query_map(params![search_dataset_id, candidate_id], |row| row.get(3))?
+            .collect::<Result<Vec<String>, _>>()?;
+        plan.extend(
+            connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {SEARCH_EVALUATION_SQL}"))?
+                .query_map(
+                    params![search_dataset_id, to_i64(MAX_TRIAL_BUDGET)?],
+                    |row| row.get::<_, String>(3),
+                )?
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        Ok(plan)
     }
 
     pub fn query_final_holdouts(
@@ -2793,48 +3303,17 @@ impl RetestEvidenceStore {
         let after = query.after_sequence.unwrap_or(i64::MIN);
         let fetch = to_i64(query.limit.saturating_add(1))?;
         let connection = self.connection.borrow();
-        let mut statement = connection.prepare(
-            "SELECT request_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome,run_id,report_id,metric_value,failure,report_json
+        let mut statement = connection.prepare(&format!(
+            "SELECT {FINAL_HOLDOUT_COLUMNS}
              FROM final_holdout_execution
              INDEXED BY idx_final_holdout_search_sequence
              WHERE search_dataset_id=?1 AND reserved_sequence>?2
-             ORDER BY reserved_sequence,request_id LIMIT ?3",
+             ORDER BY reserved_sequence,request_id LIMIT ?3"
+        ))?;
+        let mapped = statement.query_map(
+            params![query.search_dataset_id, after, fetch],
+            decode_final_holdout_row,
         )?;
-        let mapped =
-            statement.query_map(params![query.search_dataset_id, after, fetch], |row| {
-                let outcome: String = row.get(15)?;
-                let report_json: Option<Vec<u8>> = row.get(20)?;
-                Ok((
-                    FinalHoldoutRecord {
-                        request_id: row.get(0)?,
-                        search_dataset_id: row.get(1)?,
-                        search_manifest_id: row.get(2)?,
-                        holdout_dataset_id: row.get(3)?,
-                        holdout_manifest_id: row.get(4)?,
-                        strategy_id: row.get(5)?,
-                        config_id: row.get(6)?,
-                        range: usize::try_from(row.get::<_, i64>(7)?).unwrap_or(usize::MAX)
-                            ..usize::try_from(row.get::<_, i64>(8)?).unwrap_or(usize::MAX),
-                        seed: sqlite_to_u64(row.get::<_, i64>(9)?),
-                        reason: row.get(10)?,
-                        metric_id: row.get(11)?,
-                        metrics_version: row.get(12)?,
-                        evaluations_n: usize::try_from(row.get::<_, i64>(13)?)
-                            .unwrap_or(usize::MAX),
-                        reserved_sequence: row.get(14)?,
-                        outcome: match outcome.as_str() {
-                            "reserved" => FinalHoldoutOutcome::Reserved,
-                            "succeeded" => FinalHoldoutOutcome::Succeeded,
-                            _ => FinalHoldoutOutcome::Failed,
-                        },
-                        run_id: row.get(16)?,
-                        report_id: row.get(17)?,
-                        metric_value: row.get(18)?,
-                        failure: row.get(19)?,
-                    },
-                    report_json,
-                ))
-            })?;
         let mut records = Vec::new();
         for mapped_row in mapped {
             let (record, report_json) = mapped_row?;
@@ -2898,11 +3377,20 @@ impl RetestEvidenceStore {
     ) -> Result<(), RetestError> {
         request.verify()?;
         self.connection.borrow().execute(
-            "INSERT INTO final_holdout_execution(request_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,'reserved')",
-            params![request.request_id,request.search_manifest.dataset_id,request.search_manifest.manifest_id,request.holdout_manifest.dataset_id,request.holdout_manifest.manifest_id,request.strategy.strategy_id(),request.config.config_id(),to_i64(request.range.start)?,to_i64(request.range.end)?,u64_to_sqlite(request.seed),request.reason,request.metric_id,METRICS_SCHEMA_VERSION,to_i64(request.evaluations_n)?,reserved_sequence],
+            "INSERT INTO final_holdout_execution(request_id,search_session_id,split_id,parent_dataset_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,'reserved')",
+            params![request.request_id,request.search_session_id,request.split.split_id(),request.split.parent_dataset_id(),request.split.search_dataset_id(),request.split.search_manifest_id(),request.split.holdout_dataset_id(),request.split.holdout_manifest_id(),request.strategy.strategy_id(),request.config.config_id(),to_i64(request.range.start)?,to_i64(request.range.end)?,u64_to_sqlite(request.seed),request.reason,request.metric_id,METRICS_SCHEMA_VERSION,to_i64(request.evaluations_n)?,reserved_sequence],
         )?;
         Ok(())
+    }
+
+    /// Stand-in for a second connection winning the conditional transition first.
+    #[cfg(test)]
+    fn test_only_force_failed(&self, request_id: &str) -> Result<usize, RetestError> {
+        Ok(self.connection.borrow().execute(
+            "UPDATE final_holdout_execution SET outcome='failed',failure='raced' WHERE request_id=?1 AND outcome='reserved'",
+            params![request_id],
+        )?)
     }
 
     #[cfg(test)]
@@ -3424,7 +3912,9 @@ impl RetestWorker {
         )
     }
 
-    pub fn spawn_in_memory(
+    /// Test-only seam, for the same reason [`RetestEvidenceStore::open_in_memory`] is.
+    #[cfg(test)]
+    pub(crate) fn spawn_in_memory(
         job_capacity: usize,
         event_capacity: usize,
     ) -> Result<Self, RetestError> {
@@ -3621,11 +4111,132 @@ fn validate_page_query(id: &str, limit: usize) -> Result<(), RetestError> {
     }
     Ok(())
 }
+const FINAL_HOLDOUT_COLUMNS: &str = "request_id,search_dataset_id,search_manifest_id,holdout_dataset_id,holdout_manifest_id,strategy_id,config_id,range_start,range_end,seed,reason,metric_id,metrics_version,evaluations_n,reserved_sequence,outcome,run_id,report_id,metric_value,failure,report_json,split_id,parent_dataset_id,search_session_id";
+
+const SEARCH_CANDIDATE_SQL: &str =
+    "SELECT EXISTS(SELECT 1 FROM retest_evidence INDEXED BY idx_retest_dataset_candidate
+       WHERE dataset_id=?1 AND candidate_id=?2)";
+const SEARCH_EVALUATION_SQL: &str = "SELECT COUNT(*) FROM (
+       SELECT run_id FROM retest_evidence INDEXED BY idx_retest_dataset_candidate
+       WHERE dataset_id=?1 ORDER BY candidate_id,created_sequence,run_id LIMIT ?2)";
+
+fn decode_final_holdout_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(FinalHoldoutRecord, Option<Vec<u8>>)> {
+    let outcome: String = row.get(15)?;
+    let report_json = match row.get_ref(20)? {
+        rusqlite::types::ValueRef::Null => None,
+        rusqlite::types::ValueRef::Blob(bytes) if bytes.len() <= MAX_FINAL_HOLDOUT_REPORT_BYTES => {
+            Some(bytes.to_vec())
+        }
+        rusqlite::types::ValueRef::Blob(_) => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                20,
+                rusqlite::types::Type::Blob,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "final-holdout report BLOB exceeds allocation bound",
+                )),
+            ));
+        }
+        value => {
+            return Err(rusqlite::Error::InvalidColumnType(
+                20,
+                "report_json".into(),
+                value.data_type(),
+            ));
+        }
+    };
+    Ok((
+        FinalHoldoutRecord {
+            request_id: row.get(0)?,
+            search_session_id: row.get(23)?,
+            split_id: row.get(21)?,
+            parent_dataset_id: row.get(22)?,
+            search_dataset_id: row.get(1)?,
+            search_manifest_id: row.get(2)?,
+            holdout_dataset_id: row.get(3)?,
+            holdout_manifest_id: row.get(4)?,
+            strategy_id: row.get(5)?,
+            config_id: row.get(6)?,
+            range: usize::try_from(row.get::<_, i64>(7)?).unwrap_or(usize::MAX)
+                ..usize::try_from(row.get::<_, i64>(8)?).unwrap_or(usize::MAX),
+            seed: sqlite_to_u64(row.get::<_, i64>(9)?),
+            reason: row.get(10)?,
+            metric_id: row.get(11)?,
+            metrics_version: row.get(12)?,
+            evaluations_n: usize::try_from(row.get::<_, i64>(13)?).unwrap_or(usize::MAX),
+            reserved_sequence: row.get(14)?,
+            outcome: match outcome.as_str() {
+                "reserved" => FinalHoldoutOutcome::Reserved,
+                "succeeded" => FinalHoldoutOutcome::Succeeded,
+                _ => FinalHoldoutOutcome::Failed,
+            },
+            run_id: row.get(16)?,
+            report_id: row.get(17)?,
+            metric_value: row.get(18)?,
+            failure: row.get(19)?,
+        },
+        report_json,
+    ))
+}
+
+/// Read one ledger row by primary key, for read-back validation inside the writing transaction.
+fn read_final_holdout_row(
+    connection: &Connection,
+    request_id: &str,
+) -> Result<(FinalHoldoutRecord, Option<Vec<u8>>), RetestError> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT {FINAL_HOLDOUT_COLUMNS} FROM final_holdout_execution WHERE request_id=?1"
+    ))?;
+    Ok(statement.query_row(params![request_id], decode_final_holdout_row)?)
+}
+
+/// Whether a stored row carries exactly the identity the request was sealed under.
+fn record_matches_request(
+    record: &FinalHoldoutRecord,
+    request: &FinalHoldoutExecutionRequest,
+) -> bool {
+    record.request_id == request.request_id
+        && record.search_session_id == request.search_session_id
+        && record.split_id == request.split.split_id()
+        && record.parent_dataset_id == request.split.parent_dataset_id()
+        && record.search_dataset_id == request.split.search_dataset_id()
+        && record.search_manifest_id == request.split.search_manifest_id()
+        && record.holdout_dataset_id == request.split.holdout_dataset_id()
+        && record.holdout_manifest_id == request.split.holdout_manifest_id()
+        && record.strategy_id == request.strategy.strategy_id()
+        && record.config_id == request.config.config_id()
+        && record.range == request.range
+        && record.seed == request.seed
+        && record.reason == request.reason
+        && record.metric_id == request.metric_id
+        && record.metrics_version == METRICS_SCHEMA_VERSION
+        && record.evaluations_n == request.evaluations_n
+}
+
+/// Failure text is durable evidence, so it is bounded on a character boundary before it is stored.
+fn bounded_failure(failure: &str) -> String {
+    let end = failure
+        .char_indices()
+        .map(|(index, character)| index + character.len_utf8())
+        .take_while(|end| *end <= MAX_HOLDOUT_FAILURE_BYTES)
+        .last()
+        .unwrap_or(0);
+    if end == 0 {
+        "final-holdout execution failed".to_string()
+    } else {
+        failure[..end].to_string()
+    }
+}
+
 fn validate_final_holdout_record(
     record: &FinalHoldoutRecord,
     report_json: Option<&[u8]>,
 ) -> Result<(), RetestError> {
     if !is_id(&record.request_id)
+        || !is_id(&record.split_id)
+        || !is_id(&record.parent_dataset_id)
         || !is_id(&record.search_dataset_id)
         || !is_id(&record.search_manifest_id)
         || !is_id(&record.holdout_dataset_id)
@@ -3639,6 +4250,9 @@ fn validate_final_holdout_record(
             != final_holdout_request_id(
                 &record.strategy_id,
                 &record.config_id,
+                &record.search_session_id,
+                &record.split_id,
+                &record.parent_dataset_id,
                 &record.search_dataset_id,
                 &record.search_manifest_id,
                 &record.holdout_dataset_id,

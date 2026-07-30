@@ -9,6 +9,7 @@ use crate::core::strategy_dataset::{
     AdjustmentPolicy, CalendarPolicy, DatasetManifest, DatasetManifestInput, DatasetProvenance,
     DatasetQaPolicy,
 };
+use crate::core::strategy_dataset_store::FinalHoldoutSplit;
 use crate::core::strategy_ir::{
     CompareOp, Condition, ExecutionSettings, Operand, ParamRange, ParamValue, SlippageModel,
     SpreadModel, StrategyExecutionConfig, StrategyParameter,
@@ -396,84 +397,224 @@ fn immutable_evidence_store_persists_lineage_n_robustness_and_bounded_indexed_qu
 #[test]
 fn holdout_consumption_is_one_way_immutable_and_index_queryable() {
     let store = RetestEvidenceStore::open_in_memory().unwrap();
-    let quarantine = HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), 10, 2).unwrap();
+    let (_root, datasets) = holdout_environment();
+    let quarantine = holdout_split(&datasets).into_quarantine();
     assert!(quarantine.lease(StageAccess::FinalReview).is_err());
+    let holdout_dataset_id = quarantine.split().unwrap().holdout_dataset_id().to_string();
     let burned = quarantine.burn("promotion review").unwrap();
     store.record_holdout_consumption(&burned, 4).unwrap();
-    let records = store.query_holdout(&"f".repeat(64), 4).unwrap();
+    let records = store.query_holdout(&holdout_dataset_id, 4).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].range, 8..10);
     assert_eq!(records[0].reason, "promotion review");
     assert!(store.record_holdout_consumption(&burned, 5).is_err());
-    assert!(store.test_only_update_holdout(&"f".repeat(64)).is_err());
+    assert!(store.test_only_update_holdout(&holdout_dataset_id).is_err());
 }
 
-fn final_holdout_fixture(metric_id: &str) -> FinalHoldoutExecutionRequest {
-    let (strategy, config, search_bars, _) = fixture();
-    let holdout_bars = vec![
-        Bar {
-            timestamp: "2026-01-09T00:00:00Z".into(),
-            open: 108.0,
-            high: 110.0,
-            low: 107.0,
-            close: 109.0,
-            volume: 100.0,
-        },
-        Bar {
-            timestamp: "2026-01-10T00:00:00Z".into(),
-            open: 109.0,
-            high: 111.0,
-            low: 108.0,
-            close: 110.0,
-            volume: 100.0,
-        },
-    ];
-    let search_len = search_bars.len();
-    let holdout_len = holdout_bars.len();
-    let mut parent_bars = search_bars;
-    parent_bars.extend(holdout_bars);
-    let parent_manifest = manifest(&parent_bars);
-    let search_manifest =
-        DatasetManifest::build(&parent_manifest.to_input(), &parent_bars[..8]).unwrap();
-    let holdout_manifest =
-        DatasetManifest::build(&parent_manifest.to_input(), &parent_bars[8..]).unwrap();
-    let quarantine = HoldoutQuarantine::new(
-        &search_manifest.dataset_id,
-        &holdout_manifest.dataset_id,
-        search_len + holdout_len,
-        holdout_len,
-    )
-    .unwrap();
-    FinalHoldoutExecutionRequest::seal(
-        &strategy,
-        &config,
-        &parent_manifest,
-        &parent_bars,
-        quarantine.burn("promotion decision").unwrap(),
-        metric_id,
-        41,
-        17,
-    )
-    .unwrap()
+// ── Final holdout (ADR-135 §7.8) ───────────────────────────────────
+//
+// Every fixture here goes through the trusted boundary: a real dataset store owns the parent
+// bars, the store carves the split, and the canonical authority derived from that same store
+// root reserves, materializes and burns. No test hands execution a bar or an evaluation count.
+
+fn holdout_parent_bars() -> Vec<Bar> {
+    let mut parent = bars();
+    parent.push(Bar {
+        timestamp: "2026-01-09T00:00:00Z".into(),
+        open: 108.0,
+        high: 110.0,
+        low: 107.0,
+        close: 109.0,
+        volume: 100.0,
+    });
+    parent.push(Bar {
+        timestamp: "2026-01-10T00:00:00Z".into(),
+        open: 109.0,
+        high: 111.0,
+        low: 108.0,
+        close: 110.0,
+        volume: 100.0,
+    });
+    parent
+}
+
+/// A dataset store rooted in a fresh temp directory, holding the 10-bar parent dataset.
+fn holdout_environment() -> (tempfile::TempDir, FileDatasetStore) {
+    let root = tempfile::tempdir().unwrap();
+    let store = FileDatasetStore::open(root.path()).unwrap();
+    let parent = holdout_parent_bars();
+    store
+        .build_and_put(&manifest(&parent).to_input(), &parent)
+        .unwrap();
+    (root, store)
+}
+
+fn holdout_split(store: &FileDatasetStore) -> FinalHoldoutSplit {
+    store
+        .split_final_holdout(&manifest(&holdout_parent_bars()).dataset_id, 2)
+        .unwrap()
+}
+
+fn final_holdout_plan(store: &FileDatasetStore, metric_id: &str, seed: u64) -> FinalHoldoutPlan {
+    final_holdout_plan_with_evaluations(store, metric_id, seed, 1)
+}
+
+fn final_holdout_plan_with_evaluations(
+    store: &FileDatasetStore,
+    metric_id: &str,
+    seed: u64,
+    evaluations_n: usize,
+) -> FinalHoldoutPlan {
+    let (strategy, config, _, _) = fixture();
+    let search_session = test_search_session(store, &strategy, &config, metric_id, evaluations_n);
+    FinalHoldoutPlan {
+        strategy,
+        config,
+        burned: holdout_split(store)
+            .into_quarantine()
+            .burn("promotion decision")
+            .unwrap(),
+        search_session,
+        seed,
+    }
+}
+
+fn test_search_session(
+    store: &FileDatasetStore,
+    strategy: &StrategyIr,
+    config: &StrategyExecutionConfig,
+    metric_id: &str,
+    count: usize,
+) -> SearchSessionArtifact {
+    let split = holdout_split(store);
+    let id =
+        |kind: &str, ordinal: usize| hex(Sha256::digest(format!("{kind}:{ordinal}").as_bytes()));
+    let evaluations = (0..count)
+        .map(|ordinal| SearchSessionEvaluation {
+            ordinal,
+            strategy_id: strategy.strategy_id().to_string(),
+            request_id: id("request", ordinal),
+            run_id: id("run", ordinal),
+            report_id: id("report", ordinal),
+            seed: ordinal as u64,
+            metric_value: ordinal as f64,
+        })
+        .collect();
+    let mut artifact = SearchSessionArtifact {
+        schema_version: SEARCH_SESSION_SCHEMA_VERSION,
+        artifact_id: String::new(),
+        search_lineage_id: id("lineage", count),
+        search_plan_id: id("plan", count),
+        split_id: split.artifact().split_id().to_string(),
+        search_dataset_id: split.artifact().search_dataset_id().to_string(),
+        search_manifest_id: split.artifact().search_manifest_id().to_string(),
+        config_id: config.config_id().to_string(),
+        metric_id: metric_id.to_string(),
+        metrics_version: METRICS_SCHEMA_VERSION.to_string(),
+        direction: ObjectiveDirection::Maximize,
+        root_seed: 7,
+        selected_strategy_id: strategy.strategy_id().to_string(),
+        evaluations,
+    };
+    artifact.artifact_id = artifact.compute_id().unwrap();
+    artifact.verify().unwrap();
+    artifact
+}
+
+/// Persist `count` immutable search evaluations of the selected candidate on the search
+/// partition, each asserting `asserted_n`. This is the evidence the burn derives N from.
+fn seed_search_evidence(
+    authority: &FinalHoldoutAuthority,
+    datasets: &FileDatasetStore,
+    count: usize,
+    asserted_n: usize,
+) {
+    let (strategy, config, _, _) = fixture();
+    let split = holdout_split(datasets);
+    for index in 0..count {
+        let request = RetestExecutionRequest::seal(
+            &strategy,
+            &config,
+            split.search_manifest(),
+            split.search_bars(),
+            split.quarantine().lease(StageAccess::Search).unwrap(),
+            ObservationRole::SearchEvaluation,
+            "net_profit",
+            100 + index as u64,
+        )
+        .unwrap();
+        let completed = execute_retest(request, &pipeline(), asserted_n).unwrap();
+        authority
+            .evidence()
+            .persist(&completed, None, index as i64 + 1)
+            .unwrap();
+    }
+}
+
+/// The whole trusted environment: store, canonical authority, and seeded search evidence.
+fn holdout_authority(
+    evaluations: usize,
+    asserted_n: usize,
+) -> (tempfile::TempDir, FileDatasetStore, FinalHoldoutAuthority) {
+    let (root, datasets) = holdout_environment();
+    let authority = FinalHoldoutAuthority::open(&datasets).unwrap();
+    seed_search_evidence(&authority, &datasets, evaluations, asserted_n);
+    (root, datasets, authority)
+}
+
+#[test]
+fn search_and_robustness_partitions_never_carry_the_final_holdout_bars() {
+    let (_root, datasets) = holdout_environment();
+    let split = holdout_split(&datasets);
+    let parent = holdout_parent_bars();
+
+    assert_eq!(split.search_bars().len(), 8);
+    assert_eq!(
+        split.search_manifest().dataset_id,
+        split.artifact().search_dataset_id()
+    );
+    assert_eq!(split.artifact().range(), 8..10);
+    for holdout_bar in &parent[8..] {
+        assert!(
+            !split
+                .search_bars()
+                .iter()
+                .any(|bar| bar.timestamp == holdout_bar.timestamp),
+            "a search partition must not contain holdout bars"
+        );
+    }
+    // The lease a search or robustness stage receives names only the search partition.
+    let lease = split.quarantine().lease(StageAccess::Search).unwrap();
+    assert_eq!(lease.dataset_id(), split.artifact().search_dataset_id());
+    assert_eq!(lease.range(), 0..8);
+    assert!(split.quarantine().lease(StageAccess::FinalReview).is_err());
+
+    // A holdout that does not partition the parent is refused before anything is materialized.
+    let parent_id = manifest(&parent).dataset_id.clone();
+    assert!(datasets.split_final_holdout(&parent_id, 0).is_err());
+    assert!(datasets.split_final_holdout(&parent_id, 10).is_err());
+    assert!(datasets.split_final_holdout(&"c".repeat(64), 2).is_err());
 }
 
 #[test]
 fn final_holdout_executes_exact_bars_and_persists_all_identity_evidence() {
-    let store = RetestEvidenceStore::open_in_memory().unwrap();
-    let request = final_holdout_fixture("net_profit");
-    let search_dataset_id = request.search_dataset_id().to_string();
-    let holdout_dataset_id = request.holdout_dataset_id().to_string();
-    let completed = store.execute_final_holdout(request, 10).unwrap();
+    let (_root, datasets, authority) = holdout_authority(3, 1);
+    let plan = final_holdout_plan_with_evaluations(&datasets, "net_profit", 41, 3);
+    let split = plan.burned.split().clone();
+    let completed = authority.execute_final_holdout(plan, 10).unwrap();
 
     completed.report().verify().unwrap();
     assert_eq!(completed.request_id().len(), 64);
     assert_eq!(completed.report().run_id(), completed.run_id());
-    assert_eq!(completed.evaluations_n(), 17);
+    // Three persisted evaluations, each claiming N=1: the burn records the count it can prove.
+    assert_eq!(completed.evaluations_n(), 3);
     assert_eq!(completed.metric_id(), "net_profit");
     assert!(completed.metric_value().is_finite());
-    let page = store
+
+    let page = authority
+        .evidence()
         .query_final_holdouts(&FinalHoldoutQuery {
-            search_dataset_id,
+            search_dataset_id: split.search_dataset_id().to_string(),
             after_sequence: None,
             limit: 1,
         })
@@ -481,13 +622,16 @@ fn final_holdout_executes_exact_bars_and_persists_all_identity_evidence() {
     assert_eq!(page.records.len(), 1);
     assert!(!page.has_more);
     let record = &page.records[0];
-    assert_eq!(record.holdout_dataset_id, holdout_dataset_id);
+    assert_eq!(record.split_id, split.split_id());
+    assert_eq!(record.parent_dataset_id, split.parent_dataset_id());
+    assert_eq!(record.holdout_dataset_id, split.holdout_dataset_id());
+    assert_eq!(record.holdout_manifest_id, split.holdout_manifest_id());
     assert_eq!(record.range, 8..10);
     assert_eq!(record.reason, "promotion decision");
     assert_eq!(record.strategy_id, completed.strategy_id());
     assert_eq!(record.config_id, completed.config_id());
     assert_eq!(record.seed, 41);
-    assert_eq!(record.evaluations_n, 17);
+    assert_eq!(record.evaluations_n, 3);
     assert_eq!(record.run_id.as_deref(), Some(completed.run_id()));
     assert_eq!(
         record.report_id.as_deref(),
@@ -495,14 +639,19 @@ fn final_holdout_executes_exact_bars_and_persists_all_identity_evidence() {
     );
     assert_eq!(record.outcome, FinalHoldoutOutcome::Succeeded);
     assert!(record.failure.is_none());
+    // The report the ledger holds is the exact executed run, on the holdout partition only.
+    assert_eq!(
+        record.metric_value.map(f64::to_bits),
+        Some(completed.metric_value().to_bits())
+    );
 
-    let store = RetestEvidenceStore::open_in_memory().unwrap();
-    let mut maximum_seed = final_holdout_fixture("net_profit");
-    maximum_seed.seed = u64::MAX;
-    maximum_seed.request_id = maximum_seed.compute_id();
-    let search_dataset_id = maximum_seed.search_dataset_id().to_string();
-    store.execute_final_holdout(maximum_seed, 11).unwrap();
-    let page = store
+    // A full u64 seed survives the ledger round trip.
+    let (_root, datasets, authority) = holdout_authority(1, 5);
+    let plan = final_holdout_plan(&datasets, "net_profit", u64::MAX);
+    let search_dataset_id = plan.burned.split().search_dataset_id().to_string();
+    authority.execute_final_holdout(plan, 11).unwrap();
+    let page = authority
+        .evidence()
         .query_final_holdouts(&FinalHoldoutQuery {
             search_dataset_id,
             after_sequence: None,
@@ -510,86 +659,261 @@ fn final_holdout_executes_exact_bars_and_persists_all_identity_evidence() {
         })
         .unwrap();
     assert_eq!(page.records[0].seed, u64::MAX);
+    // One persisted evaluation that claimed five still counts as one. The final authority never
+    // promotes a self-reported N merely because it was written into an immutable row first.
+    assert_eq!(page.records[0].evaluations_n, 1);
 }
 
 #[test]
-fn final_holdout_rejects_wrong_range_content_foreign_inputs_and_tampering() {
-    let mut request = final_holdout_fixture("net_profit");
-    request.range.end += 1;
+fn final_holdout_evaluation_count_is_derived_from_complete_search_session_not_asserted() {
+    // An empty or incomplete search session is not authoritative, so the holdout is not burned.
+    let (_root, datasets) = holdout_environment();
+    let authority = FinalHoldoutAuthority::open(&datasets).unwrap();
+    let mut plan = final_holdout_plan(&datasets, "net_profit", 41);
+    let search_dataset_id = plan.burned.split().search_dataset_id().to_string();
+    plan.search_session.evaluations.clear();
+    assert!(matches!(
+        authority.execute_final_holdout(plan, 1),
+        Err(RetestError::Invalid(_))
+    ));
     assert!(
-        RetestEvidenceStore::open_in_memory()
+        authority
+            .evidence()
+            .query_final_holdouts(&FinalHoldoutQuery {
+                search_dataset_id: search_dataset_id.clone(),
+                after_sequence: None,
+                limit: 4,
+            })
             .unwrap()
-            .execute_final_holdout(request, 1)
+            .records
+            .is_empty()
+    );
+
+    // Arbitrary retest rows for a different candidate do not replace a complete search session.
+    let (strategy, config, _, _) = fixture();
+    let split = holdout_split(&datasets);
+    let other = trading_fixture().0;
+    let request = RetestExecutionRequest::seal(
+        &other,
+        &config,
+        split.search_manifest(),
+        split.search_bars(),
+        split.quarantine().lease(StageAccess::Search).unwrap(),
+        ObservationRole::SearchEvaluation,
+        "net_profit",
+        7,
+    )
+    .unwrap();
+    let completed = execute_retest(request, &pipeline(), 4).unwrap();
+    authority.evidence().persist(&completed, None, 1).unwrap();
+    assert_ne!(other.strategy_id(), strategy.strategy_id());
+    let mut plan = final_holdout_plan(&datasets, "net_profit", 41);
+    plan.search_session.evaluations.clear();
+    assert!(matches!(
+        authority.execute_final_holdout(plan, 2),
+        Err(RetestError::Invalid(_))
+    ));
+
+    // The complete sealed search session carries all 12 evaluations regardless of assertions in
+    // unrelated retest rows.
+    let (_root, datasets, authority) = holdout_authority(12, 1);
+    let completed = authority
+        .execute_final_holdout(
+            final_holdout_plan_with_evaluations(&datasets, "net_profit", 41, 12),
+            3,
+        )
+        .unwrap();
+    assert_eq!(completed.evaluations_n(), 12);
+
+    // Nor can an unrelated retest row inflate the one-evaluation search session.
+    let (_root, datasets, authority) = holdout_authority(1, 12);
+    let completed = authority
+        .execute_final_holdout(final_holdout_plan(&datasets, "net_profit", 41), 4)
+        .unwrap();
+    assert_eq!(completed.evaluations_n(), 1);
+
+    // The derivation is a bounded, indexed scan of that partition's evidence.
+    let search_dataset_id = holdout_split(&datasets)
+        .artifact()
+        .search_dataset_id()
+        .to_string();
+    let plan_lines = authority
+        .evidence()
+        .explain_search_evaluation_derivation(&search_dataset_id, completed.strategy_id())
+        .unwrap();
+    assert_eq!(
+        plan_lines
+            .iter()
+            .filter(|line| line.contains("idx_retest_dataset_candidate"))
+            .count(),
+        2,
+        "{plan_lines:?}"
+    );
+    assert!(
+        !plan_lines
+            .iter()
+            .any(|line| line.contains("SCAN retest_evidence")),
+        "the derivation must never fall back to a table scan: {plan_lines:?}"
+    );
+    assert!(
+        authority
+            .evidence()
+            .explain_search_evaluation_derivation("not-an-id", completed.strategy_id())
+            .is_err()
+    );
+}
+
+#[test]
+fn final_holdout_refuses_forged_capabilities_and_foreign_datasets() {
+    let (_root, datasets, authority) = holdout_authority(2, 1);
+
+    // A quarantine assembled from bare ids proves no partition and cannot be burned at all.
+    assert!(
+        HoldoutQuarantine::new("a".repeat(64), "f".repeat(64), 10, 2)
+            .unwrap()
+            .burn("forged")
             .is_err()
     );
 
-    let mut request = final_holdout_fixture("net_profit");
-    request.holdout_bars[0].close += 1.0;
-    assert!(
-        RetestEvidenceStore::open_in_memory()
+    // A self-consistent but re-addressed split disagrees with the complete search session and is
+    // rejected before reservation or materialization.
+    let forged = holdout_split(&datasets)
+        .artifact()
+        .test_only_forged(&"c".repeat(64));
+    let plan = FinalHoldoutPlan {
+        strategy: fixture().0,
+        config: fixture().1,
+        burned: HoldoutQuarantine::sealed(forged.clone())
             .unwrap()
-            .execute_final_holdout(request, 1)
-            .is_err()
-    );
+            .burn("forged capability")
+            .unwrap(),
+        search_session: test_search_session(&datasets, &fixture().0, &fixture().1, "net_profit", 2),
+        seed: 41,
+    };
+    assert!(authority.execute_final_holdout(plan, 1).is_err());
+    let burned = authority
+        .evidence()
+        .query_final_holdouts(&FinalHoldoutQuery {
+            search_dataset_id: forged.search_dataset_id().to_string(),
+            after_sequence: None,
+            limit: 2,
+        })
+        .unwrap();
+    assert!(burned.records.is_empty());
 
-    let mut request = final_holdout_fixture("net_profit");
-    request.strategy = trading_fixture().0;
+    // A split minted by another dataset store names a parent this authority does not hold.
+    let (_other_root, other_datasets) = holdout_foreign_environment();
+    let foreign = holdout_foreign_split(&other_datasets);
+    let plan = FinalHoldoutPlan {
+        strategy: fixture().0,
+        config: fixture().1,
+        burned: foreign.into_quarantine().burn("foreign dataset").unwrap(),
+        search_session: test_search_session(&datasets, &fixture().0, &fixture().1, "net_profit", 2),
+        seed: 41,
+    };
+    // Its split disagrees with this authority's complete search session, so it is refused before
+    // reservation or materialization.
+    let foreign_result = authority.execute_final_holdout(plan, 2);
     assert!(
-        RetestEvidenceStore::open_in_memory()
-            .unwrap()
-            .execute_final_holdout(request, 1)
-            .is_err()
+        matches!(foreign_result, Err(RetestError::NoSearchEvidence)),
+        "{foreign_result:?}"
     );
+}
 
-    let mut request = final_holdout_fixture("net_profit");
-    let mut settings = request.config.to_input();
-    settings.warmup_bars = 1;
-    request.config = StrategyExecutionConfig::build(&settings).unwrap();
-    assert!(
-        RetestEvidenceStore::open_in_memory()
-            .unwrap()
-            .execute_final_holdout(request, 1)
-            .is_err()
-    );
+fn holdout_foreign_bars() -> Vec<Bar> {
+    let mut foreign = holdout_parent_bars();
+    for bar in &mut foreign {
+        bar.close += 0.25;
+    }
+    foreign
+}
 
-    let mut request = final_holdout_fixture("net_profit");
-    let mut foreign_search_bars = bars();
-    foreign_search_bars[0].close += 0.5;
-    request.search_manifest = manifest(&foreign_search_bars);
-    assert!(
-        RetestEvidenceStore::open_in_memory()
-            .unwrap()
-            .execute_final_holdout(request, 1)
-            .is_err()
-    );
+fn holdout_foreign_environment() -> (tempfile::TempDir, FileDatasetStore) {
+    let root = tempfile::tempdir().unwrap();
+    let store = FileDatasetStore::open(root.path()).unwrap();
+    let foreign = holdout_foreign_bars();
+    store
+        .build_and_put(&manifest(&foreign).to_input(), &foreign)
+        .unwrap();
+    (root, store)
+}
 
-    let mut request = final_holdout_fixture("net_profit");
-    request.request_id.replace_range(0..1, "0");
-    assert!(
-        RetestEvidenceStore::open_in_memory()
-            .unwrap()
-            .execute_final_holdout(request, 1)
-            .is_err()
+fn holdout_foreign_split(store: &FileDatasetStore) -> FinalHoldoutSplit {
+    store
+        .split_final_holdout(&manifest(&holdout_foreign_bars()).dataset_id, 2)
+        .unwrap()
+}
+
+#[test]
+fn final_holdout_authority_is_anchored_to_its_dataset_store_not_chosen_by_the_caller() {
+    let (root, datasets, authority) = holdout_authority(2, 1);
+    assert_eq!(
+        authority.ledger_path(),
+        root.path()
+            .join(".test-installation-final-holdout-authority")
+            .join(FINAL_HOLDOUT_LEDGER_FILE)
     );
+    authority
+        .execute_final_holdout(final_holdout_plan(&datasets, "net_profit", 41), 1)
+        .unwrap();
+
+    // Re-opening the authority — a restart, or a second handle in the same process — lands on the
+    // same ledger, so the holdout stays consumed. There is no alternate store to select.
+    let reopened = FinalHoldoutAuthority::open(&datasets).unwrap();
+    assert!(matches!(
+        reopened.execute_final_holdout(final_holdout_plan(&datasets, "net_profit", 41), 2),
+        Err(RetestError::HoldoutAlreadyConsumed)
+    ));
+    // A different seed, metric or reason is still the same holdout partition.
+    assert!(matches!(
+        reopened.execute_final_holdout(final_holdout_plan(&datasets, "profit_factor", 7), 3),
+        Err(RetestError::HoldoutAlreadyConsumed)
+    ));
+    assert_eq!(
+        reopened
+            .evidence()
+            .query_final_holdouts(&FinalHoldoutQuery {
+                search_dataset_id: holdout_split(&datasets)
+                    .artifact()
+                    .search_dataset_id()
+                    .to_string(),
+                after_sequence: None,
+                limit: 8,
+            })
+            .unwrap()
+            .records
+            .len(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn final_holdout_authority_refuses_symlinked_ledger_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let authority_parent = tempfile::tempdir().unwrap();
+    let authority_root = authority_parent.path().join("authority");
+    let redirected = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(redirected.path(), &authority_root).unwrap();
+
+    assert!(FileDatasetStore::open_with_test_authority_root(root.path(), authority_root).is_err());
+    assert!(!redirected.path().join(FINAL_HOLDOUT_LEDGER_FILE).exists());
 }
 
 #[test]
 fn duplicate_concurrent_final_holdout_attempts_cannot_both_execute() {
-    let path = std::env::temp_dir().join(format!(
-        "typhoon-final-holdout-race-{}-{}.sqlite",
-        std::process::id(),
-        final_holdout_fixture("net_profit").request_id()
-    ));
+    let (root, datasets, authority) = holdout_authority(2, 1);
+    drop(authority);
     let barrier = Arc::new(std::sync::Barrier::new(2));
     let mut handles = Vec::new();
     for sequence in [1, 2] {
-        let path = path.clone();
+        let datasets = datasets.clone();
         let barrier = barrier.clone();
         handles.push(std::thread::spawn(move || {
-            let store = RetestEvidenceStore::open(&path).unwrap();
-            let request = final_holdout_fixture("net_profit");
+            let authority = FinalHoldoutAuthority::open(&datasets).unwrap();
+            let plan = final_holdout_plan(&datasets, "net_profit", 41);
             barrier.wait();
-            store.execute_final_holdout(request, sequence)
+            authority.execute_final_holdout(plan, sequence)
         }));
     }
     let outcomes = handles
@@ -601,57 +925,138 @@ fn duplicate_concurrent_final_holdout_attempts_cannot_both_execute() {
         outcomes.iter().filter(|outcome| outcome.is_err()).count(),
         1
     );
-    let store = RetestEvidenceStore::open(&path).unwrap();
+    let authority = FinalHoldoutAuthority::open(&datasets).unwrap();
     let query = FinalHoldoutQuery {
-        search_dataset_id: final_holdout_fixture("net_profit")
+        search_dataset_id: holdout_split(&datasets)
+            .artifact()
             .search_dataset_id()
             .to_string(),
         after_sequence: None,
         limit: 2,
     };
-    assert_eq!(store.query_final_holdouts(&query).unwrap().records.len(), 1);
-    let _ = std::fs::remove_file(path);
+    assert_eq!(
+        authority
+            .evidence()
+            .query_final_holdouts(&query)
+            .unwrap()
+            .records
+            .len(),
+        1
+    );
+    drop(root);
+}
+
+#[test]
+fn conditional_state_transitions_fail_closed_when_they_match_no_row() {
+    let (_root, datasets, authority) = holdout_authority(2, 1);
+    let plan = final_holdout_plan(&datasets, "net_profit", 41);
+    let request = FinalHoldoutExecutionRequest::seal(
+        &plan.strategy,
+        &plan.config,
+        &plan.burned,
+        &plan.search_session,
+        plan.seed,
+    )
+    .unwrap();
+    let store = authority.evidence();
+    store.test_only_reserve_final_holdout(&request, 1).unwrap();
+
+    // Another connection transitions the reserved row first.
+    assert_eq!(
+        store.test_only_force_failed(request.request_id()).unwrap(),
+        1
+    );
+
+    let (holdout_manifest, holdout_bars) = datasets
+        .materialize_final_holdout(request.split())
+        .expect("the trusted store still materializes the sealed partition");
+    let report = execute_verified_report(
+        &request.strategy,
+        &request.config,
+        &holdout_manifest,
+        &holdout_bars,
+        request.seed,
+    )
+    .unwrap();
+    let metric_value = match report.analysis().metric("net_profit") {
+        Some(MetricValue::Defined { value }) => *value,
+        other => panic!("expected a defined metric, got {other:?}"),
+    };
+    let report_json = report.to_json_vec().unwrap();
+
+    // Success must not be reported for a transition that matched no row, and the failure audit
+    // must not be double-written either.
+    assert!(matches!(
+        store.complete_final_holdout(&request, &report, metric_value, &report_json),
+        Err(RetestError::HoldoutStateRace)
+    ));
+    assert!(matches!(
+        store.fail_final_holdout(request.request_id(), "second failure"),
+        Err(RetestError::HoldoutStateRace)
+    ));
+
+    // The row the racing writer committed is untouched, and still one-way.
+    let page = store
+        .query_final_holdouts(&FinalHoldoutQuery {
+            search_dataset_id: request.search_dataset_id().to_string(),
+            after_sequence: None,
+            limit: 4,
+        })
+        .unwrap();
+    assert_eq!(page.records.len(), 1);
+    assert_eq!(page.records[0].outcome, FinalHoldoutOutcome::Failed);
+    assert_eq!(page.records[0].failure.as_deref(), Some("raced"));
+    assert!(page.records[0].report_id.is_none());
+    assert!(matches!(
+        authority.execute_final_holdout(final_holdout_plan(&datasets, "net_profit", 41), 5),
+        Err(RetestError::HoldoutAlreadyConsumed)
+    ));
 }
 
 #[test]
 fn failed_or_crashed_final_holdout_attempt_remains_burned_across_restart() {
-    let path = std::env::temp_dir().join(format!(
-        "typhoon-final-holdout-restart-{}-{}.sqlite",
-        std::process::id(),
-        final_holdout_fixture("net_profit").request_id()
-    ));
-    {
-        let store = RetestEvidenceStore::open(&path).unwrap();
-        store
-            .test_only_reserve_final_holdout(&final_holdout_fixture("net_profit"), 1)
-            .unwrap();
-    }
-    let store = RetestEvidenceStore::open(&path).unwrap();
-    assert!(
-        store
-            .execute_final_holdout(final_holdout_fixture("net_profit"), 2)
-            .is_err()
-    );
+    let (root, datasets, authority) = holdout_authority(2, 1);
+    let plan = final_holdout_plan(&datasets, "net_profit", 41);
+    let request = FinalHoldoutExecutionRequest::seal(
+        &plan.strategy,
+        &plan.config,
+        &plan.burned,
+        &plan.search_session,
+        plan.seed,
+    )
+    .unwrap();
+    // A process that reserved the burn and then died leaves the holdout consumed.
+    authority
+        .evidence()
+        .test_only_reserve_final_holdout(&request, 1)
+        .unwrap();
+    drop(authority);
 
-    let failed_path = std::env::temp_dir().join(format!(
-        "typhoon-final-holdout-failed-{}-{}.sqlite",
-        std::process::id(),
-        final_holdout_fixture("profit_factor").request_id()
+    let restarted = FinalHoldoutAuthority::open(&datasets).unwrap();
+    assert!(matches!(
+        restarted.execute_final_holdout(final_holdout_plan(&datasets, "net_profit", 41), 2),
+        Err(RetestError::HoldoutAlreadyConsumed)
     ));
-    let failed_store = RetestEvidenceStore::open(&failed_path).unwrap();
+
+    // A run whose metric is undefined fails, and that failure is itself durable and one-way.
+    let (failed_root, failed_datasets, failed_authority) = holdout_authority(2, 1);
     assert!(
-        failed_store
-            .execute_final_holdout(final_holdout_fixture("profit_factor"), 3)
+        failed_authority
+            .execute_final_holdout(final_holdout_plan(&failed_datasets, "profit_factor", 41), 3)
             .is_err()
     );
     let query = FinalHoldoutQuery {
-        search_dataset_id: final_holdout_fixture("profit_factor")
+        search_dataset_id: holdout_split(&failed_datasets)
+            .artifact()
             .search_dataset_id()
             .to_string(),
         after_sequence: None,
-        limit: 1,
+        limit: 2,
     };
-    let failed = failed_store.query_final_holdouts(&query).unwrap();
+    drop(failed_authority);
+    let restarted = FinalHoldoutAuthority::open(&failed_datasets).unwrap();
+    let failed = restarted.evidence().query_final_holdouts(&query).unwrap();
+    assert_eq!(failed.records.len(), 1);
     assert_eq!(failed.records[0].outcome, FinalHoldoutOutcome::Failed);
     assert!(
         failed.records[0]
@@ -659,21 +1064,22 @@ fn failed_or_crashed_final_holdout_attempt_remains_burned_across_restart() {
             .as_deref()
             .is_some_and(|value| !value.is_empty())
     );
-    assert!(
-        failed_store
-            .execute_final_holdout(final_holdout_fixture("profit_factor"), 4)
-            .is_err()
-    );
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(failed_path);
+    assert!(matches!(
+        restarted
+            .execute_final_holdout(final_holdout_plan(&failed_datasets, "profit_factor", 41), 4),
+        Err(RetestError::HoldoutAlreadyConsumed)
+    ));
+    drop(root);
+    drop(failed_root);
 }
 
 #[test]
 fn final_holdout_query_is_bounded_deterministic_immutable_and_indexed() {
-    let store = RetestEvidenceStore::open_in_memory().unwrap();
-    let request = final_holdout_fixture("net_profit");
-    let search_dataset_id = request.search_dataset_id().to_string();
-    store.execute_final_holdout(request, 5).unwrap();
+    let (_root, datasets, authority) = holdout_authority(2, 1);
+    let plan = final_holdout_plan(&datasets, "net_profit", 41);
+    let search_dataset_id = plan.burned.split().search_dataset_id().to_string();
+    authority.execute_final_holdout(plan, 5).unwrap();
+    let store = authority.evidence();
     let query = FinalHoldoutQuery {
         search_dataset_id,
         after_sequence: None,
@@ -706,13 +1112,13 @@ fn final_holdout_query_is_bounded_deterministic_immutable_and_indexed() {
 
 #[test]
 fn final_holdout_persisted_identity_is_content_addressed_after_storage_tamper() {
-    let store = RetestEvidenceStore::open_in_memory().unwrap();
-    let request = final_holdout_fixture("net_profit");
-    let search_dataset_id = request.search_dataset_id().to_string();
-    let request_id = request.request_id().to_string();
-    store.execute_final_holdout(request, 5).unwrap();
+    let (_root, datasets, authority) = holdout_authority(2, 1);
+    let plan = final_holdout_plan(&datasets, "net_profit", 41);
+    let search_dataset_id = plan.burned.split().search_dataset_id().to_string();
+    let completed = authority.execute_final_holdout(plan, 5).unwrap();
+    let store = authority.evidence();
     store
-        .test_only_tamper_final_holdout_identity(&request_id)
+        .test_only_tamper_final_holdout_identity(completed.request_id())
         .unwrap();
     assert!(
         store

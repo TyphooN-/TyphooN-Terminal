@@ -17,6 +17,8 @@
 //! first failure, and publishes the exact distributions each stage consumed (§5.6, §7.3, §7.7).
 //! No stage can name the final holdout: a lease never carries that partition (§7.8).
 
+use crate::broker::alpaca::Bar;
+use crate::core::strategy_dataset::DatasetManifest;
 use crate::core::strategy_ir::{ParamRange, ParamValue, StrategyIr};
 use crate::core::strategy_metrics::MetricValue;
 use crate::core::strategy_report::StrategyReportArtifact;
@@ -180,6 +182,29 @@ pub struct SearchBatch {
     pub evaluations_n: usize,
     pub duplicates_skipped: usize,
     pub exhausted_budget: bool,
+    plan_id: String,
+}
+
+impl SearchBatch {
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    /// Proves the candidate set is the complete output of the immutable generated plan. Public
+    /// fields remain readable for orchestration, but editing or truncating them invalidates this
+    /// private mint rather than creating a smaller post-selection search.
+    pub(crate) fn verify_plan(&self) -> Result<(), OptimizationError> {
+        if self.evaluations_n == 0
+            || self.evaluations_n != self.candidates.len()
+            || self.evaluations_n > MAX_TRIAL_BUDGET
+            || self.plan_id != search_plan_id(self)
+        {
+            return Err(OptimizationError::InvalidArtifact(
+                "search plan identity mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub fn generate_candidates(
@@ -281,12 +306,41 @@ pub fn generate_candidates(
             duplicates_skipped += 1;
         }
     }
-    Ok(SearchBatch {
+    let mut batch = SearchBatch {
         evaluations_n: candidates.len(),
         exhausted_budget: budget < space.combinations,
         candidates,
         duplicates_skipped,
-    })
+        plan_id: String::new(),
+    };
+    batch.plan_id = search_plan_id(&batch);
+    Ok(batch)
+}
+
+fn search_plan_id(batch: &SearchBatch) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"typhoon.strategy_optimization.search_plan.v1");
+    for value in [
+        batch.evaluations_n as u64,
+        batch.duplicates_skipped as u64,
+        u64::from(batch.exhausted_budget),
+    ] {
+        hasher.update(value.to_be_bytes());
+    }
+    for candidate in &batch.candidates {
+        frame(&mut hasher, candidate.candidate_id.as_bytes());
+        for (parameter, value) in &candidate.assignments {
+            frame(&mut hasher, parameter.as_bytes());
+            let (kind, bytes) = value_key(value);
+            hasher.update([kind]);
+            frame(&mut hasher, &bytes);
+        }
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 pub(crate) fn instantiate(
@@ -1166,10 +1220,224 @@ impl SearchDataLease {
     }
 }
 
+const HOLDOUT_SPLIT_DOMAIN: &[u8] = b"typhoon.strategy_optimization.holdout_split.v1";
+
+/// The one immutable parent/split artifact both partitions of a dataset are bound to.
+///
+/// Minted only by the trusted dataset store
+/// ([`split_final_holdout`](crate::core::strategy_dataset_store::FileDatasetStore::split_final_holdout)),
+/// which owns the parent bars — a caller cannot assemble one from ids it chose. `split_id`
+/// content-addresses the parent identity, the symbol/timeframe/provenance/adjustment/calendar/QA
+/// policy identity, both partition identities, the exact split range and every partition boundary
+/// timestamp. A search partition of one dataset therefore cannot be sealed against the holdout of
+/// another, and neither partition can be silently re-cut (§7.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldoutSplitArtifact {
+    split_id: String,
+    parent_dataset_id: String,
+    parent_manifest_id: String,
+    symbol: String,
+    timeframe: String,
+    source: String,
+    venue: String,
+    pipeline: String,
+    adjustment_id: String,
+    calendar_policy_id: String,
+    qa_policy_id: String,
+    parent_bar_count: usize,
+    search_dataset_id: String,
+    search_manifest_id: String,
+    holdout_dataset_id: String,
+    holdout_manifest_id: String,
+    range: Range<usize>,
+    parent_first_timestamp: String,
+    search_last_timestamp: String,
+    holdout_first_timestamp: String,
+    holdout_last_timestamp: String,
+}
+impl HoldoutSplitArtifact {
+    /// Seal one parent dataset cut at `boundary`, returning the split identity together with the
+    /// search and final-holdout manifests it derived.
+    ///
+    /// Both partitions are built here from the verified parent bars, so there is no way to hand
+    /// this a partition that does not come from this parent: a foreign or re-cut partition is not
+    /// a validation failure, it is unrepresentable.
+    pub(crate) fn seal(
+        parent: &DatasetManifest,
+        bars: &[Bar],
+        boundary: usize,
+    ) -> Result<(Self, DatasetManifest, DatasetManifest), OptimizationError> {
+        parent
+            .verify(bars)
+            .map_err(|error| OptimizationError::InvalidFold {
+                detail: format!("parent dataset does not describe these bars: {error}"),
+            })?;
+        if boundary == 0 || boundary >= bars.len() {
+            return Err(invalid_split(
+                "split boundary does not partition the parent dataset",
+            ));
+        }
+        let input = parent.to_input();
+        let build = |window: &[Bar]| {
+            DatasetManifest::build(&input, window).map_err(|error| OptimizationError::InvalidFold {
+                detail: format!("partition manifest: {error}"),
+            })
+        };
+        let search = build(&bars[..boundary])?;
+        let holdout = build(&bars[boundary..])?;
+        let range = boundary..bars.len();
+        // Boundary identity is part of the split, so a re-cut at a different bar is a different
+        // artifact even when both partitions happen to keep their bar counts.
+        let (Some(parent_first), Some(search_last), Some(holdout_first), Some(holdout_last)) = (
+            parent.first_timestamp.as_deref(),
+            search.last_timestamp.as_deref(),
+            holdout.first_timestamp.as_deref(),
+            holdout.last_timestamp.as_deref(),
+        ) else {
+            return Err(invalid_split("partition boundary timestamps are absent"));
+        };
+        if parent.dataset_id == search.dataset_id
+            || parent.dataset_id == holdout.dataset_id
+            || search.dataset_id == holdout.dataset_id
+        {
+            return Err(invalid_split("partitions are not distinct from the parent"));
+        }
+        let parent_bar_count = bars.len();
+        let mut artifact = Self {
+            split_id: String::new(),
+            parent_dataset_id: parent.dataset_id.clone(),
+            parent_manifest_id: parent.manifest_id.clone(),
+            symbol: parent.symbol.clone(),
+            timeframe: parent.timeframe.clone(),
+            source: parent.provenance.source.clone(),
+            venue: parent.provenance.venue.clone(),
+            pipeline: parent.provenance.pipeline.clone(),
+            adjustment_id: parent.adjustment.wire_id().to_string(),
+            calendar_policy_id: parent.calendar_policy_id.clone(),
+            qa_policy_id: parent.qa_policy_id.clone(),
+            parent_bar_count,
+            search_dataset_id: search.dataset_id.clone(),
+            search_manifest_id: search.manifest_id.clone(),
+            holdout_dataset_id: holdout.dataset_id.clone(),
+            holdout_manifest_id: holdout.manifest_id.clone(),
+            range,
+            parent_first_timestamp: parent_first.to_string(),
+            search_last_timestamp: search_last.to_string(),
+            holdout_first_timestamp: holdout_first.to_string(),
+            holdout_last_timestamp: holdout_last.to_string(),
+        };
+        artifact.split_id = artifact.compute_id();
+        Ok((artifact, search, holdout))
+    }
+    fn compute_id(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(HOLDOUT_SPLIT_DOMAIN);
+        for value in [
+            self.parent_dataset_id.as_str(),
+            self.parent_manifest_id.as_str(),
+            self.symbol.as_str(),
+            self.timeframe.as_str(),
+            self.source.as_str(),
+            self.venue.as_str(),
+            self.pipeline.as_str(),
+            self.adjustment_id.as_str(),
+            self.calendar_policy_id.as_str(),
+            self.qa_policy_id.as_str(),
+            self.search_dataset_id.as_str(),
+            self.search_manifest_id.as_str(),
+            self.holdout_dataset_id.as_str(),
+            self.holdout_manifest_id.as_str(),
+            self.parent_first_timestamp.as_str(),
+            self.search_last_timestamp.as_str(),
+            self.holdout_first_timestamp.as_str(),
+            self.holdout_last_timestamp.as_str(),
+        ] {
+            frame(&mut hasher, value.as_bytes());
+        }
+        for value in [
+            self.parent_bar_count as u64,
+            self.range.start as u64,
+            self.range.end as u64,
+        ] {
+            hasher.update(value.to_be_bytes());
+        }
+        let digest = hasher.finalize();
+        let mut output = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(output, "{byte:02x}");
+        }
+        output
+    }
+    /// Whether the artifact still content-addresses its own fields. A store that reloads a split
+    /// re-seals it from the parent bars instead, so this is the cheap half of that check.
+    pub fn verify(&self) -> Result<(), OptimizationError> {
+        if self.split_id == self.compute_id() {
+            Ok(())
+        } else {
+            Err(invalid_split("split identity mismatch"))
+        }
+    }
+    pub fn split_id(&self) -> &str {
+        &self.split_id
+    }
+    pub fn parent_dataset_id(&self) -> &str {
+        &self.parent_dataset_id
+    }
+    pub fn parent_manifest_id(&self) -> &str {
+        &self.parent_manifest_id
+    }
+    pub fn parent_bar_count(&self) -> usize {
+        self.parent_bar_count
+    }
+    pub fn symbol(&self) -> &str {
+        &self.symbol
+    }
+    pub fn timeframe(&self) -> &str {
+        &self.timeframe
+    }
+    pub fn search_dataset_id(&self) -> &str {
+        &self.search_dataset_id
+    }
+    pub fn search_manifest_id(&self) -> &str {
+        &self.search_manifest_id
+    }
+    pub fn holdout_dataset_id(&self) -> &str {
+        &self.holdout_dataset_id
+    }
+    pub fn holdout_manifest_id(&self) -> &str {
+        &self.holdout_manifest_id
+    }
+    pub fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+    pub fn holdout_first_timestamp(&self) -> &str {
+        &self.holdout_first_timestamp
+    }
+    pub fn holdout_last_timestamp(&self) -> &str {
+        &self.holdout_last_timestamp
+    }
+    /// Re-address a copy under a caller-chosen holdout identity. Only tests need this: it is the
+    /// forged capability the trusted store must refuse to materialize.
+    #[cfg(test)]
+    pub(crate) fn test_only_forged(&self, holdout_dataset_id: &str) -> Self {
+        let mut forged = self.clone();
+        forged.holdout_dataset_id = holdout_dataset_id.to_string();
+        forged.split_id = forged.compute_id();
+        forged
+    }
+}
+fn invalid_split(detail: &str) -> OptimizationError {
+    OptimizationError::InvalidFold {
+        detail: detail.into(),
+    }
+}
+
 /// Linear final-review capability. It is deliberately not `Clone` and is only created by
 /// consuming the quarantine, so no API can return to search after the holdout is burned.
 #[derive(Debug)]
 pub struct BurnedHoldout {
+    split: HoldoutSplitArtifact,
     search_dataset_id: String,
     dataset_id: String,
     range: Range<usize>,
@@ -1188,16 +1456,32 @@ impl BurnedHoldout {
     pub fn dataset_id(&self) -> &str {
         &self.dataset_id
     }
+    /// The trusted split this burn was minted from. Final execution reads every dataset identity
+    /// from here, never from caller-supplied manifests or bars.
+    pub fn split(&self) -> &HoldoutSplitArtifact {
+        &self.split
+    }
 }
 
+/// Search/robustness access to a dataset that has a final holdout carved out of it.
+///
+/// A quarantine only ever hands out the *search* partition. The burnable form — the one that can
+/// reach the holdout — additionally carries the trusted [`HoldoutSplitArtifact`], so a quarantine
+/// assembled from bare ids can lease search data but can never be burned.
+#[derive(Debug)]
 pub struct HoldoutQuarantine {
     search_dataset_id: String,
     final_holdout_dataset_id: String,
     total: usize,
     holdout: usize,
+    split: Option<HoldoutSplitArtifact>,
 }
 impl HoldoutQuarantine {
-    pub fn new(
+    /// Lease-only quarantine over ids the caller already holds. Test-only and deliberately
+    /// unburnable: nothing here proves the two ids are partitions of one dataset, so it exists
+    /// solely to exercise search/robustness lease behaviour without a stored dataset.
+    #[cfg(test)]
+    pub(crate) fn new(
         search_dataset_id: impl Into<String>,
         final_holdout_dataset_id: impl Into<String>,
         total: usize,
@@ -1220,7 +1504,24 @@ impl HoldoutQuarantine {
             final_holdout_dataset_id,
             total,
             holdout,
+            split: None,
         })
+    }
+    /// The burnable quarantine. Only the trusted dataset store mints the artifact this needs.
+    pub(crate) fn sealed(split: HoldoutSplitArtifact) -> Result<Self, OptimizationError> {
+        split.verify()?;
+        let range = split.range();
+        Ok(Self {
+            search_dataset_id: split.search_dataset_id().to_string(),
+            final_holdout_dataset_id: split.holdout_dataset_id().to_string(),
+            total: split.parent_bar_count(),
+            holdout: range.len(),
+            split: Some(split),
+        })
+    }
+    /// The trusted split, when this quarantine came from the dataset store.
+    pub fn split(&self) -> Option<&HoldoutSplitArtifact> {
+        self.split.as_ref()
     }
     pub fn search_range(&self) -> Result<Range<usize>, OptimizationError> {
         Ok(0..self.total - self.holdout)
@@ -1250,15 +1551,31 @@ impl HoldoutQuarantine {
             }
         }
     }
+    /// Consume the quarantine into the linear final-review capability.
+    ///
+    /// Refused unless this quarantine carries the trusted split artifact: a caller that minted a
+    /// quarantine from ids it chose never gains holdout access (§7.8).
     pub fn burn(self, reason: impl Into<String>) -> Result<BurnedHoldout, OptimizationError> {
         let reason = reason.into();
         if reason.trim().is_empty() {
             return Err(OptimizationError::InvalidObservation);
         }
+        let split = self.split.ok_or(OptimizationError::HoldoutForbidden)?;
+        split.verify()?;
+        let range = self.total - self.holdout..self.total;
+        if split.range() != range
+            || split.search_dataset_id() != self.search_dataset_id
+            || split.holdout_dataset_id() != self.final_holdout_dataset_id
+        {
+            return Err(invalid_split(
+                "quarantine disagrees with its split artifact",
+            ));
+        }
         Ok(BurnedHoldout {
+            split,
             search_dataset_id: self.search_dataset_id,
             dataset_id: self.final_holdout_dataset_id,
-            range: self.total - self.holdout..self.total,
+            range,
             reason,
         })
     }

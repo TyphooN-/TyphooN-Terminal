@@ -54,6 +54,7 @@ use crate::broker::alpaca::Bar;
 use crate::core::strategy_dataset::{
     DatasetError, DatasetManifest, DatasetManifestInput, DatasetQaFinding, DatasetQaReport,
 };
+use crate::core::strategy_optimization::{HoldoutQuarantine, HoldoutSplitArtifact};
 use sha2::{Digest, Sha256};
 #[cfg(any(target_os = "linux", test))]
 use std::collections::BinaryHeap;
@@ -504,6 +505,48 @@ pub struct DatasetPage {
     pub findings: Vec<DatasetQaFinding>,
 }
 
+/// One trusted final-holdout partition of a stored dataset (ADR-135 §7.8).
+///
+/// Carries the search partition in full and the split identity — never the holdout bars.
+#[derive(Debug)]
+pub struct FinalHoldoutSplit {
+    artifact: HoldoutSplitArtifact,
+    search_manifest: DatasetManifest,
+    search_bars: Vec<Bar>,
+    quarantine: HoldoutQuarantine,
+}
+
+impl FinalHoldoutSplit {
+    pub fn artifact(&self) -> &HoldoutSplitArtifact {
+        &self.artifact
+    }
+    /// Manifest of the search partition — the id search evidence is persisted under.
+    pub fn search_manifest(&self) -> &DatasetManifest {
+        &self.search_manifest
+    }
+    /// The search partition's bars. The holdout tail is not reachable from here.
+    pub fn search_bars(&self) -> &[Bar] {
+        &self.search_bars
+    }
+    /// The quarantine search and robustness stages lease from, and the only burnable one.
+    pub fn quarantine(&self) -> &HoldoutQuarantine {
+        &self.quarantine
+    }
+    pub fn into_quarantine(self) -> HoldoutQuarantine {
+        self.quarantine
+    }
+}
+
+/// Seal the split identity for `bars` cut at `boundary`, with both derived partition manifests.
+fn seal_split(
+    parent: &DatasetManifest,
+    bars: &[Bar],
+    boundary: usize,
+) -> Result<(HoldoutSplitArtifact, DatasetManifest, DatasetManifest), DatasetStoreError> {
+    HoldoutSplitArtifact::seal(parent, bars, boundary)
+        .map_err(|error| corrupt(format!("final holdout split: {error}")))
+}
+
 /// A filesystem-backed dataset store rooted at one directory.
 #[derive(Debug)]
 struct SecureDir {
@@ -524,6 +567,26 @@ impl Clone for SecureDir {
 pub struct FileDatasetStore {
     root: PathBuf,
     layout: SecureDir,
+    final_holdout_authority: SecureDir,
+}
+
+/// A SQLite name resolved through an already-open directory descriptor.  Keeping the directory
+/// alive makes replacement of any absolute path component irrelevant after this value is minted.
+#[derive(Debug)]
+pub(crate) struct DescriptorPinnedSqlitePath {
+    _directory: SecureDir,
+    path: PathBuf,
+    label: PathBuf,
+}
+
+impl DescriptorPinnedSqlitePath {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn label(&self) -> &Path {
+        &self.label
+    }
 }
 
 /// Monotonic suffix for staging directory names. Combined with the process id
@@ -544,21 +607,87 @@ impl FileDatasetStore {
         }
         #[cfg(target_os = "linux")]
         {
-            let root_dir = secure_bootstrap_absolute_dir(&root)?;
-            let created_layout = secure_mkdir(&root_dir, DATASET_STORE_LAYOUT_VERSION)?;
-            if created_layout {
-                root_dir
-                    .file
-                    .sync_all()
-                    .map_err(|e| io_error(&root, "fsync store root", e))?;
-            }
-            let layout = secure_open_dir(&root_dir, DATASET_STORE_LAYOUT_VERSION)?;
-            Ok(Self { root, layout })
+            #[cfg(test)]
+            let authority_root = root.join(".test-installation-final-holdout-authority");
+            #[cfg(not(test))]
+            let authority_root = canonical_installation_authority_root()?;
+            Self::open_with_authority_root(root, authority_root)
         }
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn open_with_test_authority_root(
+        root: impl AsRef<Path>,
+        authority_root: impl AsRef<Path>,
+    ) -> Result<Self, DatasetStoreError> {
+        Self::open_with_authority_root(
+            root.as_ref().to_path_buf(),
+            authority_root.as_ref().to_path_buf(),
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn open_with_authority_root(
+        root: PathBuf,
+        authority_root: PathBuf,
+    ) -> Result<Self, DatasetStoreError> {
+        let root_dir = secure_bootstrap_absolute_dir(&root)?;
+        // Retain the descriptor's absolute label rather than the caller's spelling. Adjacent
+        // authorities (notably the final-holdout burn ledger) must stay anchored to this store
+        // even if the process later changes its working directory.
+        let root = root_dir.label.clone();
+        let created_layout = secure_mkdir(&root_dir, DATASET_STORE_LAYOUT_VERSION)?;
+        if created_layout {
+            root_dir
+                .file
+                .sync_all()
+                .map_err(|e| io_error(&root, "fsync store root", e))?;
+        }
+        let layout = secure_open_dir(&root_dir, DATASET_STORE_LAYOUT_VERSION)?;
+        let final_holdout_authority = secure_bootstrap_absolute_dir(&authority_root)?;
+        Ok(Self {
+            root,
+            layout,
+            final_holdout_authority,
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Resolve one authority-owned SQLite file beneath the installation authority descriptor.
+    /// The final component is preflighted with the same `openat2` no-follow policy as dataset
+    /// files; SQLite subsequently opens `/proc/self/fd/<dirfd>/<name>` with `SQLITE_OPEN_NOFOLLOW`.
+    pub(crate) fn final_holdout_sqlite_path(
+        &self,
+        name: &str,
+    ) -> Result<DescriptorPinnedSqlitePath, DatasetStoreError> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = name;
+            Err(DatasetStoreError::UnsupportedPlatform {
+                platform: std::env::consts::OS,
+            })
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let label = self.final_holdout_authority.label.join(name);
+            let _ = c_name(name, &label)?;
+            // Existing special files and symlinks fail before SQLite sees them. Absence is valid:
+            // SQLite creates the regular file relative to the pinned directory.
+            let _ = secure_open_file_optional(&self.final_holdout_authority, name)?;
+            let path = PathBuf::from(format!(
+                "/proc/self/fd/{}/{}",
+                self.final_holdout_authority.file.as_raw_fd(),
+                name
+            ));
+            Ok(DescriptorPinnedSqlitePath {
+                _directory: self.final_holdout_authority.clone(),
+                path,
+                label,
+            })
+        }
     }
 
     fn layout_dir(&self) -> PathBuf {
@@ -830,6 +959,87 @@ impl FileDatasetStore {
             payload_label,
             layout,
         })
+    }
+
+    /// Carve a stored dataset into a search partition and a quarantined final holdout
+    /// (ADR-135 §7.8).
+    ///
+    /// This is the *only* way to obtain a burnable [`HoldoutQuarantine`]. The store owns the
+    /// parent bars, so the returned [`HoldoutSplitArtifact`] binds both partitions to one parent
+    /// under one instrument/provenance/adjustment/calendar/QA identity — a caller can neither
+    /// forge the split nor pair partitions from two datasets.
+    ///
+    /// The caller receives the search bars only. The holdout bars are dropped here and are
+    /// re-materialized from the store exclusively by the final-holdout authority, after the burn
+    /// is durably recorded.
+    pub fn split_final_holdout(
+        &self,
+        parent_dataset_id: &str,
+        holdout_bar_count: usize,
+    ) -> Result<FinalHoldoutSplit, DatasetStoreError> {
+        let record = self.open_record(parent_dataset_id)?;
+        let parent = record.manifest().clone();
+        let bars = record.load_bars()?;
+        if holdout_bar_count == 0 || holdout_bar_count >= bars.len() {
+            return Err(DatasetStoreError::InvalidArtifact {
+                artifact: MANIFEST_FILE,
+                message: format!(
+                    "a {holdout_bar_count}-bar final holdout does not partition {} bars",
+                    bars.len()
+                ),
+            });
+        }
+        let boundary = bars.len() - holdout_bar_count;
+        let (artifact, search_manifest, _) = seal_split(&parent, &bars, boundary)?;
+        let mut search_bars = bars;
+        search_bars.truncate(boundary);
+        Ok(FinalHoldoutSplit {
+            quarantine: HoldoutQuarantine::sealed(artifact.clone())
+                .map_err(|error| corrupt(format!("final holdout split: {error}")))?,
+            artifact,
+            search_manifest,
+            search_bars,
+        })
+    }
+
+    /// Re-derive the final-holdout bars for a sealed split.
+    ///
+    /// Crate-internal on purpose: only the final-holdout authority calls this, and only after the
+    /// burn is committed. The whole split is re-sealed from the parent record on disk and compared
+    /// for equality, so a forged or re-cut artifact — a foreign holdout id, a moved boundary, a
+    /// different parent — fails closed here instead of executing against bars nobody vouched for.
+    pub(crate) fn materialize_final_holdout(
+        &self,
+        split: &HoldoutSplitArtifact,
+    ) -> Result<(DatasetManifest, Vec<Bar>), DatasetStoreError> {
+        split
+            .verify()
+            .map_err(|error| corrupt(format!("final holdout split: {error}")))?;
+        let record = self.open_record(split.parent_dataset_id())?;
+        let parent = record.manifest().clone();
+        if parent.manifest_id != split.parent_manifest_id() {
+            return Err(corrupt(format!(
+                "parent manifest is `{}`, split names `{}`",
+                parent.manifest_id,
+                split.parent_manifest_id()
+            )));
+        }
+        let bars = record.load_bars()?;
+        let range = split.range();
+        if bars.len() != split.parent_bar_count() || range.end != bars.len() {
+            return Err(corrupt(format!(
+                "parent holds {} bars, split names {}",
+                bars.len(),
+                split.parent_bar_count()
+            )));
+        }
+        let (resealed, _, holdout_manifest) = seal_split(&parent, &bars, range.start)?;
+        if &resealed != split {
+            return Err(corrupt(
+                "stored parent does not re-seal to this final-holdout split".to_string(),
+            ));
+        }
+        Ok((holdout_manifest, bars[range].to_vec()))
     }
 
     /// Up to `limit` record summaries, ordered by dataset id.
@@ -1305,6 +1515,30 @@ fn c_name(name: &str, label: &Path) -> Result<CString, DatasetStoreError> {
     })
 }
 
+#[cfg(all(target_os = "linux", not(test)))]
+fn canonical_installation_authority_root() -> Result<PathBuf, DatasetStoreError> {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join(".local/state"))
+        })
+        .ok_or_else(|| {
+            io_error(
+                Path::new("$XDG_STATE_HOME/typhoon"),
+                "resolve installation final-holdout authority",
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "neither absolute XDG_STATE_HOME nor HOME is available",
+                ),
+            )
+        })?;
+    Ok(base.join("typhoon/final-holdout-authority/v1"))
+}
+
 #[cfg(target_os = "linux")]
 fn secure_bootstrap_absolute_dir(path: &Path) -> Result<SecureDir, DatasetStoreError> {
     use std::path::Component;
@@ -1352,7 +1586,7 @@ fn secure_bootstrap_absolute_dir(path: &Path) -> Result<SecureDir, DatasetStoreE
         }
         current = secure_open_dir(&current, name)?;
     }
-    current.label = path.to_path_buf();
+    current.label = absolute;
     Ok(current)
 }
 

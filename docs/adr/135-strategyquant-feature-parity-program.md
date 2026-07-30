@@ -274,7 +274,7 @@ Right columns = TyphooN's honest present state and where it is addressed in this
 | Cross-checks across market / timeframe / data source | **Missing** | §7.5, M4 |
 | Problem recognition (automatic red-flag detection) | **Missing** | §7.6, M4 |
 | Multiple-testing / selection-bias controls | **Foundation** — every report-derived optimization/robustness artifact binds and displays evaluation N; complete adjusted-significance policy and native presentation remain open | §7.7, M4 |
-| Holdout / quarantine discipline | **Foundation** — search/robustness leases cannot access the final holdout, one-way consumption is immutable and indexed, and the API refuses reuse; paper/shadow quarantine remains M8 work | §7.8, M4 |
+| Holdout / quarantine discipline | **Foundation** — the trusted dataset store is the only minter of the parent/split artifact both partitions bind to, search/robustness callers receive the search partition alone, final execution routes through the canonical authority anchored to that store's root, the evaluation count is derived from immutable persisted search evidence rather than asserted, and one-way consumption is immutable, indexed and read back inside its own transaction; paper/shadow quarantine remains M8 work | §7.8, M4 |
 
 ### 4.5 Analysis, reporting & portfolio
 
