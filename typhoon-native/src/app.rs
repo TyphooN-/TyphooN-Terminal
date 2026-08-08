@@ -113,6 +113,7 @@ mod ssr_scan;
 mod state;
 mod storage;
 mod strategy_intervention_run;
+mod strategy_parameter_field_view;
 mod strategy_problem_view;
 mod strategy_report_view;
 mod strategy_research;
@@ -476,6 +477,9 @@ impl TyphooNApp {
             strategy_comparison_status: String::new(),
             strategy_comparison_load_state: strategy_report_view::ComparisonLoadState::default(),
             strategy_comparison_rx: None,
+            strategy_parameter_field_state:
+                strategy_parameter_field_view::ParameterFieldLoadState::default(),
+            strategy_parameter_field_rx: None,
             strategy_problem_view: None,
             strategy_problem_status: String::new(),
             strategy_problem_load_state: strategy_problem_view::ProblemLoadState::default(),

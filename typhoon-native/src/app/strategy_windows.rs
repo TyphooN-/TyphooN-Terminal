@@ -403,6 +403,35 @@ impl TyphooNApp {
         });
     }
 
+    fn drain_strategy_parameter_field(&mut self) {
+        let completion = self
+            .strategy_parameter_field_rx
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        let Some(completion) = completion else {
+            return;
+        };
+        self.strategy_parameter_field_rx = None;
+        let _worker_thread = completion.worker_thread;
+        let _ = self
+            .strategy_parameter_field_state
+            .complete(completion.request, completion.result);
+    }
+
+    fn start_strategy_parameter_field_load(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Select one sealed parameter-field study artifact")
+            .add_filter("JSON artifact", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        let request = self.strategy_parameter_field_state.begin_request();
+        self.strategy_parameter_field_rx = Some(
+            strategy_parameter_field_view::spawn_parameter_field_load(request, path, ctx.clone()),
+        );
+    }
+
     fn drain_sub_bar_runs(&mut self) {
         let events = self
             .strategy_run_worker
@@ -695,6 +724,7 @@ impl TyphooNApp {
     pub(super) fn render_backtest_window(&mut self, ctx: &egui::Context) {
         self.drain_strategy_result_load();
         self.drain_strategy_comparison();
+        self.drain_strategy_parameter_field();
         self.drain_strategy_problem_recognition();
         self.drain_strategy_workflow();
         self.drain_sub_bar_runs();
@@ -1176,6 +1206,57 @@ impl TyphooNApp {
                         self.strategy_comparison_selected_run,
                     );
                 }
+                ui.add_space(5.0);
+                ui.collapsing("Parameter field analysis (ADR-135 §7.4)", |ui| {
+                    ui.small("Read-only 3D surface and parallel-coordinates projections of one sealed ParameterFieldStudyArtifact. Bounded file I/O, report decompression, identity/evidence replay verification, normalization and topology preparation run on a worker; paint only visits capped prepared vectors.");
+                    let loading = self.strategy_parameter_field_state.is_busy();
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                !loading,
+                                egui::Button::new("Load sealed parameter field…"),
+                            )
+                            .on_hover_text(
+                                "Select one sealed ParameterFieldStudyArtifact JSON; embedded report evidence is replay-verified before projection",
+                            )
+                            .clicked()
+                        {
+                            self.start_strategy_parameter_field_load(ctx);
+                        }
+                        if ui
+                            .add_enabled(loading, egui::Button::new("Cancel"))
+                            .clicked()
+                        {
+                            self.strategy_parameter_field_state.cancel();
+                            self.strategy_parameter_field_rx = None;
+                        }
+                        if loading {
+                            ui.spinner();
+                        }
+                    });
+                    if !self.strategy_parameter_field_state.status.is_empty() {
+                        let color = if self
+                            .strategy_parameter_field_state
+                            .status
+                            .starts_with("Error:")
+                        {
+                            DOWN
+                        } else if loading {
+                            egui::Color32::from_rgb(255, 200, 50)
+                        } else {
+                            UP
+                        };
+                        ui.label(
+                            egui::RichText::new(&self.strategy_parameter_field_state.status)
+                                .color(color)
+                                .small(),
+                        );
+                    }
+                    if let Some(view) = self.strategy_parameter_field_state.installed.as_ref() {
+                        ui.separator();
+                        strategy_parameter_field_view::render_parameter_field(ui, view);
+                    }
+                });
                 ui.add_space(5.0);
                 ui.collapsing("Problem recognition (ADR-135 §7.6 red flags)", |ui| {
                     ui.small("Read-only view of a sealed problem-recognition artifact. Reading, zstd-decompressing its sealed cross-check/OOS/significance evidence and replaying every gate happen on a worker; nothing is derived or judged here.");

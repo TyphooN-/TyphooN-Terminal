@@ -732,6 +732,12 @@ pub struct TyphooNApp {
             >,
         >,
     >,
+    /// Sealed §7.4 parameter field, verified and projected off the render thread.
+    pub(crate) strategy_parameter_field_state:
+        crate::app::strategy_parameter_field_view::ParameterFieldLoadState,
+    pub(crate) strategy_parameter_field_rx: Option<
+        std::sync::mpsc::Receiver<crate::app::strategy_parameter_field_view::LoadCompletion>,
+    >,
     /// Sealed §7.6 problem-recognition verdict, decoded and verified off the render thread.
     pub(crate) strategy_problem_view:
         Option<crate::app::strategy_problem_view::ProblemRecognitionView>,
