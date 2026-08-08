@@ -21,6 +21,7 @@ pub mod research;
 pub mod risk;
 pub mod screener;
 pub mod sec_filing;
+pub mod strategy_acceptance;
 pub mod strategy_bayesian;
 pub mod strategy_builder;
 pub mod strategy_calendar;

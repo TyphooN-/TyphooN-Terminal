@@ -21,7 +21,16 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-pub const PARAMETER_FIELD_STUDY_SCHEMA_VERSION: u32 = 1;
+/// v2 stores each executed point's sealed report zstd-compressed rather than as raw JSON bytes.
+///
+/// The bound this respects is [`MAX_ARTIFACT_BYTES`], and the change is what makes a field study
+/// usable: `serde_json` encodes a `Vec<u8>` as an array of decimal numbers, so an uncompressed
+/// report cost roughly four bytes of artifact per byte of report, and a nine-point field filled the
+/// whole megabyte at about seventy bars — far short of the trade count §7.6's gates need to mean
+/// anything. Compression is the same treatment `strategy_problem_recognition` and
+/// `strategy_significance` already give their embedded evidence. v1 artifacts are refused rather
+/// than silently reinterpreted; none were ever published, because M4 has not been accepted.
+pub const PARAMETER_FIELD_STUDY_SCHEMA_VERSION: u32 = 2;
 pub const MAX_PARAMETER_FIELD_SAMPLE: usize = 64;
 pub const MAX_PARAMETER_FIELD_RADIUS: usize = 4;
 pub const MAX_PARAMETER_FIELD_NEIGHBOURHOOD: usize = 256;
@@ -84,7 +93,7 @@ pub struct ParameterFieldPoint {
     pub report_id: String,
     pub value: f64,
     pub rank: usize,
-    report_json: Vec<u8>,
+    report_json_zstd: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -479,8 +488,10 @@ impl ParameterFieldStudyArtifact {
             {
                 return Err(RetestError::Invalid("invalid parameter-field point".into()));
             }
-            let report =
-                StrategyReportArtifact::from_json_slice(&point.report_json).map_err(invalid)?;
+            let report = StrategyReportArtifact::from_json_slice(&decompress_report(
+                &point.report_json_zstd,
+            )?)
+            .map_err(invalid)?;
             if point.run_id != report.run_id() || point.report_id != report.report_id() {
                 return Err(RetestError::Invalid(
                     "stored parameter-field report identity mismatch".into(),
@@ -714,8 +725,16 @@ fn execute_point(
         report_id: report.report_id().to_string(),
         value: canonical_zero(value),
         rank: 0,
-        report_json: report.to_json_vec().map_err(invalid)?,
+        report_json_zstd: compress_report(&report.to_json_vec().map_err(invalid)?)?,
     })
+}
+
+fn compress_report(bytes: &[u8]) -> Result<Vec<u8>, RetestError> {
+    zstd::bulk::compress(bytes, 3).map_err(invalid)
+}
+
+fn decompress_report(bytes: &[u8]) -> Result<Vec<u8>, RetestError> {
+    zstd::bulk::decompress(bytes, MAX_ARTIFACT_BYTES).map_err(invalid)
 }
 
 fn validate_spec(space: &SearchSpace, spec: &ParameterFieldStudySpec) -> Result<(), RetestError> {

@@ -22,11 +22,13 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-pub const CROSS_CHECK_STUDY_SCHEMA_VERSION: u32 = 1;
+/// v2 stores sealed reports compressed so multi-case studies remain inside the artifact bound on
+/// meaningful datasets. M4 is not yet accepted, so no v1 artifact has been published.
+pub const CROSS_CHECK_STUDY_SCHEMA_VERSION: u32 = 2;
 pub const MAX_CROSS_CHECK_DATASET_CASES: usize = 30;
 pub const COST_MULTIPLIER_2X_BPS: u32 = 20_000;
 pub const COST_MULTIPLIER_3X_BPS: u32 = 30_000;
-const ARTIFACT_DOMAIN: &[u8] = b"typhoon.strategy_cross_check.study.v1";
+const ARTIFACT_DOMAIN: &[u8] = b"typhoon.strategy_cross_check.study.v2";
 const COMPONENT_SEED_DOMAIN: &[u8] = b"typhoon.strategy_cross_check.component_seed.v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -134,7 +136,7 @@ pub struct CrossCheckObservation {
     /// `10_000 + signed_delta / max(abs(baseline), 1) * 10_000`, clamped to `[0, 20_000]`.
     pub retention_bps: u32,
     config_json: Vec<u8>,
-    report_json: Vec<u8>,
+    report_json_zstd: Vec<u8>,
 }
 impl CrossCheckObservation {
     pub fn range(&self) -> Range<usize> {
@@ -193,7 +195,10 @@ impl CrossCheckStudyArtifact {
     }
     pub fn baseline_report(&self) -> Result<StrategyReportArtifact, RetestError> {
         self.verify()?;
-        StrategyReportArtifact::from_json_slice(&self.baseline.report_json).map_err(invalid)
+        StrategyReportArtifact::from_json_slice(&decompress_report(
+            &self.baseline.report_json_zstd,
+        )?)
+        .map_err(invalid)
     }
     pub fn to_json_vec(&self) -> Result<Vec<u8>, RetestError> {
         self.verify()?;
@@ -583,8 +588,16 @@ fn execute_observation(
         value: canonical_zero(value),
         retention_bps: retention,
         config_json: serde_json::to_vec(config).map_err(invalid)?,
-        report_json: report.to_json_vec().map_err(invalid)?,
+        report_json_zstd: compress_report(&report.to_json_vec().map_err(invalid)?)?,
     })
+}
+
+fn compress_report(bytes: &[u8]) -> Result<Vec<u8>, RetestError> {
+    zstd::bulk::compress(bytes, 3).map_err(invalid)
+}
+
+fn decompress_report(bytes: &[u8]) -> Result<Vec<u8>, RetestError> {
+    zstd::bulk::decompress(bytes, MAX_ARTIFACT_BYTES).map_err(invalid)
 }
 
 fn validate_spec(spec: &CrossCheckStudySpec) -> Result<(), RetestError> {
@@ -709,7 +722,8 @@ fn verify_observation(
         ));
     }
     let report =
-        StrategyReportArtifact::from_json_slice(&observation.report_json).map_err(invalid)?;
+        StrategyReportArtifact::from_json_slice(&decompress_report(&observation.report_json_zstd)?)
+            .map_err(invalid)?;
     if observation.run_id != report.run_id() || observation.report_id != report.report_id() {
         return Err(RetestError::Invalid(
             "cross-check report identity mismatch".into(),
